@@ -1,0 +1,57 @@
+# 依赖
+node_modules
+npm-debug.log
+yarn-error.log
+
+# 构建产物
+dist
+build
+*.tsbuildinfo
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+
+# 测试
+coverage
+.nyc_output
+*.test.js
+*.spec.js
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# 文档
+*.md
+!README.md
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# 日志
+logs
+*.log
+
+# 临时文件
+tmp
+temp
+.tmp
+
+# 数据库相关（不需要打包到镜像）
+*.sql
+
+# 脚本（生产环境不需要）
+scripts
+
