@@ -55,3 +55,9 @@ temp
 # 脚本（生产环境不需要）
 scripts
 
+# 导出文件
+exports
+
+# 微信云托管相关（如果有示例文件）
+wxcloudrun*
+index.js
