@@ -7,7 +7,6 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { DatabaseModule } from './database/database.module';
-import { RedisModule } from './common/redis/redis.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
 import { SubjectModule } from './modules/subject/subject.module';
@@ -65,7 +64,6 @@ import { AdminChapterModule } from './modules/admin-chapter/admin-chapter.module
       inject: [ConfigService],
     }),
     ScheduleModule.forRoot(),
-    RedisModule,
     DatabaseModule,
     AuthModule,
     UserModule,

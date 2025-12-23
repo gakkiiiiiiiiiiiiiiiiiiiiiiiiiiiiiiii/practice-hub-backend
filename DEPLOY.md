@@ -10,9 +10,6 @@
      - `DB_USERNAME`: 数据库用户名
      - `DB_PASSWORD`: 数据库密码
      - `DB_DATABASE`: 数据库名称
-     - `REDIS_HOST`: Redis 地址
-     - `REDIS_PORT`: Redis 端口（默认 6379）
-     - `REDIS_PASSWORD`: Redis 密码（如果有）
      - `JWT_SECRET`: JWT 密钥（生产环境请使用强密钥）
      - `JWT_EXPIRE`: JWT 过期时间（默认 7d）
      - `WECHAT_APPID`: 微信小程序 AppID
@@ -21,7 +18,6 @@
 
 2. **数据库准备**
    - 确保 MySQL 数据库已创建
-   - 确保 Redis 服务已启动
    - 数据库表结构会在应用启动时自动同步（TypeORM）
 
 ## 部署步骤
@@ -83,9 +79,7 @@ docker run -d \
   -e DB_USERNAME=root \
   -e DB_PASSWORD=your_password \
   -e DB_DATABASE=practice_hub \
-  -e REDIS_HOST=your_redis_host \
-  -e REDIS_PORT=6379 \
-  -e JWT_SECRET=your_jwt_secret \
+   -e JWT_SECRET=your_jwt_secret \
   -e WECHAT_APPID=your_appid \
   -e WECHAT_SECRET=your_secret \
   --name practice-hub-backend \
@@ -112,11 +106,7 @@ docker rm practice-hub-backend
    - 建议使用云数据库（如腾讯云 MySQL）
    - 配置安全组规则，允许微信云托管 IP 访问
 
-3. **Redis 连接**
-   - 建议使用云 Redis（如腾讯云 Redis）
-   - 配置安全组规则，允许微信云托管 IP 访问
-
-4. **环境变量**
+3. **环境变量**
    - 不要在代码中硬编码敏感信息
    - 所有配置都通过环境变量传递
    - 生产环境使用强密钥
@@ -141,12 +131,7 @@ docker rm practice-hub-backend
    - 检查数据库用户名和密码
    - 检查安全组规则
 
-3. **Redis 连接失败**
-   - 检查 Redis 地址和端口
-   - 检查 Redis 密码（如果有）
-   - 检查安全组规则
-
-4. **端口冲突**
+3. **端口冲突**
    - 确保端口 80 未被占用
    - 可以通过环境变量 `PORT` 修改端口
 

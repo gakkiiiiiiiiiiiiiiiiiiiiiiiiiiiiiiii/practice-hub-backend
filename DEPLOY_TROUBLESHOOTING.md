@@ -50,45 +50,7 @@ AggregateError [ECONNREFUSED]
    [数据库配置] 连接地址: xxx:3306, 数据库: practice_hub, 用户: xxx
    ```
 
-### 2. Redis 连接失败 (ECONNREFUSED)
-
-**错误信息：**
-```
-[ioredis] Unhandled error event: AggregateError [ECONNREFUSED]
-```
-
-**原因：**
-- Redis 环境变量未配置
-- Redis 地址/端口错误
-- Redis 安全组未开放
-- Redis 密码错误
-
-**解决方案：**
-
-1. **检查环境变量配置**
-   ```
-   REDIS_HOST=你的Redis地址（如：10.x.x.x）
-   REDIS_PORT=6379
-   REDIS_PASSWORD=你的Redis密码（如果没有密码，留空）
-   REDIS_DB=0
-   ```
-
-2. **使用微信云托管提供的 Redis**
-   - 微信云托管可能提供内置 Redis
-   - 查看微信云托管文档获取 Redis 连接信息
-
-3. **使用腾讯云 Redis**
-   - 推荐使用腾讯云 Redis（与微信云托管同区域）
-   - 确保安全组允许微信云托管 IP 访问 6379 端口
-
-4. **检查 Redis 连接日志**
-   在日志中应该能看到：
-   ```
-   [Redis配置] 连接地址: xxx:6379, DB: 0
-   [Redis] 连接成功
-   ```
-
-### 3. authPlugin 配置警告
+### 2. authPlugin 配置警告
 
 **错误信息：**
 ```
@@ -111,8 +73,6 @@ Ignoring invalid configuration option passed to Connection: authPlugin.
    ✅ DB_USERNAME
    ✅ DB_PASSWORD
    ✅ DB_DATABASE
-   ✅ REDIS_HOST
-   ✅ REDIS_PORT
    ✅ JWT_SECRET
    ✅ WECHAT_APPID
    ✅ WECHAT_SECRET
@@ -140,12 +100,6 @@ DB_PORT=3306
 DB_USERNAME=root
 DB_PASSWORD=your_secure_password
 DB_DATABASE=practice_hub
-
-# Redis 配置
-REDIS_HOST=10.x.x.x
-REDIS_PORT=6379
-REDIS_PASSWORD=
-REDIS_DB=0
 
 # JWT 配置
 JWT_SECRET=your_very_secure_jwt_secret_key_min_32_chars
@@ -177,11 +131,7 @@ COUNTDOWN_DATE=2024-12-23
    - 使用 MySQL 客户端测试数据库连接
    - 确认可以从微信云托管网络访问数据库
 
-4. **测试 Redis 连接**
-   - 使用 Redis 客户端测试连接
-   - 确认可以从微信云托管网络访问 Redis
-
-5. **查看应用日志**
+4. **查看应用日志**
    - 应用启动后，查看日志中的配置信息
    - 确认数据库和 Redis 连接成功
 
@@ -194,16 +144,10 @@ A:
 3. 检查数据库地址是否正确
 4. 尝试使用内网地址（如果数据库和云托管在同一区域）
 
-### Q: Redis 连接失败，应用还能运行吗？
-A: 
-- 应用会尝试重连 Redis
-- 如果 Redis 不可用，某些功能（如缓存、排行榜）可能不可用
-- 建议配置 Redis 以确保所有功能正常
-
 ### Q: 如何查看详细的连接日志？
 A: 
 - 在微信云托管控制台查看服务日志
-- 应用启动时会输出数据库和 Redis 配置信息
+- 应用启动时会输出数据库配置信息
 - 连接成功/失败都会有日志记录
 
 ### Q: 本地可以连接，但云托管连接失败？

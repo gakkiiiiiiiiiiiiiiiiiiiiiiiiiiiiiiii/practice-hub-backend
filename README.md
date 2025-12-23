@@ -6,7 +6,6 @@
 
 - **框架**: NestJS 10.x
 - **数据库**: MySQL 8.0 + TypeORM
-- **缓存**: Redis (ioredis)
 - **认证**: JWT (Passport)
 - **文档**: Swagger
 
@@ -22,7 +21,7 @@ npm install
 
 ### 启动数据库
 
-本项目需要 MySQL 8.0 和 Redis。推荐使用 Docker 启动：
+本项目需要 MySQL 8.0。推荐使用 Docker 启动：
 
 ```bash
 # 新版本 Docker（推荐，使用 docker compose，没有横杠）
@@ -49,7 +48,6 @@ cp env.example .env
 
 然后编辑 `.env` 文件，填写以下配置：
 - **数据库配置**：MySQL 连接信息
-- **Redis 配置**：Redis 连接信息
 - **JWT_SECRET**：JWT 密钥（生产环境请使用强密钥）
 - **微信小程序配置**：AppID 和 Secret（用于小程序登录）
 - **服务器配置**：端口号、环境变量等

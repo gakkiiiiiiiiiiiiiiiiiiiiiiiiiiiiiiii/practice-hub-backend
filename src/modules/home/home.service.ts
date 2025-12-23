@@ -1,8 +1,5 @@
-import { Injectable, Inject } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { RedisService } from '../../common/redis/redis.service';
 
 const QUOTES = [
   '宝剑锋从磨砺出，梅花香自苦寒来。',
@@ -17,10 +14,7 @@ const QUOTES = [
 
 @Injectable()
 export class HomeService {
-  constructor(
-    private redisService: RedisService,
-    private configService: ConfigService,
-  ) {}
+  constructor(private configService: ConfigService) {}
 
   /**
    * 获取首页配置
@@ -46,22 +40,15 @@ export class HomeService {
 
   /**
    * 获取每日励志语录
+   * 根据日期生成固定的随机数，确保同一天返回相同的语录
    */
   async getDailyQuote() {
     const today = new Date().toISOString().split('T')[0];
-    const cacheKey = `daily_quote:${today}`;
-
-    // 尝试从缓存获取
-    let quote = await this.redisService.get(cacheKey);
-
-    if (!quote) {
-      // 随机选择一条语录
-      const randomIndex = Math.floor(Math.random() * QUOTES.length);
-      quote = QUOTES[randomIndex];
-
-      // 缓存到 Redis，24小时过期
-      await this.redisService.set(cacheKey, quote, 86400);
-    }
+    
+    // 使用日期作为随机种子，确保同一天返回相同的语录
+    const dateHash = today.split('-').reduce((acc, val) => acc + parseInt(val, 10), 0);
+    const randomIndex = dateHash % QUOTES.length;
+    const quote = QUOTES[randomIndex];
 
     return { quote };
   }
