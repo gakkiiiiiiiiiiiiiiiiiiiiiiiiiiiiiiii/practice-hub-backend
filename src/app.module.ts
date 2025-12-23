@@ -24,6 +24,7 @@ import { AdminSubjectModule } from './modules/admin-subject/admin-subject.module
 import { AdminQuestionModule } from './modules/admin-question/admin-question.module';
 import { AdminActivationCodeModule } from './modules/admin-activation-code/admin-activation-code.module';
 import { AdminChapterModule } from './modules/admin-chapter/admin-chapter.module';
+import { UploadModule } from './modules/upload/upload.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { AdminChapterModule } from './modules/admin-chapter/admin-chapter.module
     AdminQuestionModule,
     AdminActivationCodeModule,
     AdminChapterModule,
+    UploadModule,
   ],
   controllers: [AppController],
   providers: [
