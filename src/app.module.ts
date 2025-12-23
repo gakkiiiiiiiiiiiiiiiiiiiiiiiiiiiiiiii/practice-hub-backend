@@ -34,22 +34,34 @@ import { AdminChapterModule } from './modules/admin-chapter/admin-chapter.module
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        type: 'mysql',
-        host: configService.get('DB_HOST', 'localhost'),
-        port: configService.get<number>('DB_PORT', 3306),
-        username: configService.get('DB_USERNAME', 'root'),
-        password: configService.get('DB_PASSWORD', ''),
-        database: configService.get('DB_DATABASE', 'practice_hub'),
-        entities: [__dirname + '/**/*.entity{.ts,.js}'],
-        synchronize: configService.get('NODE_ENV') === 'development',
-        logging: configService.get('NODE_ENV') === 'development',
-        timezone: '+08:00',
-        charset: 'utf8mb4',
-        extra: {
-          authPlugin: 'mysql_native_password',
-        },
-      }),
+      useFactory: (configService: ConfigService) => {
+        const dbHost = configService.get('DB_HOST', 'localhost');
+        const dbPort = configService.get<number>('DB_PORT', 3306);
+        const dbUsername = configService.get('DB_USERNAME', 'root');
+        const dbPassword = configService.get('DB_PASSWORD', '');
+        const dbDatabase = configService.get('DB_DATABASE', 'practice_hub');
+        const nodeEnv = configService.get('NODE_ENV', 'development');
+
+        console.log(`[数据库配置] 连接地址: ${dbHost}:${dbPort}, 数据库: ${dbDatabase}, 用户: ${dbUsername}`);
+
+        return {
+          type: 'mysql',
+          host: dbHost,
+          port: dbPort,
+          username: dbUsername,
+          password: dbPassword,
+          database: dbDatabase,
+          entities: [__dirname + '/**/*.entity{.ts,.js}'],
+          synchronize: nodeEnv === 'development',
+          logging: nodeEnv === 'development',
+          timezone: '+08:00',
+          charset: 'utf8mb4',
+          retryAttempts: 5,
+          retryDelay: 3000,
+          autoLoadEntities: true,
+          // 移除 authPlugin 配置（MySQL2 新版本不支持）
+        };
+      },
       inject: [ConfigService],
     }),
     ScheduleModule.forRoot(),

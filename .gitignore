@@ -39,3 +39,6 @@ lerna-debug.log*
 .env.local
 .env.*.local
 
+# Exports
+/exports
+

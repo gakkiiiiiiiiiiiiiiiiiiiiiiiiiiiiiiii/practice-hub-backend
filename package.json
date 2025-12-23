@@ -18,7 +18,11 @@
 		"test:cov": "jest --coverage",
 		"test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
 		"test:e2e": "jest --config ./test/jest-e2e.json",
-		"create-admin": "ts-node -r tsconfig-paths/register scripts/create-admin.ts"
+		"create-admin": "ts-node -r tsconfig-paths/register scripts/create-admin.ts",
+		"export:csv": "ts-node -r tsconfig-paths/register scripts/export-to-csv.ts",
+		"export:sql": "ts-node -r tsconfig-paths/register scripts/export-to-sql.ts",
+		"import:csv": "ts-node -r tsconfig-paths/register scripts/import-from-csv.ts",
+		"import:remote": "ts-node -r tsconfig-paths/register scripts/import-to-remote.ts"
 	},
 	"dependencies": {
 		"@nestjs/common": "^10.3.0",
