@@ -2,6 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as COS from 'cos-nodejs-sdk-v5';
 import axios from 'axios';
+import * as https from 'https';
 
 interface TempAuth {
 	TmpSecretId: string;
@@ -71,7 +72,15 @@ export class UploadService {
 		}
 
 		try {
-			const response = await axios.get('http://api.weixin.qq.com/_/cos/getauth');
+			// 创建忽略证书验证的 https agent（仅用于微信云托管内部 API）
+			const httpsAgent = new https.Agent({
+				rejectUnauthorized: false,
+			});
+
+			const response = await axios.get('http://api.weixin.qq.com/_/cos/getauth', {
+				// 微信云托管内部 API，使用自定义 https agent 忽略证书验证
+				httpsAgent: httpsAgent,
+			});
 			const authData = response.data;
 
 			if (!authData.TmpSecretId || !authData.TmpSecretKey) {
@@ -101,11 +110,23 @@ export class UploadService {
 	 */
 	private async getFileMetaData(cloudPath: string, openid: string = ''): Promise<string> {
 		try {
-			const response = await axios.post('https://api.weixin.qq.com/_/cos/metaid/encode', {
-				openid: openid, // 管理端上传时传空字符串
-				bucket: this.bucket,
-				paths: [cloudPath],
+			// 创建忽略证书验证的 https agent（仅用于微信云托管内部 API）
+			const httpsAgent = new https.Agent({
+				rejectUnauthorized: false,
 			});
+
+			const response = await axios.post(
+				'https://api.weixin.qq.com/_/cos/metaid/encode',
+				{
+					openid: openid, // 管理端上传时传空字符串
+					bucket: this.bucket,
+					paths: [cloudPath],
+				},
+				{
+					// 微信云托管内部 API，使用自定义 https agent 忽略证书验证
+					httpsAgent: httpsAgent,
+				}
+			);
 
 			const result: MetaDataResponse = response.data;
 
