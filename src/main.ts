@@ -40,8 +40,9 @@ async function bootstrap() {
 	const document = SwaggerModule.createDocument(app, config);
 	SwaggerModule.setup('api-docs', app, document);
 
-	// 微信云托管默认使用 80 端口，但可以通过环境变量 PORT 配置
-	const port = parseInt(process.env.PORT || '80', 10);
+	// 微信云托管可以通过环境变量 PORT 配置端口
+	// 默认使用 8080 端口（避免 80 端口需要 root 权限的问题）
+	const port = parseInt(process.env.PORT || '8080', 10);
 	await app.listen(port, '0.0.0.0');
 	console.log(`🚀 服务启动成功: http://0.0.0.0:${port}`);
 	console.log(`📚 API 文档: http://0.0.0.0:${port}/api-docs`);
