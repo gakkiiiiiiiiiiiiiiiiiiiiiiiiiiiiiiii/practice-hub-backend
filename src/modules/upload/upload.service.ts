@@ -72,15 +72,8 @@ export class UploadService {
 		}
 
 		try {
-			// 创建忽略证书验证的 https agent（仅用于微信云托管内部 API）
-			const httpsAgent = new https.Agent({
-				rejectUnauthorized: false,
-			});
-
-			const response = await axios.get('http://api.weixin.qq.com/_/cos/getauth', {
-				// 微信云托管内部 API，使用自定义 https agent 忽略证书验证
-				httpsAgent: httpsAgent,
-			});
+			// 微信云托管内部 API 使用 http（参考 demo）
+			const response = await axios.get('http://api.weixin.qq.com/_/cos/getauth');
 			const authData = response.data;
 
 			if (!authData.TmpSecretId || !authData.TmpSecretKey) {
@@ -110,23 +103,12 @@ export class UploadService {
 	 */
 	private async getFileMetaData(cloudPath: string, openid: string = ''): Promise<string> {
 		try {
-			// 创建忽略证书验证的 https agent（仅用于微信云托管内部 API）
-			const httpsAgent = new https.Agent({
-				rejectUnauthorized: false,
+			// 微信云托管内部 API 使用 http（参考 demo）
+			const response = await axios.post('http://api.weixin.qq.com/_/cos/metaid/encode', {
+				openid: openid, // 管理端上传时传空字符串
+				bucket: this.bucket,
+				paths: [cloudPath],
 			});
-
-			const response = await axios.post(
-				'https://api.weixin.qq.com/_/cos/metaid/encode',
-				{
-					openid: openid, // 管理端上传时传空字符串
-					bucket: this.bucket,
-					paths: [cloudPath],
-				},
-				{
-					// 微信云托管内部 API，使用自定义 https agent 忽略证书验证
-					httpsAgent: httpsAgent,
-				}
-			);
 
 			const result: MetaDataResponse = response.data;
 
@@ -180,13 +162,14 @@ export class UploadService {
 			// 1. 获取文件元数据（必须，否则小程序端无法访问）
 			const metaFileId = await this.getFileMetaData(cloudPath, openid);
 
-			// 2. 上传到 COS，必须添加 x-cos-meta-fileid 元数据
+			// 2. 上传到 COS，必须添加 x-cos-meta-fileid 元数据（参考 demo）
 			const result = await this.cos.putObject({
 				Bucket: this.bucket,
 				Region: this.region,
 				Key: fileName,
 				Body: file.buffer,
 				ContentType: file.mimetype,
+				ContentLength: file.size, // 添加 ContentLength（参考 demo）
 				StorageClass: 'STANDARD',
 				Headers: {
 					'x-cos-meta-fileid': metaFileId,
@@ -197,12 +180,31 @@ export class UploadService {
 				throw new Error(`上传失败，状态码: ${result.statusCode}`);
 			}
 
-			// 构建图片 URL
-			// 使用微信云托管控制台的访问路径格式：tcb.qcloud.la
-			// 或者使用 COS 路径：https://{bucket}.cos.{region}.myqcloud.com/{key}
-			// 注意：COS 路径默认私有，需要签名才能访问
-			// 推荐使用微信云托管控制台的路径格式
-			const imageUrl = `https://${this.bucket}.cos.${this.region}.myqcloud.com/${fileName}`;
+			// 3. 获取可访问的图片 URL
+			// 参考 demo，使用 COS SDK 的 getObjectUrl 方法获取 URL
+			// getObjectUrl 返回字符串或对象，需要正确处理
+			const urlResult = this.cos.getObjectUrl({
+				Bucket: this.bucket,
+				Region: this.region,
+				Key: fileName,
+				Sign: false, // 如果存储桶是公有读，不需要签名
+			});
+
+			// getObjectUrl 可能返回字符串或 Promise，需要处理
+			let imageUrl: string;
+			if (typeof urlResult === 'string') {
+				imageUrl = urlResult;
+			} else if (urlResult instanceof Promise) {
+				const result = await urlResult;
+				imageUrl = typeof result === 'string' ? result : (result as any).Location || (result as any).Url || '';
+			} else {
+				imageUrl = (urlResult as any).Location || (urlResult as any).Url || '';
+			}
+
+			// 如果获取失败，使用默认格式
+			if (!imageUrl) {
+				imageUrl = `https://${this.bucket}.cos.${this.region}.myqcloud.com/${fileName}`;
+			}
 
 			console.log(`[COS上传] 成功: ${imageUrl}, 元数据: ${metaFileId}`);
 			return imageUrl;
