@@ -191,13 +191,18 @@ export class UploadService {
 			});
 
 			// getObjectUrl 可能返回字符串或 Promise，需要处理
-			let imageUrl: string;
+			let imageUrl: string = '';
 			if (typeof urlResult === 'string') {
 				imageUrl = urlResult;
-			} else if (urlResult instanceof Promise) {
-				const result = await urlResult;
-				imageUrl = typeof result === 'string' ? result : (result as any).Location || (result as any).Url || '';
-			} else {
+			} else if (urlResult && typeof (urlResult as any).then === 'function') {
+				// It is Promise-like
+				const result = await (urlResult as Promise<any>);
+				if (typeof result === 'string') {
+					imageUrl = result;
+				} else if (result) {
+					imageUrl = result.Location || result.Url || '';
+				}
+			} else if (urlResult && typeof urlResult === 'object') {
 				imageUrl = (urlResult as any).Location || (urlResult as any).Url || '';
 			}
 
