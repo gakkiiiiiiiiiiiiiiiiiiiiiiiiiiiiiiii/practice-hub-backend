@@ -181,10 +181,30 @@ export class UploadService {
 			}
 
 			// 3. 获取可访问的图片 URL
-			// 参考 demo，直接构建 URL（COS SDK 的 getObjectUrl 在某些情况下可能有问题）
-			// 使用微信云托管的标准 URL 格式
-			// 格式：https://{bucket}.cos.{region}.myqcloud.com/{key}
-			const imageUrl = `https://${this.bucket}.cos.${this.region}.myqcloud.com/${fileName}`;
+			// 参考 demo，使用 COS SDK 的 getObjectUrl 方法获取 URL
+			// getObjectUrl 返回字符串或对象，需要正确处理
+			const urlResult = this.cos.getObjectUrl({
+				Bucket: this.bucket,
+				Region: this.region,
+				Key: fileName,
+				Sign: false, // 如果存储桶是公有读，不需要签名
+			});
+
+			// getObjectUrl 可能返回字符串或 Promise，需要处理
+			let imageUrl: string;
+			if (typeof urlResult === 'string') {
+				imageUrl = urlResult;
+			} else if (urlResult instanceof Promise) {
+				const result = await urlResult;
+				imageUrl = typeof result === 'string' ? result : (result as any).Location || (result as any).Url || '';
+			} else {
+				imageUrl = (urlResult as any).Location || (urlResult as any).Url || '';
+			}
+
+			// 如果获取失败，使用默认格式
+			if (!imageUrl) {
+				imageUrl = `https://${this.bucket}.cos.${this.region}.myqcloud.com/${fileName}`;
+			}
 
 			console.log(`[COS上传] 成功: ${imageUrl}, 元数据: ${metaFileId}`);
 			return imageUrl;
