@@ -175,6 +175,7 @@ export class UploadService {
 					'x-cos-meta-fileid': metaFileId,
 				},
 			});
+			console.log({ result });
 
 			if (result.statusCode !== 200) {
 				throw new Error(`上传失败，状态码: ${result.statusCode}`);
@@ -183,34 +184,34 @@ export class UploadService {
 			// 3. 获取可访问的图片 URL
 			// 参考 demo，使用 COS SDK 的 getObjectUrl 方法获取 URL
 			// getObjectUrl 返回字符串或对象，需要正确处理
-			const urlResult = this.cos.getObjectUrl({
-				Bucket: this.bucket,
-				Region: this.region,
-				Key: fileName,
-				Sign: false, // 如果存储桶是公有读，不需要签名
-			});
+			// const urlResult = this.cos.getObjectUrl({
+			// 	Bucket: this.bucket,
+			// 	Region: this.region,
+			// 	Key: fileName,
+			// 	Sign: false, // 如果存储桶是公有读，不需要签名
+			// });
 
-			// getObjectUrl 可能返回字符串或 Promise，需要处理
-			let imageUrl: string = '';
-			if (typeof urlResult === 'string') {
-				imageUrl = urlResult;
-			} else if (urlResult && typeof (urlResult as any).then === 'function') {
-				// It is Promise-like
-				const result = await (urlResult as Promise<any>);
-				if (typeof result === 'string') {
-					imageUrl = result;
-				} else if (result) {
-					imageUrl = result.Location || result.Url || '';
-				}
-			} else if (urlResult && typeof urlResult === 'object') {
-				imageUrl = (urlResult as any).Location || (urlResult as any).Url || '';
-			}
+			// // getObjectUrl 可能返回字符串或 Promise，需要处理
+			// let imageUrl: string = '';
+			// if (typeof urlResult === 'string') {
+			// 	imageUrl = urlResult;
+			// } else if (urlResult && typeof (urlResult as any).then === 'function') {
+			// 	// It is Promise-like
+			// 	const result = await (urlResult as Promise<any>);
+			// 	if (typeof result === 'string') {
+			// 		imageUrl = result;
+			// 	} else if (result) {
+			// 		imageUrl = result.Location || result.Url || '';
+			// 	}
+			// } else if (urlResult && typeof urlResult === 'object') {
+			// 	imageUrl = (urlResult as any).Location || (urlResult as any).Url || '';
+			// }
 
-			// 如果获取失败，使用默认格式
-			if (!imageUrl) {
-				imageUrl = `https://${this.bucket}.cos.${this.region}.myqcloud.com/${fileName}`;
-			}
-
+			// // 如果获取失败，使用默认格式
+			// if (!imageUrl) {
+			// 	imageUrl = `https://${this.bucket}.cos.${this.region}.myqcloud.com/${fileName}`;
+			// }
+			const imageUrl = `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
 			console.log(`[COS上传] 成功: ${imageUrl}, 元数据: ${metaFileId}`);
 			return imageUrl;
 		} catch (error: any) {
