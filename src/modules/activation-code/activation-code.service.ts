@@ -2,15 +2,15 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { ActivationCode, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
-import { UserSubjectAuth, AuthSource } from '../../database/entities/user-subject-auth.entity';
+import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 
 @Injectable()
 export class ActivationCodeService {
   constructor(
     @InjectRepository(ActivationCode)
     private activationCodeRepository: Repository<ActivationCode>,
-    @InjectRepository(UserSubjectAuth)
-    private userSubjectAuthRepository: Repository<UserSubjectAuth>,
+    @InjectRepository(UserCourseAuth)
+    private userCourseAuthRepository: Repository<UserCourseAuth>,
     private dataSource: DataSource,
   ) {}
 
@@ -51,18 +51,18 @@ export class ActivationCodeService {
         throw new BadRequestException('激活码已被使用，请重试');
       }
 
-      // 4. 给用户添加题库权限
-      const existingAuth = await queryRunner.manager.findOne(UserSubjectAuth, {
+      // 4. 给用户添加课程权限
+      const existingAuth = await queryRunner.manager.findOne(UserCourseAuth, {
         where: {
           user_id: userId,
-          subject_id: activationCode.subject_id,
+          course_id: activationCode.course_id,
         },
       });
 
       if (!existingAuth) {
-        await queryRunner.manager.save(UserSubjectAuth, {
+        await queryRunner.manager.save(UserCourseAuth, {
           user_id: userId,
-          subject_id: activationCode.subject_id,
+          course_id: activationCode.course_id,
           source: AuthSource.CODE,
           expire_time: null, // 激活码通常永久有效
         });
@@ -72,7 +72,7 @@ export class ActivationCodeService {
 
       return {
         success: true,
-        subject_id: activationCode.subject_id,
+        course_id: activationCode.course_id,
       };
     } catch (error) {
       await queryRunner.rollbackTransaction();

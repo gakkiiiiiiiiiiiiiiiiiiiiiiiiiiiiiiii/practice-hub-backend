@@ -55,12 +55,12 @@ export class AdminQuestionController {
   @Get()
   @ApiOperation({ summary: '题目列表' })
   async getQuestionList(
-    @Query('subject_id') subjectId?: number,
+    @Query('course_id') courseId?: number,
     @Query('chapter_id') chapterId?: number,
     @Query('type') type?: QuestionType,
   ) {
     const result = await this.adminQuestionService.getQuestionList(
-      subjectId ? +subjectId : undefined,
+      courseId ? +courseId : undefined,
       chapterId ? +chapterId : undefined,
       type,
     );

@@ -62,7 +62,7 @@ export class RecommendService {
       items: items.map((item) => ({
         id: item.id,
         category_id: item.category_id,
-        subject_id: item.subject_id,
+        course_id: item.course_id,
         sort: item.sort,
       })),
     };

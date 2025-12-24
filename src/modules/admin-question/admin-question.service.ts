@@ -64,15 +64,15 @@ export class AdminQuestionService {
   /**
    * 获取题目列表
    */
-  async getQuestionList(subjectId?: number, chapterId?: number, type?: QuestionType) {
+  async getQuestionList(courseId?: number, chapterId?: number, type?: QuestionType) {
     const queryBuilder = this.questionRepository.createQueryBuilder('question')
       .leftJoinAndSelect('question.chapter', 'chapter')
-      .leftJoinAndSelect('chapter.subject', 'subject');
+      .leftJoinAndSelect('chapter.course', 'course');
 
     if (chapterId) {
       queryBuilder.where('question.chapter_id = :chapterId', { chapterId });
-    } else if (subjectId) {
-      queryBuilder.where('chapter.subject_id = :subjectId', { subjectId });
+    } else if (courseId) {
+      queryBuilder.where('chapter.course_id = :courseId', { courseId });
     }
 
     if (type) {
@@ -81,10 +81,10 @@ export class AdminQuestionService {
 
     const questions = await queryBuilder.orderBy('question.id', 'ASC').getMany();
     
-    // 格式化返回数据，添加科目和章节名称
+    // 格式化返回数据，添加课程和章节名称
     return questions.map((q: any) => ({
       ...q,
-      subjectName: q.chapter?.subject?.name || '',
+      courseName: q.chapter?.course?.name || '',
       chapterName: q.chapter?.name || '',
     }));
   }
@@ -95,7 +95,7 @@ export class AdminQuestionService {
   async getQuestionDetail(id: number) {
     const question = await this.questionRepository.findOne({
       where: { id },
-      relations: ['chapter', 'chapter.subject'],
+      relations: ['chapter', 'chapter.course'],
     });
 
     if (!question) {
@@ -250,10 +250,10 @@ export class AdminQuestionService {
         id: question.chapter.id,
         name: question.chapter.name,
       };
-      if (question.chapter.subject) {
-        result.subject = {
-          id: question.chapter.subject.id,
-          name: question.chapter.subject.name,
+      if (question.chapter.course) {
+        result.course = {
+          id: question.chapter.course.id,
+          name: question.chapter.course.name,
         };
       }
     }
@@ -347,6 +347,8 @@ export class AdminQuestionService {
       判断: QuestionType.JUDGE,
       填空: QuestionType.FILL_BLANK,
       阅读理解: QuestionType.READING_COMPREHENSION,
+      简答: QuestionType.SHORT_ANSWER,
+      简答题: QuestionType.SHORT_ANSWER,
     };
     return typeMap[typeStr] || QuestionType.SINGLE_CHOICE;
   }

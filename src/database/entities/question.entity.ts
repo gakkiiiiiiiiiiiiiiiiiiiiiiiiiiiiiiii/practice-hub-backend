@@ -15,6 +15,7 @@ export enum QuestionType {
   JUDGE = 3, // 判断
   FILL_BLANK = 4, // 填空
   READING_COMPREHENSION = 5, // 阅读理解
+  SHORT_ANSWER = 6, // 简答题
 }
 
 export enum Difficulty {

@@ -46,9 +46,9 @@ export class AdminChapterController {
 
   @Get()
   @ApiOperation({ summary: '获取章节列表' })
-  async getChapterList(@Query('subjectId') subjectId?: number, @Query('subject_id') subject_id?: number) {
-    // 兼容两种参数名：subjectId 和 subject_id
-    const id = subjectId || subject_id;
+  async getChapterList(@Query('courseId') courseId?: number, @Query('course_id') course_id?: number) {
+    // 兼容两种参数名：courseId 和 course_id
+    const id = courseId || course_id;
     const result = await this.adminChapterService.getChapterList(
       id ? +id : undefined,
     );

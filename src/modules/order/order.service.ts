@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
-import { Subject } from '../../database/entities/subject.entity';
+import { Course } from '../../database/entities/course.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 
 @Injectable()
@@ -10,18 +10,18 @@ export class OrderService {
   constructor(
     @InjectRepository(Order)
     private orderRepository: Repository<Order>,
-    @InjectRepository(Subject)
-    private subjectRepository: Repository<Subject>,
+    @InjectRepository(Course)
+    private courseRepository: Repository<Course>,
   ) {}
 
   /**
    * 创建预支付订单
    */
   async createOrder(userId: number, dto: CreateOrderDto) {
-    const subject = await this.subjectRepository.findOne({ where: { id: dto.subject_id } });
+    const course = await this.courseRepository.findOne({ where: { id: dto.course_id } });
 
-    if (!subject) {
-      throw new NotFoundException('题库不存在');
+    if (!course) {
+      throw new NotFoundException('课程不存在');
     }
 
     // 生成订单号
@@ -31,8 +31,8 @@ export class OrderService {
     const order = this.orderRepository.create({
       order_no: orderNo,
       user_id: userId,
-      subject_id: dto.subject_id,
-      amount: subject.price,
+      course_id: dto.course_id,
+      amount: course.price,
       status: OrderStatus.PENDING,
     });
 
@@ -44,7 +44,7 @@ export class OrderService {
     return {
       order_no: order.order_no,
       amount: order.amount,
-      subject_id: order.subject_id,
+      course_id: order.course_id,
       // 微信支付参数（需要对接）
       payment_params: {
         // timeStamp, nonceStr, package, signType, paySign

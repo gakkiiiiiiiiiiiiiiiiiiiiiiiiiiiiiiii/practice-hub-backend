@@ -2,10 +2,10 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsNumber, IsOptional, Min } from 'class-validator';
 
 export class GenerateCodeDto {
-  @ApiProperty({ description: '科目ID', example: 1 })
-  @IsNotEmpty({ message: '科目ID不能为空' })
+  @ApiProperty({ description: '课程ID', example: 1 })
+  @IsNotEmpty({ message: '课程ID不能为空' })
   @IsNumber()
-  subject_id: number;
+  course_id: number;
 
   @ApiProperty({ description: '生成数量', example: 100 })
   @IsNotEmpty({ message: '生成数量不能为空' })

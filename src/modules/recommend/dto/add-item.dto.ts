@@ -7,10 +7,10 @@ export class AddItemDto {
   @IsNumber()
   category_id: number;
 
-  @ApiProperty({ description: '题库ID', example: 1 })
-  @IsNotEmpty({ message: '题库ID不能为空' })
+  @ApiProperty({ description: '课程ID', example: 1 })
+  @IsNotEmpty({ message: '课程ID不能为空' })
   @IsNumber()
-  subject_id: number;
+  course_id: number;
 
   @ApiProperty({ description: '排序', example: 0, required: false })
   @IsOptional()

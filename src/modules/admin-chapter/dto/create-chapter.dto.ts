@@ -3,10 +3,10 @@ import { IsNotEmpty, IsNumber, IsString, IsOptional, IsEnum } from 'class-valida
 import { ChapterType } from '../../../database/entities/chapter.entity';
 
 export class CreateChapterDto {
-  @ApiProperty({ description: '科目ID', example: 1 })
-  @IsNotEmpty({ message: '科目ID不能为空' })
+  @ApiProperty({ description: '课程ID', example: 1 })
+  @IsNotEmpty({ message: '课程ID不能为空' })
   @IsNumber()
-  subject_id: number;
+  course_id: number;
 
   @ApiProperty({ description: '章节名称', example: '2023年真题' })
   @IsNotEmpty({ message: '章节名称不能为空' })

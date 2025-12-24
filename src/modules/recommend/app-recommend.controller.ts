@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
-import { Subject } from '../../database/entities/subject.entity';
+import { Course } from '../../database/entities/course.entity';
 import { HomeRecommendCategory } from '../../database/entities/home-recommend-category.entity';
 import { HomeRecommendItem } from '../../database/entities/home-recommend-item.entity';
 import { RecommendService } from './recommend.service';
@@ -13,8 +13,8 @@ import { RecommendService } from './recommend.service';
 export class AppRecommendController {
   constructor(
     private readonly recommendService: RecommendService,
-    @InjectRepository(Subject)
-    private subjectRepository: Repository<Subject>,
+    @InjectRepository(Course)
+    private courseRepository: Repository<Course>,
     @InjectRepository(HomeRecommendCategory)
     private categoryRepository: Repository<HomeRecommendCategory>,
     @InjectRepository(HomeRecommendItem)
@@ -74,26 +74,26 @@ export class AppRecommendController {
           continue;
         }
 
-        // 获取题库详情
-        const subjectIds = items.map((item) => item.subject_id);
-        const subjects = await this.subjectRepository.find({
-          where: { id: In(subjectIds) },
+        // 获取课程详情
+        const courseIds = items.map((item) => item.course_id);
+        const courses = await this.courseRepository.find({
+          where: { id: In(courseIds) },
         });
 
-        console.log(`找到的题库详情数量:`, subjects?.length || 0);
+        console.log(`找到的课程详情数量:`, courses?.length || 0);
 
         // 按排序组装，保持 items 的顺序
-        const sortedSubjects = items
+        const sortedCourses = items
           .map((item) => {
-            const subject = subjects.find((s) => s.id === item.subject_id);
-            return subject ? { ...subject } : null;
+            const course = courses.find((c) => c.id === item.course_id);
+            return course ? { ...course } : null;
           })
           .filter(Boolean);
 
         result.push({
           id: category.id,
           name: category.name,
-          items: sortedSubjects,
+          items: sortedCourses,
         });
       }
 
@@ -128,24 +128,24 @@ export class AppRecommendController {
         continue;
       }
 
-      // 获取题库详情
-      const subjectIds = items.map((item) => item.subject_id);
-      const subjects = await this.subjectRepository.find({
-        where: { id: In(subjectIds) },
+      // 获取课程详情
+      const courseIds = items.map((item) => item.course_id);
+      const courses = await this.courseRepository.find({
+        where: { id: In(courseIds) },
       });
 
       // 按排序组装，保持 items 的顺序
-      const sortedSubjects = items
+      const sortedCourses = items
         .map((item) => {
-          const subject = subjects.find((s) => s.id === item.subject_id);
-          return subject ? { ...subject } : null;
+          const course = courses.find((c) => c.id === item.course_id);
+          return course ? { ...course } : null;
         })
         .filter(Boolean);
 
       result.push({
         id: category.id,
         name: category.name,
-        items: sortedSubjects,
+        items: sortedCourses,
       });
     }
 

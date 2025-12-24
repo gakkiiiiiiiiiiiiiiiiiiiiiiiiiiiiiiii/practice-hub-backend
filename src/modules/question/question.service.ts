@@ -1,12 +1,12 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
-import { Question } from '../../database/entities/question.entity';
+import { Question, QuestionType } from '../../database/entities/question.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
-import { Subject } from '../../database/entities/subject.entity';
+import { Course } from '../../database/entities/course.entity';
 import { UserAnswerLog } from '../../database/entities/user-answer-log.entity';
 import { UserWrongBook } from '../../database/entities/user-wrong-book.entity';
-import { UserSubjectAuth } from '../../database/entities/user-subject-auth.entity';
+import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
 import { BatchSubmitDto } from './dto/batch-submit.dto';
 
@@ -17,14 +17,14 @@ export class QuestionService {
     private questionRepository: Repository<Question>,
     @InjectRepository(Chapter)
     private chapterRepository: Repository<Chapter>,
-    @InjectRepository(Subject)
-    private subjectRepository: Repository<Subject>,
+    @InjectRepository(Course)
+    private courseRepository: Repository<Course>,
     @InjectRepository(UserAnswerLog)
     private answerLogRepository: Repository<UserAnswerLog>,
     @InjectRepository(UserWrongBook)
     private wrongBookRepository: Repository<UserWrongBook>,
-    @InjectRepository(UserSubjectAuth)
-    private userSubjectAuthRepository: Repository<UserSubjectAuth>,
+    @InjectRepository(UserCourseAuth)
+    private userCourseAuthRepository: Repository<UserCourseAuth>,
     private dataSource: DataSource,
   ) {}
 
@@ -36,17 +36,17 @@ export class QuestionService {
   async getChapterQuestions(chapterId: number, userId?: number) {
     const chapter = await this.chapterRepository.findOne({
       where: { id: chapterId },
-      relations: ['subject'],
+      relations: ['course'],
     });
 
     if (!chapter) {
       throw new NotFoundException('章节不存在');
     }
 
-    const subject = chapter.subject;
+    const course = chapter.course;
 
-    // 判断是否免费：章节免费 或 科目免费/VIP免费
-    const isFree = chapter.is_free === 1 || Number(subject.price) === 0 || subject.is_vip_free === 1;
+    // 判断是否免费：章节免费 或 课程免费/VIP免费
+    const isFree = chapter.is_free === 1 || Number(course.price) === 0 || course.is_vip_free === 1;
 
     const questions = await this.questionRepository.find({
       where: { chapter_id: chapterId },
@@ -177,35 +177,35 @@ export class QuestionService {
   private async checkQuestionPermission(userId: number, chapterId: number) {
     const chapter = await this.chapterRepository.findOne({
       where: { id: chapterId },
-      relations: ['subject'],
+      relations: ['course'],
     });
 
     if (!chapter) {
       throw new NotFoundException('章节不存在');
     }
 
-    const subject = chapter.subject;
+    const course = chapter.course;
 
-      // 免费或VIP免费，直接放行
-      if (Number(subject.price) === 0 || subject.is_vip_free === 1) {
-        return;
-      }
+    // 免费或VIP免费，直接放行
+    if (Number(course.price) === 0 || course.is_vip_free === 1) {
+      return;
+    }
 
     // 检查用户权限
-    const auth = await this.userSubjectAuthRepository.findOne({
+    const auth = await this.userCourseAuthRepository.findOne({
       where: {
         user_id: userId,
-        subject_id: subject.id,
+        course_id: course.id,
       },
     });
 
     if (!auth) {
-      throw new ForbiddenException('请先购买题库或使用激活码');
+      throw new ForbiddenException('请先购买课程或使用激活码');
     }
 
     // 检查是否过期
     if (auth.expire_time && auth.expire_time <= new Date()) {
-      throw new ForbiddenException('题库权限已过期，请重新购买');
+      throw new ForbiddenException('课程权限已过期，请重新购买');
     }
   }
 
@@ -222,18 +222,65 @@ export class QuestionService {
     // 权限校验
     await this.checkQuestionPermission(userId, question.chapter_id);
 
+    // 简答题特殊处理：不需要自动判断对错，需要人工批改
+    if (question.type === QuestionType.SHORT_ANSWER) {
+      // 验证答案格式
+      if (!dto.text_answer && !dto.image_answer) {
+        throw new BadRequestException('简答题答案不能为空，请填写文本答案或上传图片');
+      }
+
+      // 记录答题日志（简答题不自动判断对错）
+      await this.answerLogRepository.save({
+        user_id: userId,
+        question_id: dto.qid,
+        user_option: [],
+        text_answer: dto.text_answer || null,
+        image_answer: dto.image_answer || null,
+        is_correct: null, // null 表示待批改
+      });
+
+      return {
+        is_correct: null, // 待批改
+        answer: question.answer,
+        analysis: question.analysis,
+        message: '答案已提交，等待批改',
+      };
+    }
+
+    // 其他题型的答案验证
+    if (!dto.options || dto.options.length === 0) {
+      throw new BadRequestException('答案不能为空');
+    }
+
     // 判断正误
     const correctAnswer = question.answer || [];
     const userAnswer = dto.options || [];
-    const isCorrect =
-      correctAnswer.length === userAnswer.length &&
-      correctAnswer.every((ans) => userAnswer.includes(ans));
+    
+    let isCorrect = false;
+    
+    // 填空题特殊处理：支持任意个答案，只要用户答案包含所有正确答案即可
+    if (question.type === QuestionType.FILL_BLANK) {
+      // 填空题：去除空格后比较，支持不区分大小写
+      const normalizedCorrect = correctAnswer.map(ans => String(ans).trim().toLowerCase());
+      const normalizedUser = userAnswer.map(ans => String(ans).trim().toLowerCase());
+      
+      // 检查用户答案是否包含所有正确答案（允许用户答案更多）
+      isCorrect = normalizedCorrect.length > 0 && 
+        normalizedCorrect.every(correct => normalizedUser.includes(correct));
+    } else {
+      // 其他题型：严格匹配
+      isCorrect =
+        correctAnswer.length === userAnswer.length &&
+        correctAnswer.every((ans) => userAnswer.includes(ans));
+    }
 
     // 记录答题日志
     await this.answerLogRepository.save({
       user_id: userId,
       question_id: dto.qid,
       user_option: userAnswer,
+      text_answer: null,
+      image_answer: null,
       is_correct: isCorrect ? 1 : 0,
     });
 
@@ -271,12 +318,56 @@ export class QuestionService {
         continue;
       }
 
+      // 简答题特殊处理：不需要自动判断对错
+      if (question.type === QuestionType.SHORT_ANSWER) {
+        // 简答题：记录答案，不判断对错
+        await this.answerLogRepository.save({
+          user_id: userId,
+          question_id: item.qid,
+          user_option: [],
+          text_answer: (item as any).text_answer || null,
+          image_answer: (item as any).image_answer || null,
+          is_correct: null, // null 表示待批改
+        });
+
+        results.push({
+          qid: item.qid,
+          is_correct: null, // 待批改
+        });
+        continue;
+      }
+
+      // 其他题型的答案验证
+      if (!item.options || item.options.length === 0) {
+        results.push({
+          qid: item.qid,
+          is_correct: false,
+          error: '答案不能为空',
+        });
+        continue;
+      }
+
       // 判断正误
       const correctAnswer = question.answer || [];
       const userAnswer = item.options || [];
-      const isCorrect =
-        correctAnswer.length === userAnswer.length &&
-        correctAnswer.every((ans) => userAnswer.includes(ans));
+      
+      let isCorrect = false;
+      
+      // 填空题特殊处理：支持任意个答案，只要用户答案包含所有正确答案即可
+      if (question.type === QuestionType.FILL_BLANK) {
+        // 填空题：去除空格后比较，支持不区分大小写
+        const normalizedCorrect = correctAnswer.map(ans => String(ans).trim().toLowerCase());
+        const normalizedUser = userAnswer.map(ans => String(ans).trim().toLowerCase());
+        
+        // 检查用户答案是否包含所有正确答案（允许用户答案更多）
+        isCorrect = normalizedCorrect.length > 0 && 
+          normalizedCorrect.every(correct => normalizedUser.includes(correct));
+      } else {
+        // 其他题型：严格匹配
+        isCorrect =
+          correctAnswer.length === userAnswer.length &&
+          correctAnswer.every((ans) => userAnswer.includes(ans));
+      }
 
       if (isCorrect) {
         correctCount++;
@@ -293,6 +384,8 @@ export class QuestionService {
         user_id: userId,
         question_id: item.qid,
         user_option: userAnswer,
+        text_answer: null,
+        image_answer: null,
         is_correct: isCorrect ? 1 : 0,
       });
 
@@ -340,7 +433,7 @@ export class QuestionService {
       wrongBook = this.wrongBookRepository.create({
         user_id: userId,
         question_id: question.id,
-        subject_id: chapter.subject_id,
+        course_id: chapter.course_id,
         error_count: 1,
         last_error_time: new Date(),
         is_mastered: 0,

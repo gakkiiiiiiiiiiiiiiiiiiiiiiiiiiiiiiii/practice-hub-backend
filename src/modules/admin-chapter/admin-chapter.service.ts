@@ -32,11 +32,11 @@ export class AdminChapterService {
   /**
    * 获取章节列表
    */
-  async getChapterList(subjectId?: number) {
+  async getChapterList(courseId?: number) {
     const queryBuilder = this.chapterRepository.createQueryBuilder('chapter');
 
-    if (subjectId) {
-      queryBuilder.where('chapter.subject_id = :subjectId', { subjectId });
+    if (courseId) {
+      queryBuilder.where('chapter.course_id = :courseId', { courseId });
     }
 
     return await queryBuilder.orderBy('chapter.sort', 'ASC').getMany();

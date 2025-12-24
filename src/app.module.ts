@@ -9,7 +9,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
-import { SubjectModule } from './modules/subject/subject.module';
+import { CourseModule } from './modules/course/course.module';
 import { QuestionModule } from './modules/question/question.module';
 import { OrderModule } from './modules/order/order.module';
 import { ActivationCodeModule } from './modules/activation-code/activation-code.module';
@@ -20,7 +20,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SystemModule } from './modules/system/system.module';
 import { RecommendModule } from './modules/recommend/recommend.module';
-import { AdminSubjectModule } from './modules/admin-subject/admin-subject.module';
+import { AdminCourseModule } from './modules/admin-course/admin-course.module';
 import { AdminQuestionModule } from './modules/admin-question/admin-question.module';
 import { AdminActivationCodeModule } from './modules/admin-activation-code/admin-activation-code.module';
 import { AdminChapterModule } from './modules/admin-chapter/admin-chapter.module';
@@ -68,7 +68,7 @@ import { UploadModule } from './modules/upload/upload.module';
     DatabaseModule,
     AuthModule,
     UserModule,
-    SubjectModule,
+    CourseModule,
     QuestionModule,
     OrderModule,
     ActivationCodeModule,
@@ -79,7 +79,7 @@ import { UploadModule } from './modules/upload/upload.module';
     DashboardModule,
     SystemModule,
     RecommendModule,
-    AdminSubjectModule,
+    AdminCourseModule,
     AdminQuestionModule,
     AdminActivationCodeModule,
     AdminChapterModule,

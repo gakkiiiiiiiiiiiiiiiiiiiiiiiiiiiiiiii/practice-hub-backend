@@ -16,14 +16,14 @@ export class WrongBookService {
   /**
    * 获取错题列表
    */
-  async getWrongBookList(userId: number, subjectId?: number) {
+  async getWrongBookList(userId: number, courseId?: number) {
     const queryBuilder = this.wrongBookRepository
       .createQueryBuilder('wrong')
       .where('wrong.user_id = :userId', { userId })
       .andWhere('wrong.is_mastered = 0');
 
-    if (subjectId) {
-      queryBuilder.andWhere('wrong.subject_id = :subjectId', { subjectId });
+    if (courseId) {
+      queryBuilder.andWhere('wrong.course_id = :courseId', { courseId });
     }
 
     const wrongBooks = await queryBuilder
@@ -43,7 +43,7 @@ export class WrongBookService {
       return {
         id: wb.id,
         question_id: wb.question_id,
-        subject_id: wb.subject_id,
+        course_id: wb.course_id,
         error_count: wb.error_count,
         last_error_time: wb.last_error_time,
         question: question

@@ -44,7 +44,7 @@ export class AdminActivationCodeService {
         code,
         batch_id: batchId,
         agent_id: agentId,
-        subject_id: dto.subject_id,
+        course_id: dto.course_id,
         status: ActivationCodeStatus.PENDING,
       });
     }
@@ -138,7 +138,7 @@ export class AdminActivationCodeService {
     codes.forEach((code) => {
       worksheet.addRow({
         code: code.code,
-        subject_id: code.subject_id,
+        course_id: code.course_id,
         batch_id: code.batch_id,
       });
     });

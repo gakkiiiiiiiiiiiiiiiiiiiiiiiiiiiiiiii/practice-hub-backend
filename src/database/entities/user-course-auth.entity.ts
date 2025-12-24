@@ -10,8 +10,8 @@ export enum AuthSource {
   CODE = 'code',
 }
 
-@Entity('user_subject_auth')
-export class UserSubjectAuth {
+@Entity('user_course_auth')
+export class UserCourseAuth {
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -19,7 +19,7 @@ export class UserSubjectAuth {
   user_id: number;
 
   @Column()
-  subject_id: number;
+  course_id: number; // 从 subject_id 改为 course_id
 
   @Column({ type: 'datetime', nullable: true })
   expire_time: Date; // 过期时间，null 表示永久

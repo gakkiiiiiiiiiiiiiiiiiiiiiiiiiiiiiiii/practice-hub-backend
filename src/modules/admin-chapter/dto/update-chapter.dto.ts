@@ -3,10 +3,10 @@ import { IsOptional, IsString, IsNumber, IsEnum } from 'class-validator';
 import { ChapterType } from '../../../database/entities/chapter.entity';
 
 export class UpdateChapterDto {
-  @ApiProperty({ description: '科目ID', required: false })
+  @ApiProperty({ description: '课程ID', required: false })
   @IsOptional()
   @IsNumber()
-  subject_id?: number;
+  course_id?: number;
 
   @ApiProperty({ description: '章节名称', required: false })
   @IsOptional()

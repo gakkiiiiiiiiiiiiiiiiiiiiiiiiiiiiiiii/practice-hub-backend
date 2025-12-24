@@ -2,9 +2,9 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsNumber } from 'class-validator';
 
 export class CreateOrderDto {
-  @ApiProperty({ description: '题库ID', example: 1 })
-  @IsNotEmpty({ message: '题库ID不能为空' })
+  @ApiProperty({ description: '课程ID', example: 1 })
+  @IsNotEmpty({ message: '课程ID不能为空' })
   @IsNumber()
-  subject_id: number;
+  course_id: number;
 }
 

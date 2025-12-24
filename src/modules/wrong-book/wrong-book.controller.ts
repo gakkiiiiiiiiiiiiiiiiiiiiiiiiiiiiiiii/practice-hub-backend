@@ -17,11 +17,11 @@ export class WrongBookController {
   @ApiOperation({ summary: '获取错题列表' })
   async getWrongBookList(
     @CurrentUser() user: any,
-    @Query('subject_id') subjectId?: number,
+    @Query('course_id') courseId?: number,
   ) {
     const result = await this.wrongBookService.getWrongBookList(
       user.userId,
-      subjectId ? +subjectId : undefined,
+      courseId ? +courseId : undefined,
     );
     return CommonResponseDto.success(result);
   }
