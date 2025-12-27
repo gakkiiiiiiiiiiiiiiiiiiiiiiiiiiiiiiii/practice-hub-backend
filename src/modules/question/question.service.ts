@@ -214,28 +214,53 @@ export class QuestionService {
 
       // 如果指定了题目ID列表，添加条件
       if (questionIds && Array.isArray(questionIds) && questionIds.length > 0) {
-        // 验证 questionIds 都是有效数字
-        const validQuestionIds = questionIds
-          .map(id => {
-            const numId = typeof id === 'number' ? id : Number(id);
-            return numId;
-          })
-          .filter(id => {
-            const isValid = !isNaN(id) && Number.isFinite(id) && id > 0 && Number.isInteger(id);
-            if (!isValid) {
-              this.logger.warn(`题目ID无效，已过滤: ${id}`, { id, isNaN: isNaN(id), isFinite: Number.isFinite(id) });
-            }
-            return isValid;
-          });
+        // 严格验证和转换 questionIds
+        const validQuestionIds: number[] = [];
+        
+        for (const id of questionIds) {
+          let numId: number;
+          
+          if (typeof id === 'number') {
+            numId = id;
+          } else if (typeof id === 'string') {
+            numId = parseInt(id.trim(), 10);
+          } else {
+            this.logger.warn(`题目ID类型不支持，已跳过: ${id}`, { id, type: typeof id });
+            continue;
+          }
+          
+          // 严格验证：必须是有效数字、有限值、大于0、整数
+          if (!isNaN(numId) && Number.isFinite(numId) && numId > 0 && Number.isInteger(numId)) {
+            validQuestionIds.push(numId);
+          } else {
+            this.logger.warn(`题目ID无效，已过滤: ${id} -> ${numId}`, { 
+              originalId: id, 
+              numId, 
+              isNaN: isNaN(numId), 
+              isFinite: Number.isFinite(numId),
+              isPositive: numId > 0,
+              isInteger: Number.isInteger(numId),
+            });
+          }
+        }
         
         if (validQuestionIds.length === 0) {
           this.logger.warn('题目ID列表无效，跳过题目ID过滤', { questionIds, validQuestionIds });
         } else {
-          this.logger.log(`使用题目ID列表查询 - 题目数量: ${validQuestionIds.length}`, { questionIds: validQuestionIds });
-          // 确保所有ID都是有效数字
-          const finalQuestionIds = validQuestionIds.filter(id => !isNaN(id) && id > 0);
+          // 最后一次验证，确保数组中没有 NaN
+          const finalQuestionIds = validQuestionIds.filter(id => {
+            const isValid = !isNaN(id) && Number.isFinite(id) && id > 0 && Number.isInteger(id);
+            if (!isValid) {
+              this.logger.error(`❌ 最终验证失败，发现无效ID: ${id}`, { id });
+            }
+            return isValid;
+          });
+          
           if (finalQuestionIds.length > 0) {
+            this.logger.log(`使用题目ID列表查询 - 题目数量: ${finalQuestionIds.length}`, { questionIds: finalQuestionIds });
             where.question_id = In(finalQuestionIds);
+          } else {
+            this.logger.warn('最终验证后没有有效题目ID，跳过题目ID过滤');
           }
         }
       }
@@ -318,18 +343,41 @@ export class QuestionService {
           );
           this.logger.log(`✅ 章节下题目查询完成 - 题目数量: ${questions.length}`);
           
-          const chapterQuestionIds = questions
-            .map((q) => q.id)
-            .filter(id => {
-              const isValid = id > 0 && Number.isInteger(id) && !isNaN(id) && Number.isFinite(id);
+          // 严格验证章节题目ID
+          const chapterQuestionIds: number[] = [];
+          for (const q of questions) {
+            const id = q.id;
+            // 严格验证：必须是有效数字、有限值、大于0、整数
+            if (!isNaN(id) && Number.isFinite(id) && id > 0 && Number.isInteger(id)) {
+              chapterQuestionIds.push(id);
+            } else {
+              this.logger.warn(`章节题目ID无效，已过滤: ${id}`, { 
+                id, 
+                isNaN: isNaN(id), 
+                isFinite: Number.isFinite(id),
+                isPositive: id > 0,
+                isInteger: Number.isInteger(id),
+              });
+            }
+          }
+            
+          if (chapterQuestionIds.length > 0) {
+            // 最后一次验证，确保数组中没有 NaN
+            const finalChapterQuestionIds = chapterQuestionIds.filter(id => {
+              const isValid = !isNaN(id) && Number.isFinite(id) && id > 0 && Number.isInteger(id);
               if (!isValid) {
-                this.logger.warn(`章节题目ID无效，已过滤: ${id}`, { id });
+                this.logger.error(`❌ 章节题目ID最终验证失败: ${id}`, { id });
               }
               return isValid;
             });
             
-          if (chapterQuestionIds.length > 0) {
-            this.logger.log(`使用章节题目ID列表 - 题目数量: ${chapterQuestionIds.length}`, { chapterQuestionIds });
+            if (finalChapterQuestionIds.length === 0) {
+              this.logger.warn('最终验证后没有有效章节题目ID，返回空数组');
+              return [];
+            }
+            
+            this.logger.log(`使用章节题目ID列表 - 题目数量: ${finalChapterQuestionIds.length}`, { chapterQuestionIds: finalChapterQuestionIds });
+            
             // 如果已经有 question_id 条件，使用 AND 逻辑（取交集）
             if (where.question_id) {
               // 提取现有ID列表
@@ -339,26 +387,40 @@ export class QuestionService {
                 existingIds = Array.isArray(value) ? value : [value];
               }
               
-              // 过滤掉无效的ID（包括 NaN）
-              existingIds = existingIds.filter(id => {
-                const isValid = !isNaN(id) && Number.isFinite(id) && id > 0 && Number.isInteger(id);
-                if (!isValid) {
-                  this.logger.warn(`现有题目ID无效，已过滤: ${id}`, { id, isNaN: isNaN(id), isFinite: Number.isFinite(id) });
+              // 严格过滤掉无效的ID（包括 NaN）
+              const validExistingIds: number[] = [];
+              for (const id of existingIds) {
+                if (!isNaN(id) && Number.isFinite(id) && id > 0 && Number.isInteger(id)) {
+                  validExistingIds.push(id);
+                } else {
+                  this.logger.warn(`现有题目ID无效，已过滤: ${id}`, { 
+                    id, 
+                    isNaN: isNaN(id), 
+                    isFinite: Number.isFinite(id),
+                    isPositive: id > 0,
+                    isInteger: Number.isInteger(id),
+                  });
                 }
-                return isValid;
-              });
+              }
               
-              const intersection = existingIds.filter(id => chapterQuestionIds.includes(id));
+              const intersection = validExistingIds.filter(id => finalChapterQuestionIds.includes(id));
               if (intersection.length > 0) {
-                where.question_id = In(intersection);
-                this.logger.log(`使用交集查询 - 交集数量: ${intersection.length}`, { intersection });
+                // 最后一次验证交集数组
+                const finalIntersection = intersection.filter(id => !isNaN(id) && Number.isFinite(id) && id > 0);
+                if (finalIntersection.length > 0) {
+                  where.question_id = In(finalIntersection);
+                  this.logger.log(`使用交集查询 - 交集数量: ${finalIntersection.length}`, { intersection: finalIntersection });
+                } else {
+                  this.logger.log('交集验证后为空，返回空数组');
+                  return [];
+                }
               } else {
                 // 没有交集，返回空数组
                 this.logger.log('题目ID列表与章节题目无交集，返回空数组');
                 return [];
               }
             } else {
-              where.question_id = In(chapterQuestionIds);
+              where.question_id = In(finalChapterQuestionIds);
             }
           } else {
             // 章节下没有题目，返回空数组
