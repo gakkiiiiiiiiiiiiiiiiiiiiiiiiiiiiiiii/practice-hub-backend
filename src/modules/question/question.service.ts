@@ -127,7 +127,9 @@ export class QuestionService {
         this.logger.debug(`付费内容且用户未登录，无权限`);
       }
 
-      // 获取已作答的题目ID
+      // 获取已作答的题目ID和答题结果
+      const answeredQuestionMap = new Map<number, { is_correct: number | null }>();
+      
       if (userId && questions.length > 0) {
         const questionIds = questions.map((q) => q.id);
         const answerLogs = await this.queryWithRetry(() =>
@@ -136,10 +138,18 @@ export class QuestionService {
               user_id: userId,
               question_id: In(questionIds),
             },
+            order: { create_time: 'DESC' }, // 按时间倒序，取最新的答题记录
           })
         );
+        
+        // 构建答题记录映射（每个题目只保留最新的答题记录）
         answerLogs.forEach((log) => {
-          answeredQuestionIds.add(log.question_id);
+          if (!answeredQuestionMap.has(log.question_id)) {
+            answeredQuestionMap.set(log.question_id, {
+              is_correct: log.is_correct,
+            });
+            answeredQuestionIds.add(log.question_id);
+          }
         });
         this.logger.debug(`用户已作答题目数量: ${answeredQuestionIds.size}`);
       }
@@ -153,6 +163,17 @@ export class QuestionService {
           parent_id: q.parent_id,
           difficulty: q.difficulty,
         };
+
+        // 添加是否已作答和是否答对字段
+        const answerRecord = answeredQuestionMap.get(q.id);
+        result.is_answered = answeredQuestionIds.has(q.id);
+        
+        if (answerRecord) {
+          // is_correct: 0-错误, 1-正确, null-待批改（简答题）
+          result.is_correct = answerRecord.is_correct === null ? null : answerRecord.is_correct === 1;
+        } else {
+          result.is_correct = null; // 未作答
+        }
 
         // 如果是免费的，或者有权限，或者已作答，返回答案和解析
         if (isFree || hasPermission || answeredQuestionIds.has(q.id)) {

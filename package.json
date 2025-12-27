@@ -29,7 +29,9 @@
 		"check:remote": "node scripts/check-remote-db.js",
 		"migrate:remote": "node scripts/migrate-remote-db.js",
 		"check:wechat": "node scripts/check-wechat-config.js",
-		"test:wechat": "node scripts/test-wechat-login.js"
+		"test:wechat": "node scripts/test-wechat-login.js",
+		"fix:answer-log": "node scripts/add-user-answer-log-fields.js",
+		"fix:answer-log:remote": "node scripts/add-user-answer-log-fields.js --remote"
 	},
 	"dependencies": {
 		"@nestjs/common": "^10.3.0",
