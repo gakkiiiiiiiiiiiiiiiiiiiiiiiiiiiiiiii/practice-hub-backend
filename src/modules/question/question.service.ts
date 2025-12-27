@@ -242,7 +242,8 @@ export class QuestionService {
         if (typeof chapterId === 'number') {
           numChapterId = chapterId;
         } else if (typeof chapterId === 'string') {
-          numChapterId = parseInt(chapterId.trim(), 10);
+          const strChapterId = chapterId as string;
+          numChapterId = parseInt(strChapterId.trim(), 10);
         } else {
           this.logger.error('❌ 章节ID类型不支持', { chapterId, type: typeof chapterId });
           throw new BadRequestException(`章节ID类型无效: ${typeof chapterId}`);
