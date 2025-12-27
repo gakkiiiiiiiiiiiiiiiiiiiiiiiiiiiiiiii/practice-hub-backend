@@ -20,7 +20,10 @@ export class OptionalJwtAuthGuard extends AuthGuard('jwt') {
     const token = request.headers.authorization?.replace('Bearer ', '') || null;
 
     // 尝试激活，如果失败（token 无效或不存在），允许继续访问
-    return super.canActivate(context).catch((error) => {
+    const result = super.canActivate(context);
+    
+    // 将结果包装为 Promise，以便处理错误
+    return Promise.resolve(result).catch((error) => {
       // token 无效时，允许访问，但 request.user 将为 undefined
       if (token) {
         this.logger.debug(`Token 验证失败，但允许继续访问 - 路径: ${request.path}`, {
