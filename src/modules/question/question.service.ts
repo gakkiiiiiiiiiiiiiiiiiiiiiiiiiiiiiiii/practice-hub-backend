@@ -34,14 +34,46 @@ export class QuestionService {
    * @param chapterId 章节ID
    * @param userId 用户ID（可选），如果有权限或已作答，返回答案
    */
+  /**
+   * 带重试的数据库查询
+   */
+  private async queryWithRetry<T>(
+    queryFn: () => Promise<T>,
+    retries: number = 3,
+    delay: number = 1000
+  ): Promise<T> {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await queryFn();
+      } catch (error: any) {
+        const isConnectionError = 
+          error?.code === 'ECONNRESET' || 
+          error?.code === 'ECONNREFUSED' ||
+          error?.code === 'ETIMEDOUT' ||
+          error?.message?.includes('ECONNRESET') ||
+          error?.message?.includes('Connection lost');
+
+        if (isConnectionError && i < retries - 1) {
+          this.logger.warn(`数据库连接错误，重试中 (${i + 1}/${retries}): ${error.message}`);
+          await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error('查询失败：已达到最大重试次数');
+  }
+
   async getChapterQuestions(chapterId: number, userId?: number) {
     try {
       this.logger.debug(`开始获取章节题目 - 章节ID: ${chapterId}, 用户ID: ${userId || '未登录'}`);
 
-      const chapter = await this.chapterRepository.findOne({
-        where: { id: chapterId },
-        relations: ['course'],
-      });
+      const chapter = await this.queryWithRetry(() =>
+        this.chapterRepository.findOne({
+          where: { id: chapterId },
+          relations: ['course'],
+        })
+      );
 
       if (!chapter) {
         this.logger.warn(`章节不存在 - 章节ID: ${chapterId}`);
@@ -64,10 +96,12 @@ export class QuestionService {
       const isFree = chapter.is_free === 1 || Number(course.price) === 0 || course.is_vip_free === 1;
       this.logger.debug(`权限判断 - 章节免费: ${chapter.is_free === 1}, 课程免费: ${Number(course.price) === 0}, VIP免费: ${course.is_vip_free === 1}, 最终结果: ${isFree}`);
 
-      const questions = await this.questionRepository.find({
-        where: { chapter_id: chapterId },
-        order: { id: 'ASC' },
-      });
+      const questions = await this.queryWithRetry(() =>
+        this.questionRepository.find({
+          where: { chapter_id: chapterId },
+          order: { id: 'ASC' },
+        })
+      );
 
       this.logger.debug(`找到题目数量: ${questions.length}`);
 
@@ -96,12 +130,14 @@ export class QuestionService {
       // 获取已作答的题目ID
       if (userId && questions.length > 0) {
         const questionIds = questions.map((q) => q.id);
-        const answerLogs = await this.answerLogRepository.find({
-          where: {
-            user_id: userId,
-            question_id: In(questionIds),
-          },
-        });
+        const answerLogs = await this.queryWithRetry(() =>
+          this.answerLogRepository.find({
+            where: {
+              user_id: userId,
+              question_id: In(questionIds),
+            },
+          })
+        );
         answerLogs.forEach((log) => {
           answeredQuestionIds.add(log.question_id);
         });

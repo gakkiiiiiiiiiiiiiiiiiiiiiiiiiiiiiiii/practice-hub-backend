@@ -1,108 +1,197 @@
-# MySQL 连接问题修复指南
+# 数据库连接问题修复指南
 
-## 问题描述
+## 问题：ECONNRESET 错误
 
-错误：`Access denied for user 'root'@'192.168.65.1' (using password: YES)`
-
-## 解决方案
-
-### 方案一：更新 root 用户权限（推荐）
-
-在 MySQL 容器中执行：
-
-```bash
-docker exec practice_hub_mysql mysql -u root -proot123456 -e "
-ALTER USER 'root'@'%' IDENTIFIED BY 'root123456';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
-FLUSH PRIVILEGES;
-"
+**错误信息：**
+```
+QueryFailedError: read ECONNRESET
 ```
 
-### 方案二：使用普通用户（更安全）
+**原因：**
+- 数据库连接被服务器重置
+- 连接超时
+- 连接池配置不当
+- 网络不稳定
 
-1. 使用 docker-compose.yml 中创建的普通用户：
-   - 用户名：`practice_user`
-   - 密码：`practice_pass`
+## 已实施的修复
 
-2. 修改 `.env` 文件：
-   ```env
-   DB_USERNAME=practice_user
-   DB_PASSWORD=practice_pass
-   ```
+### 1. 连接池配置优化
 
-3. 确保普通用户有权限：
+在 `app.module.ts` 中添加了以下配置：
+
+```typescript
+extra: {
+  // 连接池最大连接数
+  connectionLimit: 10,
+  // 连接超时时间（毫秒）
+  connectTimeout: 60000,
+  // 获取连接超时时间（毫秒）
+  acquireTimeout: 60000,
+  // 连接空闲超时时间（毫秒）
+  idleTimeout: 300000,
+  // 连接最大存活时间（毫秒）
+  maxIdle: 10000,
+  // 启用连接自动重连
+  reconnect: true,
+  // 连接被重置时自动重连
+  enableKeepAlive: true,
+  // Keep-alive 初始延迟（毫秒）
+  keepAliveInitialDelay: 0,
+  // 是否在连接断开时自动重连
+  autoReconnect: true,
+  // 连接重试次数
+  reconnectAttempts: 5,
+  // 连接重试延迟（毫秒）
+  reconnectDelay: 2000,
+}
+```
+
+### 2. 查询重试机制
+
+在 `QuestionService` 中添加了 `queryWithRetry` 方法，自动重试失败的数据库查询：
+
+- 默认重试 3 次
+- 每次重试延迟递增（1秒、2秒、3秒）
+- 只对连接错误（ECONNRESET、ECONNREFUSED、ETIMEDOUT）进行重试
+- 其他错误直接抛出
+
+### 3. 错误日志增强
+
+所有数据库查询错误都会记录详细的日志信息，包括：
+- 错误类型和消息
+- 堆栈跟踪
+- 上下文信息（章节ID、用户ID等）
+
+## 配置说明
+
+### 连接池参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `connectionLimit` | 最大连接数 | 10 |
+| `connectTimeout` | 连接超时（毫秒） | 60000 |
+| `acquireTimeout` | 获取连接超时（毫秒） | 60000 |
+| `idleTimeout` | 空闲连接超时（毫秒） | 300000 |
+| `maxIdle` | 最大空闲连接数 | 10000 |
+| `reconnectAttempts` | 重连尝试次数 | 5 |
+| `reconnectDelay` | 重连延迟（毫秒） | 2000 |
+
+### 重试机制参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `retries` | 最大重试次数 | 3 |
+| `delay` | 初始延迟（毫秒） | 1000 |
+
+## 使用建议
+
+### 生产环境
+
+1. **监控连接池状态**
+   - 定期检查连接池使用情况
+   - 监控连接错误率
+   - 设置告警阈值
+
+2. **数据库服务器配置**
+   - 确保 `wait_timeout` 和 `interactive_timeout` 设置合理（建议 28800 秒）
+   - 检查 `max_connections` 限制
+   - 启用慢查询日志
+
+3. **网络稳定性**
+   - 使用云数据库服务（更稳定）
+   - 确保应用和数据库在同一区域
+   - 配置数据库安全组规则
+
+### 开发环境
+
+1. **本地 Docker 环境**
+   - 使用 `docker-compose.yml` 中的 MySQL 配置
+   - 确保容器正常运行
+   - 检查端口映射
+
+2. **调试连接问题**
    ```bash
-   docker exec practice_hub_mysql mysql -u root -proot123456 -e "
-   GRANT ALL PRIVILEGES ON practice_hub.* TO 'practice_user'@'%';
-   FLUSH PRIVILEGES;
-   "
+   # 检查 MySQL 连接
+   docker exec practice_hub_mysql mysql -u root -proot123456 -e "SELECT 1;"
+   
+   # 查看连接状态
+   docker exec practice_hub_mysql mysql -u root -proot123456 -e "SHOW PROCESSLIST;"
    ```
-
-### 方案三：检查容器网络
-
-如果使用 Docker Desktop，确保：
-1. 容器正在运行：`docker compose ps`
-2. 端口映射正确：`0.0.0.0:3306->3306/tcp`
-3. 防火墙没有阻止连接
-
-### 方案四：重启容器
-
-```bash
-cd back-end
-docker compose restart mysql
-# 等待几秒让 MySQL 完全启动
-sleep 5
-# 然后重新启动应用
-```
-
-## 验证连接
-
-```bash
-# 测试连接（使用 Docker 内部）
-docker exec practice_hub_mysql mysql -u root -proot123456 -e "SELECT 1;"
-
-# 测试连接（从外部）
-# 注意：如果本地安装了 MySQL 9.0，可能不支持 mysql_native_password
-# 建议使用 Docker 内部测试
-```
 
 ## 常见问题
 
-### 1. 认证插件不匹配
+### 1. 连接数过多
 
-MySQL 8.0 默认使用 `caching_sha2_password`，但某些客户端可能不支持。
+**症状：** `Too many connections` 错误
 
-**解决**：确保 TypeORM 使用正确的连接参数，或使用 `mysql_native_password`。
+**解决：**
+- 增加 `max_connections`（MySQL 配置）
+- 减少 `connectionLimit`（应用配置）
+- 检查是否有连接泄漏
 
-### 2. IP 地址限制
+### 2. 连接超时
 
-如果 root 用户只允许从 `localhost` 连接，需要添加 `%` 权限。
+**症状：** `ETIMEDOUT` 或 `ECONNRESET` 错误
 
-### 3. 密码错误
+**解决：**
+- 增加 `connectTimeout` 和 `acquireTimeout`
+- 检查网络延迟
+- 检查数据库服务器负载
 
-确保 `.env` 文件中的密码与 `docker-compose.yml` 中的一致：
-- docker-compose.yml: `MYSQL_ROOT_PASSWORD: root123456`
-- .env: `DB_PASSWORD=root123456`
+### 3. 连接被重置
 
-## 快速修复命令
+**症状：** `ECONNRESET` 错误
 
-```bash
-cd back-end
+**解决：**
+- 启用 `enableKeepAlive`（已配置）
+- 启用 `autoReconnect`（已配置）
+- 检查数据库服务器的 `wait_timeout` 设置
 
-# 1. 确保容器运行
-docker compose ps
+## 监控和调试
 
-# 2. 更新 root 用户权限
-docker exec practice_hub_mysql mysql -u root -proot123456 -e "
-ALTER USER 'root'@'%' IDENTIFIED BY 'root123456';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
-FLUSH PRIVILEGES;
-"
+### 查看连接池状态
 
-# 3. 验证配置
-cat .env | grep DB_
-
-# 4. 重启应用
-npm run start:dev
+```typescript
+// 在代码中添加日志
+const dataSource = app.get(DataSource);
+console.log('连接池状态:', {
+  active: dataSource.driver.pool?.activeConnections,
+  idle: dataSource.driver.pool?.idleConnections,
+  total: dataSource.driver.pool?.totalConnections,
+});
 ```
 
+### 查看数据库连接状态
+
+```sql
+-- 查看当前连接数
+SHOW STATUS LIKE 'Threads_connected';
+
+-- 查看最大连接数
+SHOW VARIABLES LIKE 'max_connections';
+
+-- 查看连接超时设置
+SHOW VARIABLES LIKE '%timeout%';
+
+-- 查看当前所有连接
+SHOW PROCESSLIST;
+```
+
+## 进一步优化
+
+如果问题仍然存在，可以考虑：
+
+1. **使用连接池中间件**
+   - 如 `pgBouncer`（PostgreSQL）或 `ProxySQL`（MySQL）
+
+2. **实现连接健康检查**
+   - 定期 ping 数据库连接
+   - 自动关闭无效连接
+
+3. **使用读写分离**
+   - 减少主库连接压力
+   - 提高查询性能
+
+4. **实现缓存层**
+   - 减少数据库查询次数
+   - 使用 Redis 缓存热点数据
