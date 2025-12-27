@@ -114,7 +114,7 @@ export class QuestionController {
 
       // 严格验证和转换参数
       let chapterId: number | undefined = undefined;
-      if (dto?.chapterId !== undefined && dto?.chapterId !== null && dto?.chapterId !== '') {
+      if (dto?.chapterId !== undefined && dto?.chapterId !== null) {
         const rawChapterId = dto.chapterId;
         if (typeof rawChapterId === 'number') {
           if (!isNaN(rawChapterId) && rawChapterId > 0 && Number.isInteger(rawChapterId)) {

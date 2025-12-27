@@ -229,7 +229,7 @@ export class QuestionService {
       }
       
       // 如果指定了章节ID，添加条件
-      if (chapterId !== undefined && chapterId !== null && chapterId !== '') {
+      if (chapterId !== undefined && chapterId !== null) {
         // 验证 chapterId 是有效数字
         let numChapterId: number;
         if (typeof chapterId === 'number') {
