@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, UseGuards, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { QuestionService } from './question.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -11,6 +11,8 @@ import { BatchSubmitDto } from './dto/batch-submit.dto';
 @ApiTags('题目')
 @Controller('app/questions')
 export class QuestionController {
+  private readonly logger = new Logger(QuestionController.name);
+
   constructor(private readonly questionService: QuestionService) {}
 
   @Get('chapters/:id/questions')
@@ -18,9 +20,25 @@ export class QuestionController {
   @ApiBearerAuth()
   @ApiOperation({ summary: '获取章节下的题目列表' })
   async getChapterQuestions(@Param('id') id: number, @CurrentUser() user?: any) {
-    const userId = user?.userId;
-    const result = await this.questionService.getChapterQuestions(+id, userId);
-    return CommonResponseDto.success(result);
+    try {
+      const chapterId = +id;
+      const userId = user?.userId;
+      
+      this.logger.log(`获取章节题目列表 - 章节ID: ${chapterId}, 用户ID: ${userId || '未登录'}`);
+      
+      const result = await this.questionService.getChapterQuestions(chapterId, userId);
+      
+      this.logger.log(`成功获取章节题目列表 - 章节ID: ${chapterId}, 题目数量: ${result.length}`);
+      
+      return CommonResponseDto.success(result);
+    } catch (error) {
+      this.logger.error(`获取章节题目列表失败 - 章节ID: ${id}`, {
+        error: error.message,
+        stack: error.stack,
+        userId: user?.userId,
+      });
+      throw error;
+    }
   }
 
   @Get(':id')

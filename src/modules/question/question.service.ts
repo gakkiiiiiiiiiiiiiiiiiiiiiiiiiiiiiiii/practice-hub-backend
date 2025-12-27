@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, In } from 'typeorm';
 import { Question, QuestionType } from '../../database/entities/question.entity';
@@ -12,6 +12,7 @@ import { BatchSubmitDto } from './dto/batch-submit.dto';
 
 @Injectable()
 export class QuestionService {
+  private readonly logger = new Logger(QuestionService.name);
   constructor(
     @InjectRepository(Question)
     private questionRepository: Repository<Question>,
@@ -34,74 +35,110 @@ export class QuestionService {
    * @param userId 用户ID（可选），如果有权限或已作答，返回答案
    */
   async getChapterQuestions(chapterId: number, userId?: number) {
-    const chapter = await this.chapterRepository.findOne({
-      where: { id: chapterId },
-      relations: ['course'],
-    });
+    try {
+      this.logger.debug(`开始获取章节题目 - 章节ID: ${chapterId}, 用户ID: ${userId || '未登录'}`);
 
-    if (!chapter) {
-      throw new NotFoundException('章节不存在');
-    }
+      const chapter = await this.chapterRepository.findOne({
+        where: { id: chapterId },
+        relations: ['course'],
+      });
 
-    const course = chapter.course;
+      if (!chapter) {
+        this.logger.warn(`章节不存在 - 章节ID: ${chapterId}`);
+        throw new NotFoundException('章节不存在');
+      }
 
-    // 判断是否免费：章节免费 或 课程免费/VIP免费
-    const isFree = chapter.is_free === 1 || Number(course.price) === 0 || course.is_vip_free === 1;
+      this.logger.debug(`找到章节 - ID: ${chapterId}, 名称: ${chapter.name}, 课程ID: ${chapter.course_id}`);
 
-    const questions = await this.questionRepository.find({
-      where: { chapter_id: chapterId },
-      order: { id: 'ASC' },
-    });
+      const course = chapter.course;
 
-    // 检查用户权限和答题状态
-    let hasPermission = false;
-    const answeredQuestionIds = new Set<number>();
+      // 如果课程不存在，抛出异常
+      if (!course) {
+        this.logger.error(`章节关联的课程不存在 - 章节ID: ${chapterId}, 课程ID: ${chapter.course_id}`);
+        throw new NotFoundException('章节关联的课程不存在');
+      }
 
-    // 如果是免费的，直接有权限
-    if (isFree) {
-      hasPermission = true;
-    } else if (userId) {
-      // 如果是付费的，需要检查用户权限
-      try {
-        await this.checkQuestionPermission(userId, chapterId);
+      this.logger.debug(`找到课程 - ID: ${course.id}, 名称: ${course.name}, 价格: ${course.price}, VIP免费: ${course.is_vip_free}`);
+
+      // 判断是否免费：章节免费 或 课程免费/VIP免费
+      const isFree = chapter.is_free === 1 || Number(course.price) === 0 || course.is_vip_free === 1;
+      this.logger.debug(`权限判断 - 章节免费: ${chapter.is_free === 1}, 课程免费: ${Number(course.price) === 0}, VIP免费: ${course.is_vip_free === 1}, 最终结果: ${isFree}`);
+
+      const questions = await this.questionRepository.find({
+        where: { chapter_id: chapterId },
+        order: { id: 'ASC' },
+      });
+
+      this.logger.debug(`找到题目数量: ${questions.length}`);
+
+      // 检查用户权限和答题状态
+      let hasPermission = false;
+      const answeredQuestionIds = new Set<number>();
+
+      // 如果是免费的，直接有权限
+      if (isFree) {
         hasPermission = true;
-      } catch (error) {
-        hasPermission = false;
-      }
-    }
-
-    // 获取已作答的题目ID
-    if (userId && questions.length > 0) {
-      const questionIds = questions.map((q) => q.id);
-      const answerLogs = await this.answerLogRepository.find({
-        where: {
-          user_id: userId,
-          question_id: In(questionIds),
-        },
-      });
-      answerLogs.forEach((log) => {
-        answeredQuestionIds.add(log.question_id);
-      });
-    }
-
-    return questions.map((q) => {
-      const result: any = {
-        id: q.id,
-        type: q.type,
-        stem: q.stem,
-        options: q.options,
-        parent_id: q.parent_id,
-        difficulty: q.difficulty,
-      };
-
-      // 如果是免费的，或者有权限，或者已作答，返回答案和解析
-      if (isFree || hasPermission || answeredQuestionIds.has(q.id)) {
-        result.answer = q.answer;
-        result.analysis = q.analysis;
+        this.logger.debug(`免费内容，用户有权限`);
+      } else if (userId) {
+        // 如果是付费的，需要检查用户权限
+        try {
+          await this.checkQuestionPermission(userId, chapterId);
+          hasPermission = true;
+          this.logger.debug(`用户有权限 - 用户ID: ${userId}`);
+        } catch (error) {
+          hasPermission = false;
+          this.logger.debug(`用户无权限 - 用户ID: ${userId}, 错误: ${error.message}`);
+        }
+      } else {
+        this.logger.debug(`付费内容且用户未登录，无权限`);
       }
 
+      // 获取已作答的题目ID
+      if (userId && questions.length > 0) {
+        const questionIds = questions.map((q) => q.id);
+        const answerLogs = await this.answerLogRepository.find({
+          where: {
+            user_id: userId,
+            question_id: In(questionIds),
+          },
+        });
+        answerLogs.forEach((log) => {
+          answeredQuestionIds.add(log.question_id);
+        });
+        this.logger.debug(`用户已作答题目数量: ${answeredQuestionIds.size}`);
+      }
+
+      const result = questions.map((q) => {
+        const result: any = {
+          id: q.id,
+          type: q.type,
+          stem: q.stem,
+          options: q.options,
+          parent_id: q.parent_id,
+          difficulty: q.difficulty,
+        };
+
+        // 如果是免费的，或者有权限，或者已作答，返回答案和解析
+        if (isFree || hasPermission || answeredQuestionIds.has(q.id)) {
+          result.answer = q.answer;
+          result.analysis = q.analysis;
+        }
+
+        return result;
+      });
+
+      this.logger.log(`成功获取章节题目列表 - 章节ID: ${chapterId}, 题目数量: ${result.length}, 有权限: ${hasPermission}`);
+      
       return result;
-    });
+    } catch (error) {
+      this.logger.error(`获取章节题目失败 - 章节ID: ${chapterId}, 用户ID: ${userId || '未登录'}`, {
+        error: error.message,
+        stack: error.stack,
+        chapterId,
+        userId,
+      });
+      throw error;
+    }
   }
 
   /**
