@@ -28,7 +28,8 @@
 		"fix:home-recommend": "node scripts/fix-home-recommend-item.js",
 		"check:remote": "node scripts/check-remote-db.js",
 		"migrate:remote": "node scripts/migrate-remote-db.js",
-		"check:wechat": "node scripts/check-wechat-config.js"
+		"check:wechat": "node scripts/check-wechat-config.js",
+		"test:wechat": "node scripts/test-wechat-login.js"
 	},
 	"dependencies": {
 		"@nestjs/common": "^10.3.0",

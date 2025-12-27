@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import axios from 'axios';
+import * as https from 'https';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { SysUser } from '../../database/entities/sys-user.entity';
 import { ConfigService } from '@nestjs/config';
@@ -43,6 +44,11 @@ export class AuthService {
 		}
 
 		try {
+			// 配置 https Agent 以跳过 SSL 证书验证（微信云托管环境需要）
+			const httpsAgent = new https.Agent({
+				rejectUnauthorized: false,
+			});
+
 			const response = await axios.get('https://api.weixin.qq.com/sns/jscode2session', {
 				params: {
 					appid,
@@ -50,6 +56,7 @@ export class AuthService {
 					js_code: code,
 					grant_type: 'authorization_code',
 				},
+				httpsAgent,
 			});
 
 			const { openid, session_key, errcode, errmsg } = response.data;
