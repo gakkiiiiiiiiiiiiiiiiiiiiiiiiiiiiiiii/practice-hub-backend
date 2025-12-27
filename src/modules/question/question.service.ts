@@ -213,39 +213,96 @@ export class QuestionService {
       this.logger.log('构建查询条件 - 初始 where:', JSON.stringify(where));
 
       // 如果指定了题目ID列表，添加条件
-      if (questionIds && questionIds.length > 0) {
-        this.logger.log(`使用题目ID列表查询 - 题目数量: ${questionIds.length}`, { questionIds });
-        where.question_id = In(questionIds);
-      } else if (chapterId) {
-        this.logger.log(`使用章节ID查询 - 章节ID: ${chapterId}`);
+      if (questionIds && Array.isArray(questionIds) && questionIds.length > 0) {
+        // 验证 questionIds 都是有效数字
+        const validQuestionIds = questionIds.filter(id => {
+          const numId = typeof id === 'number' ? id : Number(id);
+          return !isNaN(numId) && numId > 0 && Number.isInteger(numId);
+        }).map(id => typeof id === 'number' ? id : Number(id));
+        
+        if (validQuestionIds.length === 0) {
+          this.logger.warn('题目ID列表无效，跳过题目ID过滤', { questionIds, validQuestionIds });
+        } else {
+          this.logger.log(`使用题目ID列表查询 - 题目数量: ${validQuestionIds.length}`, { questionIds: validQuestionIds });
+          where.question_id = In(validQuestionIds);
+        }
+      }
+      
+      // 如果指定了章节ID，添加条件
+      if (chapterId !== undefined && chapterId !== null && chapterId !== '') {
+        // 验证 chapterId 是有效数字
+        let numChapterId: number;
+        if (typeof chapterId === 'number') {
+          numChapterId = chapterId;
+        } else if (typeof chapterId === 'string') {
+          numChapterId = parseInt(chapterId, 10);
+        } else {
+          numChapterId = Number(chapterId);
+        }
+        
+        this.logger.log(`章节ID转换 - 原始值: ${chapterId}, 类型: ${typeof chapterId}, 转换后: ${numChapterId}, 是否NaN: ${isNaN(numChapterId)}`);
+        
+        if (isNaN(numChapterId) || numChapterId <= 0 || !Number.isInteger(numChapterId)) {
+          this.logger.error('❌ 章节ID无效', { 
+            chapterId, 
+            numChapterId, 
+            chapterIdType: typeof chapterId,
+            isNaN: isNaN(numChapterId),
+            isValid: !isNaN(numChapterId) && numChapterId > 0 && Number.isInteger(numChapterId),
+          });
+          throw new BadRequestException(`章节ID无效: ${chapterId}`);
+        }
+        
+        this.logger.log(`✅ 使用章节ID查询 - 章节ID: ${numChapterId} (类型: ${typeof numChapterId})`);
         // 如果指定了章节ID，先获取章节下的所有题目ID
         try {
+          this.logger.log(`查询章节下的题目 - chapter_id: ${numChapterId}`);
           const questions = await this.queryWithRetry(() =>
             this.questionRepository.find({
-              where: { chapter_id: chapterId },
+              where: { chapter_id: numChapterId },
               select: ['id'],
             })
           );
-          this.logger.log(`章节下题目查询完成 - 题目数量: ${questions.length}`);
+          this.logger.log(`✅ 章节下题目查询完成 - 题目数量: ${questions.length}`);
           
-          const chapterQuestionIds = questions.map((q) => q.id);
+          const chapterQuestionIds = questions.map((q) => q.id).filter(id => id > 0 && Number.isInteger(id));
           if (chapterQuestionIds.length > 0) {
             this.logger.log(`使用章节题目ID列表 - 题目数量: ${chapterQuestionIds.length}`, { chapterQuestionIds });
-            where.question_id = In(chapterQuestionIds);
+            // 如果已经有 question_id 条件，使用 AND 逻辑（取交集）
+            if (where.question_id) {
+              const existingIds = Array.isArray(where.question_id.value) 
+                ? where.question_id.value 
+                : [where.question_id.value];
+              const intersection = existingIds.filter(id => chapterQuestionIds.includes(id));
+              if (intersection.length > 0) {
+                where.question_id = In(intersection);
+              } else {
+                // 没有交集，返回空数组
+                this.logger.log('题目ID列表与章节题目无交集，返回空数组');
+                return [];
+              }
+            } else {
+              where.question_id = In(chapterQuestionIds);
+            }
           } else {
             // 章节下没有题目，返回空数组
             this.logger.log('章节下没有题目，返回空数组');
             return [];
           }
         } catch (error) {
-          this.logger.error('查询章节题目失败', {
+          this.logger.error('❌ 查询章节题目失败', {
             error: error.message,
             stack: error.stack,
-            chapterId,
+            chapterId: numChapterId,
+            chapterIdType: typeof numChapterId,
+            whereCondition: { chapter_id: numChapterId },
           });
           throw error;
         }
-      } else {
+      }
+      
+      // 如果既没有题目ID也没有章节ID，查询所有答题记录
+      if (!where.question_id) {
         this.logger.log('查询所有答题记录（无过滤条件）');
       }
 

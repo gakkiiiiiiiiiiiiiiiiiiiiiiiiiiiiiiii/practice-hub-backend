@@ -6,11 +6,29 @@ export class GetAnswerRecordsDto {
   @ApiProperty({ description: '章节ID（可选）', example: 1, required: false })
   @IsOptional()
   @Transform(({ value }) => {
+    console.log('[DTO Transform] chapterId 转换 - 原始值:', value, '类型:', typeof value);
     if (value === undefined || value === null || value === '') {
+      console.log('[DTO Transform] chapterId 为空，返回 undefined');
       return undefined;
     }
-    const num = Number(value);
-    return isNaN(num) ? undefined : num;
+    // 尝试转换为数字
+    let num: number;
+    if (typeof value === 'number') {
+      num = value;
+    } else if (typeof value === 'string') {
+      num = parseInt(value, 10);
+    } else {
+      num = Number(value);
+    }
+    
+    console.log('[DTO Transform] chapterId 转换结果:', num, '是否NaN:', isNaN(num));
+    
+    if (isNaN(num) || num <= 0 || !Number.isInteger(num)) {
+      console.log('[DTO Transform] chapterId 无效，返回 undefined');
+      return undefined;
+    }
+    
+    return num;
   })
   @ValidateIf((o) => o.chapterId !== undefined && o.chapterId !== null)
   @IsNumber({}, { message: '章节ID必须是数字' })

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, UseGuards, Logger, Query, Req } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, UseGuards, Logger, Query, Req, BadRequestException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Request } from 'express';
 import { QuestionService } from './question.service';
@@ -86,9 +86,13 @@ export class QuestionController {
       // 记录原始请求参数
       this.logger.log('原始请求参数:', {
         query: request.query,
+        queryChapterId: request.query.chapterId,
+        queryChapterIdType: typeof request.query.chapterId,
         user: user ? { userId: user.userId, type: user.type } : null,
         dto: {
           chapterId: dto?.chapterId,
+          chapterIdType: typeof dto?.chapterId,
+          chapterIdIsNaN: dto?.chapterId !== undefined ? isNaN(Number(dto.chapterId)) : 'N/A',
           questionIds: dto?.questionIds,
           dtoType: typeof dto,
           dtoKeys: dto ? Object.keys(dto) : [],
@@ -108,10 +112,34 @@ export class QuestionController {
 
       this.logger.log(`✅ 用户认证成功 - 用户ID: ${userId}`);
 
-      const chapterId = dto?.chapterId;
+      // 严格验证和转换参数
+      let chapterId: number | undefined = undefined;
+      if (dto?.chapterId !== undefined && dto?.chapterId !== null && dto?.chapterId !== '') {
+        const rawChapterId = dto.chapterId;
+        if (typeof rawChapterId === 'number') {
+          if (!isNaN(rawChapterId) && rawChapterId > 0 && Number.isInteger(rawChapterId)) {
+            chapterId = rawChapterId;
+          } else {
+            this.logger.error('❌ chapterId 无效（数字类型但值无效）', { rawChapterId });
+            throw new BadRequestException(`章节ID无效: ${rawChapterId}`);
+          }
+        } else if (typeof rawChapterId === 'string') {
+          const numChapterId = parseInt(rawChapterId, 10);
+          if (!isNaN(numChapterId) && numChapterId > 0 && Number.isInteger(numChapterId)) {
+            chapterId = numChapterId;
+          } else {
+            this.logger.error('❌ chapterId 无效（字符串类型但转换失败）', { rawChapterId, numChapterId });
+            throw new BadRequestException(`章节ID无效: ${rawChapterId}`);
+          }
+        } else {
+          this.logger.error('❌ chapterId 类型无效', { rawChapterId, type: typeof rawChapterId });
+          throw new BadRequestException(`章节ID类型无效: ${typeof rawChapterId}`);
+        }
+      }
+
       const questionIds = dto?.questionIds;
 
-      this.logger.log(`📋 查询参数 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'}, 题目数量: ${questionIds?.length || '全部'}`);
+      this.logger.log(`📋 查询参数 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'} (类型: ${typeof chapterId}), 题目数量: ${questionIds?.length || '全部'}`);
 
       const result = await this.questionService.getAnswerRecords(userId, chapterId, questionIds);
 
