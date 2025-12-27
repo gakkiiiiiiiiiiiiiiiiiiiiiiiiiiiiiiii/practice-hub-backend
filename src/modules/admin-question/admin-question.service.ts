@@ -24,7 +24,10 @@ export class AdminQuestionService {
     // 处理 options 字段，确保格式正确
     const processedDto: any = { ...dto };
     
-    if (processedDto.options) {
+    // 简答题和填空题不需要选项，设置为 null
+    if (processedDto.type === QuestionType.SHORT_ANSWER || processedDto.type === QuestionType.FILL_BLANK) {
+      processedDto.options = null;
+    } else if (processedDto.options) {
       // 确保 options 是 [{label: string, text: string}[]] 格式
       if (Array.isArray(processedDto.options)) {
         processedDto.options = processedDto.options

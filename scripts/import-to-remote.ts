@@ -73,10 +73,10 @@ function parseArgs() {
 const TABLES = [
 	'sys_user',
 	'app_user',
-	'subject',
+	'course', // 从 subject 改为 course
 	'chapter',
 	'question',
-	'user_subject_auth',
+	'user_course_auth', // 从 user_subject_auth 改为 user_course_auth
 	'activation_code',
 	'order',
 	'user_answer_log',
@@ -285,6 +285,85 @@ async function importWithMySQL(
 }
 
 /**
+ * 检查并修复远程数据库结构
+ */
+async function checkAndFixRemoteDatabase(remoteDataSource: DataSource): Promise<void> {
+	console.log('检查远程数据库结构...\n');
+
+	try {
+		// 检查表是否存在
+		const tables = await remoteDataSource.query('SHOW TABLES');
+		const tableNames = tables.map((t: any) => Object.values(t)[0]);
+
+		// 检查是否有旧表名
+		const hasSubjectTable = tableNames.includes('subject');
+		const hasCourseTable = tableNames.includes('course');
+		const hasUserSubjectAuth = tableNames.includes('user_subject_auth');
+		const hasUserCourseAuth = tableNames.includes('user_course_auth');
+
+		// 检查字段
+		const checkColumn = async (table: string, column: string): Promise<boolean> => {
+			try {
+				const [rows] = await remoteDataSource.query(
+					`SELECT COUNT(*) as count FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+					[table, column]
+				);
+				return rows[0].count > 0;
+			} catch {
+				return false;
+			}
+		};
+
+		let needsMigration = false;
+
+		// 检查需要迁移的表
+		const tablesToCheck = [
+			{ table: 'chapter', oldCol: 'subject_id', newCol: 'course_id' },
+			{ table: 'user_wrong_book', oldCol: 'subject_id', newCol: 'course_id' },
+			{ table: 'order', oldCol: 'subject_id', newCol: 'course_id' },
+			{ table: 'activation_code', oldCol: 'subject_id', newCol: 'course_id' },
+			{ table: 'home_recommend_item', oldCol: 'subject_id', newCol: 'course_id' },
+		];
+
+		for (const { table, oldCol, newCol } of tablesToCheck) {
+			if (tableNames.includes(table)) {
+				const hasOldCol = await checkColumn(table, oldCol);
+				const hasNewCol = await checkColumn(table, newCol);
+
+				if (hasOldCol && !hasNewCol) {
+					console.log(`  ⚠️  ${table} 表需要迁移: ${oldCol} -> ${newCol}`);
+					needsMigration = true;
+				}
+			}
+		}
+
+		if (hasSubjectTable && !hasCourseTable) {
+			console.log('  ⚠️  需要将 subject 表重命名为 course');
+			needsMigration = true;
+		}
+
+		if (hasUserSubjectAuth && !hasUserCourseAuth) {
+			console.log('  ⚠️  需要将 user_subject_auth 表重命名为 user_course_auth');
+			needsMigration = true;
+		}
+
+		if (needsMigration) {
+			console.log('\n⚠️  远程数据库需要先执行迁移！');
+			console.log('   请在远程数据库上执行以下命令之一：');
+			console.log('   1. npm run migrate (如果远程服务器有代码)');
+			console.log('   2. 手动执行 migrations/migrate_subject_to_course.sql');
+			console.log('   3. 使用智能迁移脚本: node scripts/smart-migration.js\n');
+			console.log('   或者，你可以先导入数据，然后手动执行迁移。\n');
+		} else {
+			console.log('  ✅ 远程数据库结构检查通过\n');
+		}
+	} catch (error: any) {
+		console.warn(`  检查数据库结构时出错: ${error.message}`);
+		console.warn('  将继续尝试导入...\n');
+	}
+}
+
+/**
  * 使用 TypeORM 直接导入
  */
 async function importWithTypeORM(
@@ -318,6 +397,9 @@ async function importWithTypeORM(
 	await remoteDataSource.initialize();
 	console.log('远程数据库连接成功\n');
 
+	// 检查并提示迁移
+	await checkAndFixRemoteDatabase(remoteDataSource);
+
 	try {
 		// 读取SQL文件
 		const sqlContent = fs.readFileSync(sqlFile, 'utf8');
@@ -338,8 +420,16 @@ async function importWithTypeORM(
 			} catch (error: any) {
 				errorCount++;
 				// 忽略一些常见的错误（如表已存在等）
-				if (!error.message.includes('already exists') && !error.message.includes('Duplicate entry')) {
-					console.error(`执行SQL失败: ${error.message.substring(0, 100)}`);
+				const errorMsg = error.message || '';
+				const shouldIgnore =
+					errorMsg.includes('already exists') ||
+					errorMsg.includes('Duplicate entry') ||
+					(errorMsg.includes('Unknown column') && errorMsg.includes('course_id')); // 如果是 course_id 字段错误，可能是数据库结构问题
+
+				if (!shouldIgnore) {
+					console.error(`执行SQL失败: ${errorMsg.substring(0, 100)}`);
+				} else if (errorMsg.includes('Unknown column') && errorMsg.includes('course_id')) {
+					console.warn(`  ⚠️  跳过（数据库结构问题，需要先执行迁移）: ${errorMsg.substring(0, 80)}`);
 				}
 			}
 		}
