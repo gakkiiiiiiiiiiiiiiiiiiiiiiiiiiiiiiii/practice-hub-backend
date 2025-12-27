@@ -80,7 +80,12 @@ export class QuestionController {
     @Query() dto: GetAnswerRecordsDto,
     @Req() request: Request,
   ) {
+    // 立即记录日志，确保能看到方法被调用
     this.logger.log('=== 开始处理获取用户答题记录请求 ===');
+    this.logger.log('方法被调用 - 时间:', new Date().toISOString());
+    this.logger.log('request.query:', JSON.stringify(request.query));
+    this.logger.log('dto:', JSON.stringify(dto));
+    this.logger.log('user:', user ? JSON.stringify({ userId: user.userId, type: user.type }) : 'null');
     
     try {
       // 记录原始请求参数
