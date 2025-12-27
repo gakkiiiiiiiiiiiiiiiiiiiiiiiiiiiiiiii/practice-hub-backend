@@ -76,19 +76,31 @@ export class QuestionController {
   @ApiOperation({ summary: '获取用户答题记录' })
   async getAnswerRecords(@CurrentUser() user: any, @Query() dto: GetAnswerRecordsDto) {
     try {
-      const userId = user.userId;
-      const chapterId = dto.chapterId ? +dto.chapterId : undefined;
-      const questionIds = dto.questionIds ? dto.questionIds.map(id => +id) : undefined;
+      const userId = user?.userId;
+      
+      if (!userId) {
+        this.logger.error('获取用户答题记录失败 - 用户未登录');
+        throw new Error('用户未登录');
+      }
 
-      this.logger.log(`获取用户答题记录 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'}`);
+      const chapterId = dto.chapterId;
+      const questionIds = dto.questionIds;
+
+      this.logger.log(`获取用户答题记录 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'}, 题目数量: ${questionIds?.length || '全部'}`);
 
       const result = await this.questionService.getAnswerRecords(userId, chapterId, questionIds);
 
+      this.logger.log(`成功获取用户答题记录 - 用户ID: ${userId}, 记录数量: ${result.length}`);
+
       return CommonResponseDto.success(result);
     } catch (error) {
-      this.logger.error(`获取用户答题记录失败 - 用户ID: ${user.userId}`, {
+      this.logger.error(`获取用户答题记录失败 - 用户ID: ${user?.userId || '未知'}`, {
         error: error.message,
         stack: error.stack,
+        dto: {
+          chapterId: dto.chapterId,
+          questionIds: dto.questionIds,
+        },
       });
       throw error;
     }

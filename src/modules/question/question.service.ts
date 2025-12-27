@@ -219,6 +219,8 @@ export class QuestionService {
         })
       );
 
+      this.logger.debug(`查询到答题记录数量: ${answerLogs.length}`);
+
       // 对每个题目只保留最新的答题记录
       const recordMap = new Map<number, UserAnswerLog>();
       answerLogs.forEach((log) => {
@@ -228,14 +230,46 @@ export class QuestionService {
       });
 
       // 转换为返回格式
-      const result = Array.from(recordMap.values()).map((log) => ({
-        question_id: log.question_id,
-        user_option: log.user_option,
-        text_answer: log.text_answer,
-        image_answer: log.image_answer,
-        is_correct: log.is_correct === null ? null : log.is_correct === 1, // 0-错误, 1-正确, null-待批改
-        create_time: log.create_time,
-      }));
+      const result = Array.from(recordMap.values()).map((log) => {
+        try {
+          // 处理 user_option，确保是数组格式
+          let userOption = log.user_option;
+          if (typeof userOption === 'string') {
+            try {
+              userOption = JSON.parse(userOption);
+            } catch (e) {
+              this.logger.warn(`解析 user_option 失败 - question_id: ${log.question_id}, user_option: ${userOption}`);
+              userOption = [];
+            }
+          }
+          if (!Array.isArray(userOption)) {
+            userOption = [];
+          }
+
+          return {
+            question_id: log.question_id,
+            user_option: userOption,
+            text_answer: log.text_answer || null,
+            image_answer: log.image_answer || null,
+            is_correct: log.is_correct === null ? null : log.is_correct === 1, // 0-错误, 1-正确, null-待批改
+            create_time: log.create_time,
+          };
+        } catch (error) {
+          this.logger.error(`处理答题记录失败 - question_id: ${log.question_id}`, {
+            error: error.message,
+            log: log,
+          });
+          // 返回一个安全的默认值
+          return {
+            question_id: log.question_id,
+            user_option: [],
+            text_answer: null,
+            image_answer: null,
+            is_correct: null,
+            create_time: log.create_time,
+          };
+        }
+      });
 
       this.logger.log(`成功获取用户答题记录 - 用户ID: ${userId}, 记录数量: ${result.length}`);
 
