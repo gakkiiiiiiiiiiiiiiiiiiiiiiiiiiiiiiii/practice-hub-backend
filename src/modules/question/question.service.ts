@@ -186,32 +186,73 @@ export class QuestionService {
    * @param questionIds 题目ID列表（可选）
    */
   async getAnswerRecords(userId: number, chapterId?: number, questionIds?: number[]) {
+    this.logger.log('=== QuestionService.getAnswerRecords 开始 ===');
+    this.logger.log('输入参数:', {
+      userId,
+      chapterId,
+      questionIds,
+      userIdType: typeof userId,
+      chapterIdType: typeof chapterId,
+      questionIdsType: typeof questionIds,
+      questionIdsIsArray: Array.isArray(questionIds),
+    });
+
     try {
-      this.logger.debug(`获取用户答题记录 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'}, 题目数量: ${questionIds?.length || '全部'}`);
+      // 参数验证
+      if (!userId || typeof userId !== 'number') {
+        this.logger.error('❌ 参数验证失败 - userId 无效', { userId, userIdType: typeof userId });
+        throw new BadRequestException('用户ID无效');
+      }
+
+      this.logger.log('✅ 参数验证通过');
 
       const where: any = {
         user_id: userId,
       };
 
+      this.logger.log('构建查询条件 - 初始 where:', JSON.stringify(where));
+
       // 如果指定了题目ID列表，添加条件
       if (questionIds && questionIds.length > 0) {
+        this.logger.log(`使用题目ID列表查询 - 题目数量: ${questionIds.length}`, { questionIds });
         where.question_id = In(questionIds);
       } else if (chapterId) {
+        this.logger.log(`使用章节ID查询 - 章节ID: ${chapterId}`);
         // 如果指定了章节ID，先获取章节下的所有题目ID
-        const questions = await this.questionRepository.find({
-          where: { chapter_id: chapterId },
-          select: ['id'],
-        });
-        const chapterQuestionIds = questions.map((q) => q.id);
-        if (chapterQuestionIds.length > 0) {
-          where.question_id = In(chapterQuestionIds);
-        } else {
-          // 章节下没有题目，返回空数组
-          return [];
+        try {
+          const questions = await this.queryWithRetry(() =>
+            this.questionRepository.find({
+              where: { chapter_id: chapterId },
+              select: ['id'],
+            })
+          );
+          this.logger.log(`章节下题目查询完成 - 题目数量: ${questions.length}`);
+          
+          const chapterQuestionIds = questions.map((q) => q.id);
+          if (chapterQuestionIds.length > 0) {
+            this.logger.log(`使用章节题目ID列表 - 题目数量: ${chapterQuestionIds.length}`, { chapterQuestionIds });
+            where.question_id = In(chapterQuestionIds);
+          } else {
+            // 章节下没有题目，返回空数组
+            this.logger.log('章节下没有题目，返回空数组');
+            return [];
+          }
+        } catch (error) {
+          this.logger.error('查询章节题目失败', {
+            error: error.message,
+            stack: error.stack,
+            chapterId,
+          });
+          throw error;
         }
+      } else {
+        this.logger.log('查询所有答题记录（无过滤条件）');
       }
 
+      this.logger.log('最终查询条件:', JSON.stringify(where));
+
       // 查询答题记录，按时间倒序（最新的在前）
+      this.logger.log('开始查询答题记录...');
       const answerLogs = await this.queryWithRetry(() =>
         this.answerLogRepository.find({
           where,
@@ -219,34 +260,63 @@ export class QuestionService {
         })
       );
 
-      this.logger.debug(`查询到答题记录数量: ${answerLogs.length}`);
+      this.logger.log(`✅ 查询完成 - 答题记录数量: ${answerLogs.length}`);
+      if (answerLogs.length > 0) {
+        this.logger.log('第一条记录示例:', {
+          id: answerLogs[0].id,
+          question_id: answerLogs[0].question_id,
+          user_option: answerLogs[0].user_option,
+          user_option_type: typeof answerLogs[0].user_option,
+          is_correct: answerLogs[0].is_correct,
+          is_correct_type: typeof answerLogs[0].is_correct,
+        });
+      }
 
       // 对每个题目只保留最新的答题记录
+      this.logger.log('开始处理答题记录映射...');
       const recordMap = new Map<number, UserAnswerLog>();
-      answerLogs.forEach((log) => {
+      answerLogs.forEach((log, index) => {
         if (!recordMap.has(log.question_id)) {
           recordMap.set(log.question_id, log);
         }
+        if (index < 3) {
+          this.logger.debug(`处理记录 ${index + 1}:`, {
+            question_id: log.question_id,
+            user_option: log.user_option,
+            is_correct: log.is_correct,
+          });
+        }
       });
 
+      this.logger.log(`✅ 记录映射完成 - 去重后数量: ${recordMap.size}`);
+
       // 转换为返回格式
-      const result = Array.from(recordMap.values()).map((log) => {
+      this.logger.log('开始转换返回格式...');
+      const result = Array.from(recordMap.values()).map((log, index) => {
         try {
           // 处理 user_option，确保是数组格式
           let userOption = log.user_option;
           if (typeof userOption === 'string') {
             try {
               userOption = JSON.parse(userOption);
+              this.logger.debug(`解析 user_option 成功 - question_id: ${log.question_id}`);
             } catch (e) {
-              this.logger.warn(`解析 user_option 失败 - question_id: ${log.question_id}, user_option: ${userOption}`);
+              this.logger.warn(`解析 user_option 失败 - question_id: ${log.question_id}`, {
+                userOption,
+                error: e.message,
+              });
               userOption = [];
             }
           }
           if (!Array.isArray(userOption)) {
+            this.logger.warn(`user_option 不是数组 - question_id: ${log.question_id}`, {
+              userOption,
+              userOptionType: typeof userOption,
+            });
             userOption = [];
           }
 
-          return {
+          const record = {
             question_id: log.question_id,
             user_option: userOption,
             text_answer: log.text_answer || null,
@@ -254,10 +324,22 @@ export class QuestionService {
             is_correct: log.is_correct === null ? null : log.is_correct === 1, // 0-错误, 1-正确, null-待批改
             create_time: log.create_time,
           };
+
+          if (index < 3) {
+            this.logger.debug(`转换记录 ${index + 1}:`, record);
+          }
+
+          return record;
         } catch (error) {
           this.logger.error(`处理答题记录失败 - question_id: ${log.question_id}`, {
             error: error.message,
-            log: log,
+            stack: error.stack,
+            log: {
+              id: log.id,
+              question_id: log.question_id,
+              user_option: log.user_option,
+              user_option_type: typeof log.user_option,
+            },
           });
           // 返回一个安全的默认值
           return {
@@ -271,17 +353,23 @@ export class QuestionService {
         }
       });
 
-      this.logger.log(`成功获取用户答题记录 - 用户ID: ${userId}, 记录数量: ${result.length}`);
+      this.logger.log(`✅ 格式转换完成 - 最终记录数量: ${result.length}`);
+      this.logger.log('=== QuestionService.getAnswerRecords 完成 ===');
 
       return result;
     } catch (error) {
-      this.logger.error(`获取用户答题记录失败 - 用户ID: ${userId}`, {
-        error: error.message,
-        stack: error.stack,
+      this.logger.error('❌ QuestionService.getAnswerRecords 失败', {
+        error: {
+          message: error.message,
+          name: error.name,
+          code: error.code,
+          stack: error.stack,
+        },
         userId,
         chapterId,
         questionIds,
       });
+      this.logger.error('=== QuestionService.getAnswerRecords 异常结束 ===');
       throw error;
     }
   }

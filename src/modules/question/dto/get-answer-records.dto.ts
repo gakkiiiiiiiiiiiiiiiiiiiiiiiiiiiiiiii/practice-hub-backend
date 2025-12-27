@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsNumber, IsArray } from 'class-validator';
+import { IsOptional, IsNumber, IsArray, ValidateIf } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 
 export class GetAnswerRecordsDto {
@@ -12,7 +12,8 @@ export class GetAnswerRecordsDto {
     const num = Number(value);
     return isNaN(num) ? undefined : num;
   })
-  @IsNumber()
+  @ValidateIf((o) => o.chapterId !== undefined && o.chapterId !== null)
+  @IsNumber({}, { message: '章节ID必须是数字' })
   chapterId?: number;
 
   @ApiProperty({ description: '题目ID列表（可选）', example: [1, 2, 3], required: false })
@@ -31,7 +32,8 @@ export class GetAnswerRecordsDto {
     }
     return undefined;
   })
-  @IsArray()
+  @ValidateIf((o) => o.questionIds !== undefined && o.questionIds !== null)
+  @IsArray({ message: '题目ID列表必须是数组' })
   questionIds?: number[];
 }
 

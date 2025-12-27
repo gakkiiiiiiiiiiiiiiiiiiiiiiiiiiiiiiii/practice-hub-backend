@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Param, Body, UseGuards, Logger, Query } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, UseGuards, Logger, Query, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Request } from 'express';
 import { QuestionService } from './question.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
@@ -74,34 +75,66 @@ export class QuestionController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '获取用户答题记录' })
-  async getAnswerRecords(@CurrentUser() user: any, @Query() dto: GetAnswerRecordsDto) {
+  async getAnswerRecords(
+    @CurrentUser() user: any,
+    @Query() dto: GetAnswerRecordsDto,
+    @Req() request: Request,
+  ) {
+    this.logger.log('=== 开始处理获取用户答题记录请求 ===');
+    
     try {
+      // 记录原始请求参数
+      this.logger.log('原始请求参数:', {
+        query: request.query,
+        user: user ? { userId: user.userId, type: user.type } : null,
+        dto: {
+          chapterId: dto?.chapterId,
+          questionIds: dto?.questionIds,
+          dtoType: typeof dto,
+          dtoKeys: dto ? Object.keys(dto) : [],
+          rawDto: JSON.stringify(dto),
+        },
+      });
+
       const userId = user?.userId;
       
       if (!userId) {
-        this.logger.error('获取用户答题记录失败 - 用户未登录');
+        this.logger.error('❌ 获取用户答题记录失败 - 用户未登录', {
+          user: user,
+          dto: dto,
+        });
         throw new Error('用户未登录');
       }
 
-      const chapterId = dto.chapterId;
-      const questionIds = dto.questionIds;
+      this.logger.log(`✅ 用户认证成功 - 用户ID: ${userId}`);
 
-      this.logger.log(`获取用户答题记录 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'}, 题目数量: ${questionIds?.length || '全部'}`);
+      const chapterId = dto?.chapterId;
+      const questionIds = dto?.questionIds;
+
+      this.logger.log(`📋 查询参数 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'}, 题目数量: ${questionIds?.length || '全部'}`);
 
       const result = await this.questionService.getAnswerRecords(userId, chapterId, questionIds);
 
-      this.logger.log(`成功获取用户答题记录 - 用户ID: ${userId}, 记录数量: ${result.length}`);
+      this.logger.log(`✅ 成功获取用户答题记录 - 用户ID: ${userId}, 记录数量: ${result.length}`);
+      this.logger.log('=== 请求处理完成 ===');
 
       return CommonResponseDto.success(result);
     } catch (error) {
-      this.logger.error(`获取用户答题记录失败 - 用户ID: ${user?.userId || '未知'}`, {
-        error: error.message,
-        stack: error.stack,
+      this.logger.error('❌ 获取用户答题记录失败', {
+        error: {
+          message: error.message,
+          name: error.name,
+          code: error.code,
+          stack: error.stack,
+        },
+        user: user ? { userId: user.userId, type: user.type } : null,
         dto: {
-          chapterId: dto.chapterId,
-          questionIds: dto.questionIds,
+          chapterId: dto?.chapterId,
+          questionIds: dto?.questionIds,
+          rawDto: dto,
         },
       });
+      this.logger.error('=== 请求处理失败 ===');
       throw error;
     }
   }
