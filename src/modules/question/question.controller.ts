@@ -84,21 +84,12 @@ export class QuestionController {
     
     try {
       // 记录原始请求参数
-      this.logger.log('原始请求参数:', {
-        query: request.query,
-        queryChapterId: request.query.chapterId,
-        queryChapterIdType: typeof request.query.chapterId,
-        user: user ? { userId: user.userId, type: user.type } : null,
-        dto: {
-          chapterId: dto?.chapterId,
-          chapterIdType: typeof dto?.chapterId,
-          chapterIdIsNaN: dto?.chapterId !== undefined ? isNaN(Number(dto.chapterId)) : 'N/A',
-          questionIds: dto?.questionIds,
-          dtoType: typeof dto,
-          dtoKeys: dto ? Object.keys(dto) : [],
-          rawDto: JSON.stringify(dto),
-        },
-      });
+      this.logger.log('=== 原始请求参数 ===');
+      this.logger.log('query:', JSON.stringify(request.query));
+      this.logger.log('query.chapterId:', request.query.chapterId, '类型:', typeof request.query.chapterId);
+      this.logger.log('dto:', JSON.stringify(dto));
+      this.logger.log('dto.chapterId:', dto?.chapterId, '类型:', typeof dto?.chapterId);
+      this.logger.log('user:', user ? { userId: user.userId, type: user.type } : null);
 
       const userId = user?.userId;
       
@@ -114,32 +105,46 @@ export class QuestionController {
 
       // 严格验证和转换参数
       let chapterId: number | undefined = undefined;
+      
+      this.logger.log('=== 开始参数转换 ===');
+      this.logger.log('dto?.chapterId:', dto?.chapterId, '类型:', typeof dto?.chapterId, '是否为undefined:', dto?.chapterId === undefined, '是否为null:', dto?.chapterId === null);
+      
       if (dto?.chapterId !== undefined && dto?.chapterId !== null) {
         const rawChapterId = dto.chapterId;
+        this.logger.log('rawChapterId:', rawChapterId, '类型:', typeof rawChapterId);
+        
         if (typeof rawChapterId === 'number') {
+          this.logger.log('chapterId 是数字类型，验证中...');
           if (!isNaN(rawChapterId) && rawChapterId > 0 && Number.isInteger(rawChapterId)) {
             chapterId = rawChapterId;
+            this.logger.log('✅ chapterId 验证通过（数字）:', chapterId);
           } else {
-            this.logger.error('❌ chapterId 无效（数字类型但值无效）', { rawChapterId });
+            this.logger.error('❌ chapterId 无效（数字类型但值无效）', { rawChapterId, isNaN: isNaN(rawChapterId), isPositive: rawChapterId > 0, isInteger: Number.isInteger(rawChapterId) });
             throw new BadRequestException(`章节ID无效: ${rawChapterId}`);
           }
         } else if (typeof rawChapterId === 'string') {
+          this.logger.log('chapterId 是字符串类型，转换中...');
           const numChapterId = parseInt(rawChapterId, 10);
+          this.logger.log('转换结果:', numChapterId, '是否NaN:', isNaN(numChapterId));
           if (!isNaN(numChapterId) && numChapterId > 0 && Number.isInteger(numChapterId)) {
             chapterId = numChapterId;
+            this.logger.log('✅ chapterId 验证通过（字符串转换）:', chapterId);
           } else {
-            this.logger.error('❌ chapterId 无效（字符串类型但转换失败）', { rawChapterId, numChapterId });
+            this.logger.error('❌ chapterId 无效（字符串类型但转换失败）', { rawChapterId, numChapterId, isNaN: isNaN(numChapterId) });
             throw new BadRequestException(`章节ID无效: ${rawChapterId}`);
           }
         } else {
           this.logger.error('❌ chapterId 类型无效', { rawChapterId, type: typeof rawChapterId });
           throw new BadRequestException(`章节ID类型无效: ${typeof rawChapterId}`);
         }
+      } else {
+        this.logger.log('chapterId 为空，跳过转换');
       }
 
       const questionIds = dto?.questionIds;
 
-      this.logger.log(`📋 查询参数 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'} (类型: ${typeof chapterId}), 题目数量: ${questionIds?.length || '全部'}`);
+      this.logger.log(`📋 最终查询参数 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'} (类型: ${typeof chapterId}), 题目数量: ${questionIds?.length || '全部'}`);
+      this.logger.log('=== 参数转换完成 ===');
 
       const result = await this.questionService.getAnswerRecords(userId, chapterId, questionIds);
 

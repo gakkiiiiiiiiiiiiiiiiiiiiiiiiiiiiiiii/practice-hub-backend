@@ -6,25 +6,27 @@ export class GetAnswerRecordsDto {
   @ApiProperty({ description: '章节ID（可选）', example: 1, required: false })
   @IsOptional()
   @Transform(({ value }) => {
-    console.log('[DTO Transform] chapterId 转换 - 原始值:', value, '类型:', typeof value);
+    // 如果值为空，返回 undefined
     if (value === undefined || value === null || value === '') {
-      console.log('[DTO Transform] chapterId 为空，返回 undefined');
       return undefined;
     }
+    
     // 尝试转换为数字
     let num: number;
     if (typeof value === 'number') {
+      // 已经是数字，直接使用
       num = value;
     } else if (typeof value === 'string') {
-      num = parseInt(value, 10);
+      // 字符串，使用 parseInt 转换
+      num = parseInt(value.trim(), 10);
     } else {
+      // 其他类型，尝试 Number 转换
       num = Number(value);
     }
     
-    console.log('[DTO Transform] chapterId 转换结果:', num, '是否NaN:', isNaN(num));
-    
+    // 验证转换结果
     if (isNaN(num) || num <= 0 || !Number.isInteger(num)) {
-      console.log('[DTO Transform] chapterId 无效，返回 undefined');
+      // 转换失败或无效，返回 undefined（让后续验证处理）
       return undefined;
     }
     
