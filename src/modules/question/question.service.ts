@@ -223,7 +223,8 @@ export class QuestionService {
           if (typeof id === 'number') {
             numId = id;
           } else if (typeof id === 'string') {
-            numId = parseInt(id.trim(), 10);
+            const strId = id as string;
+            numId = parseInt(strId.trim(), 10);
           } else {
             this.logger.warn(`题目ID类型不支持，已跳过: ${id}`, { id, type: typeof id });
             continue;
