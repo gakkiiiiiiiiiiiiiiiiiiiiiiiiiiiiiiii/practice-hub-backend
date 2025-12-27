@@ -215,16 +215,28 @@ export class QuestionService {
       // 如果指定了题目ID列表，添加条件
       if (questionIds && Array.isArray(questionIds) && questionIds.length > 0) {
         // 验证 questionIds 都是有效数字
-        const validQuestionIds = questionIds.filter(id => {
-          const numId = typeof id === 'number' ? id : Number(id);
-          return !isNaN(numId) && numId > 0 && Number.isInteger(numId);
-        }).map(id => typeof id === 'number' ? id : Number(id));
+        const validQuestionIds = questionIds
+          .map(id => {
+            const numId = typeof id === 'number' ? id : Number(id);
+            return numId;
+          })
+          .filter(id => {
+            const isValid = !isNaN(id) && Number.isFinite(id) && id > 0 && Number.isInteger(id);
+            if (!isValid) {
+              this.logger.warn(`题目ID无效，已过滤: ${id}`, { id, isNaN: isNaN(id), isFinite: Number.isFinite(id) });
+            }
+            return isValid;
+          });
         
         if (validQuestionIds.length === 0) {
           this.logger.warn('题目ID列表无效，跳过题目ID过滤', { questionIds, validQuestionIds });
         } else {
           this.logger.log(`使用题目ID列表查询 - 题目数量: ${validQuestionIds.length}`, { questionIds: validQuestionIds });
-          where.question_id = In(validQuestionIds);
+          // 确保所有ID都是有效数字
+          const finalQuestionIds = validQuestionIds.filter(id => !isNaN(id) && id > 0);
+          if (finalQuestionIds.length > 0) {
+            where.question_id = In(finalQuestionIds);
+          }
         }
       }
       
@@ -275,13 +287,29 @@ export class QuestionService {
         // 如果指定了章节ID，先获取章节下的所有题目ID
         try {
           // 最后一次验证，确保传递给数据库的值是有效的
-          const finalChapterId = Number.isInteger(numChapterId) && numChapterId > 0 ? numChapterId : null;
-          if (!finalChapterId) {
-            this.logger.error('❌ 章节ID最终验证失败', { numChapterId, finalChapterId });
+          // 必须确保是有效的整数，且大于0
+          if (!Number.isInteger(numChapterId) || numChapterId <= 0 || isNaN(numChapterId) || !Number.isFinite(numChapterId)) {
+            this.logger.error('❌ 章节ID最终验证失败', { 
+              numChapterId, 
+              isInteger: Number.isInteger(numChapterId),
+              isPositive: numChapterId > 0,
+              isNaN: isNaN(numChapterId),
+              isFinite: Number.isFinite(numChapterId),
+            });
             throw new BadRequestException(`章节ID无效: ${numChapterId}`);
           }
           
-          this.logger.log(`查询章节下的题目 - chapter_id: ${finalChapterId} (类型: ${typeof finalChapterId})`);
+          // 使用验证后的值
+          const finalChapterId: number = numChapterId;
+          
+          this.logger.log(`查询章节下的题目 - chapter_id: ${finalChapterId} (类型: ${typeof finalChapterId}, 值: ${finalChapterId})`);
+          
+          // 再次确认值有效（防御性编程）
+          if (isNaN(finalChapterId) || finalChapterId <= 0) {
+            this.logger.error('❌ 章节ID查询前验证失败', { finalChapterId });
+            throw new BadRequestException(`章节ID无效: ${finalChapterId}`);
+          }
+          
           const questions = await this.queryWithRetry(() =>
             this.questionRepository.find({
               where: { chapter_id: finalChapterId },
@@ -290,17 +318,40 @@ export class QuestionService {
           );
           this.logger.log(`✅ 章节下题目查询完成 - 题目数量: ${questions.length}`);
           
-          const chapterQuestionIds = questions.map((q) => q.id).filter(id => id > 0 && Number.isInteger(id));
+          const chapterQuestionIds = questions
+            .map((q) => q.id)
+            .filter(id => {
+              const isValid = id > 0 && Number.isInteger(id) && !isNaN(id) && Number.isFinite(id);
+              if (!isValid) {
+                this.logger.warn(`章节题目ID无效，已过滤: ${id}`, { id });
+              }
+              return isValid;
+            });
+            
           if (chapterQuestionIds.length > 0) {
             this.logger.log(`使用章节题目ID列表 - 题目数量: ${chapterQuestionIds.length}`, { chapterQuestionIds });
             // 如果已经有 question_id 条件，使用 AND 逻辑（取交集）
             if (where.question_id) {
-              const existingIds = Array.isArray(where.question_id.value) 
-                ? where.question_id.value 
-                : [where.question_id.value];
+              // 提取现有ID列表
+              let existingIds: number[] = [];
+              if (where.question_id && typeof where.question_id === 'object' && 'value' in where.question_id) {
+                const value = (where.question_id as any).value;
+                existingIds = Array.isArray(value) ? value : [value];
+              }
+              
+              // 过滤掉无效的ID（包括 NaN）
+              existingIds = existingIds.filter(id => {
+                const isValid = !isNaN(id) && Number.isFinite(id) && id > 0 && Number.isInteger(id);
+                if (!isValid) {
+                  this.logger.warn(`现有题目ID无效，已过滤: ${id}`, { id, isNaN: isNaN(id), isFinite: Number.isFinite(id) });
+                }
+                return isValid;
+              });
+              
               const intersection = existingIds.filter(id => chapterQuestionIds.includes(id));
               if (intersection.length > 0) {
                 where.question_id = In(intersection);
+                this.logger.log(`使用交集查询 - 交集数量: ${intersection.length}`, { intersection });
               } else {
                 // 没有交集，返回空数组
                 this.logger.log('题目ID列表与章节题目无交集，返回空数组');
@@ -331,7 +382,60 @@ export class QuestionService {
         this.logger.log('查询所有答题记录（无过滤条件）');
       }
 
-      this.logger.log('最终查询条件:', JSON.stringify(where));
+      // 最终验证 where 对象，确保没有 NaN 值
+      this.logger.log('最终查询条件（验证前）:', JSON.stringify(where));
+      
+      // 检查 where 对象中是否有 NaN 值
+      const checkForNaN = (obj: any, path: string = ''): void => {
+        for (const key in obj) {
+          const value = obj[key];
+          const currentPath = path ? `${path}.${key}` : key;
+          
+          if (value !== null && value !== undefined) {
+            if (typeof value === 'number' && isNaN(value)) {
+              this.logger.error(`❌ 发现 NaN 值在路径: ${currentPath}`, { value, obj });
+              throw new BadRequestException(`查询条件中包含无效值 NaN: ${currentPath}`);
+            }
+            
+            if (typeof value === 'object') {
+              if (Array.isArray(value)) {
+                value.forEach((item, index) => {
+                  if (typeof item === 'number' && isNaN(item)) {
+                    this.logger.error(`❌ 发现 NaN 值在数组: ${currentPath}[${index}]`, { item, value });
+                    throw new BadRequestException(`查询条件中包含无效值 NaN: ${currentPath}[${index}]`);
+                  }
+                });
+              } else if (value && typeof value === 'object' && 'value' in value) {
+                // 处理 In() 操作符
+                const inValue = (value as any).value;
+                if (Array.isArray(inValue)) {
+                  inValue.forEach((item: any, index: number) => {
+                    if (typeof item === 'number' && isNaN(item)) {
+                      this.logger.error(`❌ 发现 NaN 值在 In() 操作符: ${currentPath}.value[${index}]`, { item, inValue });
+                      throw new BadRequestException(`查询条件中包含无效值 NaN: ${currentPath}.value[${index}]`);
+                    }
+                  });
+                } else if (typeof inValue === 'number' && isNaN(inValue)) {
+                  this.logger.error(`❌ 发现 NaN 值在 In() 操作符: ${currentPath}.value`, { inValue });
+                  throw new BadRequestException(`查询条件中包含无效值 NaN: ${currentPath}.value`);
+                }
+              } else {
+                checkForNaN(value, currentPath);
+              }
+            }
+          }
+        }
+      };
+      
+      try {
+        checkForNaN(where);
+        this.logger.log('✅ where 对象验证通过，没有 NaN 值');
+      } catch (error) {
+        this.logger.error('❌ where 对象验证失败', { error: error.message, where });
+        throw error;
+      }
+
+      this.logger.log('最终查询条件（验证后）:', JSON.stringify(where));
 
       // 查询答题记录，按时间倒序（最新的在前）
       this.logger.log('开始查询答题记录...');
