@@ -1,6 +1,9 @@
 import { Injectable, ExecutionContext, Logger } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Reflector } from '@nestjs/core';
+import { Observable } from 'rxjs';
+import { catchError } from 'rxjs/operators';
+import { of } from 'rxjs';
 
 /**
  * 可选的 JWT 认证守卫
@@ -15,26 +18,48 @@ export class OptionalJwtAuthGuard extends AuthGuard('jwt') {
     super();
   }
 
-  canActivate(context: ExecutionContext) {
+  canActivate(context: ExecutionContext): boolean | Promise<boolean> | Observable<boolean> {
     const request = context.switchToHttp().getRequest();
     const token = request.headers.authorization?.replace('Bearer ', '') || null;
 
     // 尝试激活，如果失败（token 无效或不存在），允许继续访问
     const result = super.canActivate(context);
     
-    // 将结果包装为 Promise，以便处理错误
-    return Promise.resolve(result).catch((error) => {
-      // token 无效时，允许访问，但 request.user 将为 undefined
-      if (token) {
-        this.logger.debug(`Token 验证失败，但允许继续访问 - 路径: ${request.path}`, {
-          error: error.message,
-          tokenPrefix: token.substring(0, 20) + '...',
-        });
-      } else {
-        this.logger.debug(`未提供 Token，允许继续访问 - 路径: ${request.path}`);
-      }
-      return true;
-    });
+    // 如果是 Promise，添加错误处理
+    if (result instanceof Promise) {
+      return result.catch((error) => {
+        // token 无效时，允许访问，但 request.user 将为 undefined
+        if (token) {
+          this.logger.debug(`Token 验证失败，但允许继续访问 - 路径: ${request.path}`, {
+            error: error.message,
+            tokenPrefix: token.substring(0, 20) + '...',
+          });
+        } else {
+          this.logger.debug(`未提供 Token，允许继续访问 - 路径: ${request.path}`);
+        }
+        return true;
+      });
+    }
+    
+    // 如果是 Observable，添加错误处理
+    if (result instanceof Observable) {
+      return result.pipe(
+        catchError((error) => {
+          if (token) {
+            this.logger.debug(`Token 验证失败，但允许继续访问 - 路径: ${request.path}`, {
+              error: error.message,
+              tokenPrefix: token.substring(0, 20) + '...',
+            });
+          } else {
+            this.logger.debug(`未提供 Token，允许继续访问 - 路径: ${request.path}`);
+          }
+          return of(true);
+        })
+      );
+    }
+    
+    // 如果是 boolean，直接返回
+    return result;
   }
 
   handleRequest(err: any, user: any, info: any) {
