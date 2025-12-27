@@ -31,7 +31,9 @@
 		"check:wechat": "node scripts/check-wechat-config.js",
 		"test:wechat": "node scripts/test-wechat-login.js",
 		"fix:answer-log": "node scripts/add-user-answer-log-fields.js",
-		"fix:answer-log:remote": "node scripts/add-user-answer-log-fields.js --remote"
+		"fix:answer-log:remote": "node scripts/add-user-answer-log-fields.js --remote",
+		"fix:is-correct": "node scripts/fix-is-correct-nullable.js",
+		"fix:is-correct:remote": "node scripts/fix-is-correct-nullable.js --remote"
 	},
 	"dependencies": {
 		"@nestjs/common": "^10.3.0",

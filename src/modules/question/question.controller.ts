@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, UseGuards, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, UseGuards, Logger, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { QuestionService } from './question.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -7,6 +7,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
 import { BatchSubmitDto } from './dto/batch-submit.dto';
+import { GetAnswerRecordsDto } from './dto/get-answer-records.dto';
 
 @ApiTags('题目')
 @Controller('app/questions')
@@ -67,6 +68,30 @@ export class QuestionController {
   async batchSubmit(@CurrentUser() user: any, @Body() dto: BatchSubmitDto) {
     const result = await this.questionService.batchSubmit(user.userId, dto);
     return CommonResponseDto.success(result);
+  }
+
+  @Get('answer-records')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取用户答题记录' })
+  async getAnswerRecords(@CurrentUser() user: any, @Query() dto: GetAnswerRecordsDto) {
+    try {
+      const userId = user.userId;
+      const chapterId = dto.chapterId ? +dto.chapterId : undefined;
+      const questionIds = dto.questionIds ? dto.questionIds.map(id => +id) : undefined;
+
+      this.logger.log(`获取用户答题记录 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'}`);
+
+      const result = await this.questionService.getAnswerRecords(userId, chapterId, questionIds);
+
+      return CommonResponseDto.success(result);
+    } catch (error) {
+      this.logger.error(`获取用户答题记录失败 - 用户ID: ${user.userId}`, {
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
   }
 }
 

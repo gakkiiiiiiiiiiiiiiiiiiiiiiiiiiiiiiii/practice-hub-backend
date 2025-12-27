@@ -127,9 +127,7 @@ export class QuestionService {
         this.logger.debug(`付费内容且用户未登录，无权限`);
       }
 
-      // 获取已作答的题目ID和答题结果
-      const answeredQuestionMap = new Map<number, { is_correct: number | null }>();
-      
+      // 获取已作答的题目ID（用于判断是否返回答案和解析）
       if (userId && questions.length > 0) {
         const questionIds = questions.map((q) => q.id);
         const answerLogs = await this.queryWithRetry(() =>
@@ -138,18 +136,12 @@ export class QuestionService {
               user_id: userId,
               question_id: In(questionIds),
             },
-            order: { create_time: 'DESC' }, // 按时间倒序，取最新的答题记录
+            select: ['question_id'], // 只查询题目ID，提高性能
           })
         );
         
-        // 构建答题记录映射（每个题目只保留最新的答题记录）
         answerLogs.forEach((log) => {
-          if (!answeredQuestionMap.has(log.question_id)) {
-            answeredQuestionMap.set(log.question_id, {
-              is_correct: log.is_correct,
-            });
-            answeredQuestionIds.add(log.question_id);
-          }
+          answeredQuestionIds.add(log.question_id);
         });
         this.logger.debug(`用户已作答题目数量: ${answeredQuestionIds.size}`);
       }
@@ -163,17 +155,6 @@ export class QuestionService {
           parent_id: q.parent_id,
           difficulty: q.difficulty,
         };
-
-        // 添加是否已作答和是否答对字段
-        const answerRecord = answeredQuestionMap.get(q.id);
-        result.is_answered = answeredQuestionIds.has(q.id);
-        
-        if (answerRecord) {
-          // is_correct: 0-错误, 1-正确, null-待批改（简答题）
-          result.is_correct = answerRecord.is_correct === null ? null : answerRecord.is_correct === 1;
-        } else {
-          result.is_correct = null; // 未作答
-        }
 
         // 如果是免费的，或者有权限，或者已作答，返回答案和解析
         if (isFree || hasPermission || answeredQuestionIds.has(q.id)) {
@@ -193,6 +174,79 @@ export class QuestionService {
         stack: error.stack,
         chapterId,
         userId,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * 获取用户答题记录
+   * @param userId 用户ID
+   * @param chapterId 章节ID（可选）
+   * @param questionIds 题目ID列表（可选）
+   */
+  async getAnswerRecords(userId: number, chapterId?: number, questionIds?: number[]) {
+    try {
+      this.logger.debug(`获取用户答题记录 - 用户ID: ${userId}, 章节ID: ${chapterId || '全部'}, 题目数量: ${questionIds?.length || '全部'}`);
+
+      const where: any = {
+        user_id: userId,
+      };
+
+      // 如果指定了题目ID列表，添加条件
+      if (questionIds && questionIds.length > 0) {
+        where.question_id = In(questionIds);
+      } else if (chapterId) {
+        // 如果指定了章节ID，先获取章节下的所有题目ID
+        const questions = await this.questionRepository.find({
+          where: { chapter_id: chapterId },
+          select: ['id'],
+        });
+        const chapterQuestionIds = questions.map((q) => q.id);
+        if (chapterQuestionIds.length > 0) {
+          where.question_id = In(chapterQuestionIds);
+        } else {
+          // 章节下没有题目，返回空数组
+          return [];
+        }
+      }
+
+      // 查询答题记录，按时间倒序（最新的在前）
+      const answerLogs = await this.queryWithRetry(() =>
+        this.answerLogRepository.find({
+          where,
+          order: { create_time: 'DESC' },
+        })
+      );
+
+      // 对每个题目只保留最新的答题记录
+      const recordMap = new Map<number, UserAnswerLog>();
+      answerLogs.forEach((log) => {
+        if (!recordMap.has(log.question_id)) {
+          recordMap.set(log.question_id, log);
+        }
+      });
+
+      // 转换为返回格式
+      const result = Array.from(recordMap.values()).map((log) => ({
+        question_id: log.question_id,
+        user_option: log.user_option,
+        text_answer: log.text_answer,
+        image_answer: log.image_answer,
+        is_correct: log.is_correct === null ? null : log.is_correct === 1, // 0-错误, 1-正确, null-待批改
+        create_time: log.create_time,
+      }));
+
+      this.logger.log(`成功获取用户答题记录 - 用户ID: ${userId}, 记录数量: ${result.length}`);
+
+      return result;
+    } catch (error) {
+      this.logger.error(`获取用户答题记录失败 - 用户ID: ${userId}`, {
+        error: error.message,
+        stack: error.stack,
+        userId,
+        chapterId,
+        questionIds,
       });
       throw error;
     }
