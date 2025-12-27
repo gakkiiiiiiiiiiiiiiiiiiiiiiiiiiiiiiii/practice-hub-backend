@@ -6,7 +6,7 @@ export class GetAnswerRecordsDto {
   @ApiProperty({ description: '章节ID（可选）', example: 1, required: false })
   @IsOptional()
   @Transform(({ value }) => {
-    // 如果值为空，返回 undefined
+    // 如果值为空，返回 undefined（可选参数）
     if (value === undefined || value === null || value === '') {
       return undefined;
     }
@@ -14,19 +14,28 @@ export class GetAnswerRecordsDto {
     // 尝试转换为数字
     let num: number;
     if (typeof value === 'number') {
-      // 已经是数字，直接使用
+      // 已经是数字，检查是否是 NaN
+      if (isNaN(value) || !Number.isFinite(value)) {
+        // 如果是 NaN 或 Infinity，返回 undefined，让验证器处理
+        return undefined;
+      }
       num = value;
     } else if (typeof value === 'string') {
       // 字符串，使用 parseInt 转换
-      num = parseInt(value.trim(), 10);
+      const trimmed = value.trim();
+      if (trimmed === '' || trimmed === 'undefined' || trimmed === 'null') {
+        return undefined;
+      }
+      num = parseInt(trimmed, 10);
     } else {
       // 其他类型，尝试 Number 转换
       num = Number(value);
     }
     
-    // 验证转换结果
-    if (isNaN(num) || num <= 0 || !Number.isInteger(num)) {
+    // 严格验证转换结果
+    if (isNaN(num) || !Number.isFinite(num) || num <= 0 || !Number.isInteger(num)) {
       // 转换失败或无效，返回 undefined（让后续验证处理）
+      // 注意：不要返回 NaN，因为 enableImplicitConversion 可能会将其转换为字符串 'NaN'
       return undefined;
     }
     

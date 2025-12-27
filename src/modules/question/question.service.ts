@@ -230,36 +230,60 @@ export class QuestionService {
       
       // 如果指定了章节ID，添加条件
       if (chapterId !== undefined && chapterId !== null) {
-        // 验证 chapterId 是有效数字
+        // 严格验证 chapterId 是有效数字
         let numChapterId: number;
+        
+        // 首先检查是否是 NaN
+        if (typeof chapterId === 'number' && isNaN(chapterId)) {
+          this.logger.error('❌ 章节ID是NaN', { chapterId });
+          throw new BadRequestException('章节ID无效: NaN');
+        }
+        
         if (typeof chapterId === 'number') {
           numChapterId = chapterId;
         } else if (typeof chapterId === 'string') {
-          numChapterId = parseInt(chapterId, 10);
+          numChapterId = parseInt(chapterId.trim(), 10);
         } else {
-          numChapterId = Number(chapterId);
+          this.logger.error('❌ 章节ID类型不支持', { chapterId, type: typeof chapterId });
+          throw new BadRequestException(`章节ID类型无效: ${typeof chapterId}`);
         }
         
         this.logger.log(`章节ID转换 - 原始值: ${chapterId}, 类型: ${typeof chapterId}, 转换后: ${numChapterId}, 是否NaN: ${isNaN(numChapterId)}`);
         
-        if (isNaN(numChapterId) || numChapterId <= 0 || !Number.isInteger(numChapterId)) {
+        // 严格验证：必须是有效数字、大于0、整数
+        if (isNaN(numChapterId) || !Number.isFinite(numChapterId) || numChapterId <= 0 || !Number.isInteger(numChapterId)) {
           this.logger.error('❌ 章节ID无效', { 
             chapterId, 
             numChapterId, 
             chapterIdType: typeof chapterId,
             isNaN: isNaN(numChapterId),
-            isValid: !isNaN(numChapterId) && numChapterId > 0 && Number.isInteger(numChapterId),
+            isFinite: Number.isFinite(numChapterId),
+            isPositive: numChapterId > 0,
+            isInteger: Number.isInteger(numChapterId),
           });
           throw new BadRequestException(`章节ID无效: ${chapterId}`);
         }
         
-        this.logger.log(`✅ 使用章节ID查询 - 章节ID: ${numChapterId} (类型: ${typeof numChapterId})`);
+        // 再次确认值有效（防御性编程）
+        if (isNaN(numChapterId) || numChapterId <= 0) {
+          this.logger.error('❌ 章节ID验证失败（二次检查）', { numChapterId });
+          throw new BadRequestException(`章节ID无效: ${numChapterId}`);
+        }
+        
+        this.logger.log(`✅ 使用章节ID查询 - 章节ID: ${numChapterId} (类型: ${typeof numChapterId}, 值: ${numChapterId})`);
         // 如果指定了章节ID，先获取章节下的所有题目ID
         try {
-          this.logger.log(`查询章节下的题目 - chapter_id: ${numChapterId}`);
+          // 最后一次验证，确保传递给数据库的值是有效的
+          const finalChapterId = Number.isInteger(numChapterId) && numChapterId > 0 ? numChapterId : null;
+          if (!finalChapterId) {
+            this.logger.error('❌ 章节ID最终验证失败', { numChapterId, finalChapterId });
+            throw new BadRequestException(`章节ID无效: ${numChapterId}`);
+          }
+          
+          this.logger.log(`查询章节下的题目 - chapter_id: ${finalChapterId} (类型: ${typeof finalChapterId})`);
           const questions = await this.queryWithRetry(() =>
             this.questionRepository.find({
-              where: { chapter_id: numChapterId },
+              where: { chapter_id: finalChapterId },
               select: ['id'],
             })
           );

@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, BadRequestException } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
@@ -13,7 +13,19 @@ async function bootstrap() {
 			forbidNonWhitelisted: true,
 			transform: true,
 			transformOptions: {
-				enableImplicitConversion: true,
+				enableImplicitConversion: false, // 禁用隐式转换，使用 DTO 中的 @Transform 装饰器手动转换
+			},
+			exceptionFactory: (errors) => {
+				// 自定义错误格式，便于调试
+				const messages = errors.map(error => {
+					const constraints = error.constraints || {};
+					return Object.values(constraints).join(', ');
+				});
+				return new BadRequestException({
+					message: '请求参数验证失败',
+					errors: messages,
+					details: errors,
+				});
 			},
 		})
 	);
