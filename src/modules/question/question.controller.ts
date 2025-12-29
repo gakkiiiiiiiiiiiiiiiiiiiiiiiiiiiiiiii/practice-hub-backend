@@ -43,34 +43,8 @@ export class QuestionController {
 		}
 	}
 
-	@Get(':id')
-	@UseGuards(JwtAuthGuard)
-	@ApiBearerAuth()
-	@ApiOperation({ summary: '获取单题详情' })
-	async getQuestionDetail(@Param('id') id: number, @CurrentUser() user?: any) {
-		const userId = user?.userId;
-		const result = await this.questionService.getQuestionDetail(+id, userId);
-		return CommonResponseDto.success(result);
-	}
-
-	@Post('submit')
-	@UseGuards(JwtAuthGuard)
-	@ApiBearerAuth()
-	@ApiOperation({ summary: '提交答案' })
-	async submitAnswer(@CurrentUser() user: any, @Body() dto: SubmitAnswerDto) {
-		const result = await this.questionService.submitAnswer(user.userId, dto);
-		return CommonResponseDto.success(result);
-	}
-
-	@Post('batch_submit')
-	@UseGuards(JwtAuthGuard)
-	@ApiBearerAuth()
-	@ApiOperation({ summary: '批量提交（试卷模式）' })
-	async batchSubmit(@CurrentUser() user: any, @Body() dto: BatchSubmitDto) {
-		const result = await this.questionService.batchSubmit(user.userId, dto);
-		return CommonResponseDto.success(result);
-	}
-
+	// ⚠️ 重要：静态路由必须放在动态路由之前！
+	// 否则 '/answer-records' 会被 ':id' 路由匹配
 	@Get('answer-records')
 	@UseGuards(JwtAuthGuard)
 	@ApiBearerAuth()
@@ -139,5 +113,33 @@ export class QuestionController {
 			});
 			throw error;
 		}
+	}
+
+	@Get(':id')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '获取单题详情' })
+	async getQuestionDetail(@Param('id') id: number, @CurrentUser() user?: any) {
+		const userId = user?.userId;
+		const result = await this.questionService.getQuestionDetail(+id, userId);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('submit')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '提交答案' })
+	async submitAnswer(@CurrentUser() user: any, @Body() dto: SubmitAnswerDto) {
+		const result = await this.questionService.submitAnswer(user.userId, dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch_submit')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '批量提交（试卷模式）' })
+	async batchSubmit(@CurrentUser() user: any, @Body() dto: BatchSubmitDto) {
+		const result = await this.questionService.batchSubmit(user.userId, dto);
+		return CommonResponseDto.success(result);
 	}
 }
