@@ -96,14 +96,37 @@ export class QuestionController {
 				throw new BadRequestException('用户未登录');
 			}
 
-			const chapterId = dto?.chapterId;
+			// 手动转换 chapterId（如果 DTO 转换失败）
+			let chapterId: number | undefined = undefined;
+			if (dto?.chapterId !== undefined && dto?.chapterId !== null) {
+				if (typeof dto.chapterId === 'number') {
+					if (Number.isSafeInteger(dto.chapterId) && dto.chapterId > 0) {
+						chapterId = dto.chapterId;
+					} else {
+						this.logger.warn(`DTO chapterId 无效（数字）: ${dto.chapterId}`);
+					}
+				} else if (typeof dto.chapterId === 'string') {
+					const numId = parseInt(dto.chapterId, 10);
+					if (Number.isSafeInteger(numId) && numId > 0) {
+						chapterId = numId;
+						this.logger.log(`手动转换 chapterId: "${dto.chapterId}" -> ${chapterId}`);
+					} else {
+						this.logger.warn(`DTO chapterId 无效（字符串）: "${dto.chapterId}" -> ${numId}`);
+					}
+				} else {
+					this.logger.warn(`DTO chapterId 类型不支持: ${typeof dto.chapterId}`);
+				}
+			}
+
+			// 如果手动转换成功，使用转换后的值；否则使用 DTO 的值
+			const finalChapterId = chapterId !== undefined ? chapterId : dto?.chapterId;
 			const questionIds = dto?.questionIds;
 
 			this.logger.log(
-				`查询参数 - userId: ${userId}, chapterId: ${chapterId} (${typeof chapterId}), questionIds: ${JSON.stringify(questionIds)}`
+				`查询参数 - userId: ${userId}, chapterId: ${finalChapterId} (${typeof finalChapterId}), questionIds: ${JSON.stringify(questionIds)}`
 			);
 
-			const result = await this.questionService.getAnswerRecords(userId, chapterId, questionIds);
+			const result = await this.questionService.getAnswerRecords(userId, finalChapterId, questionIds);
 
 			this.logger.log(`✅ 查询完成 - 记录数量: ${result.length}`);
 			return CommonResponseDto.success(result);

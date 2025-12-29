@@ -6,9 +6,12 @@ export class GetAnswerRecordsDto {
 	@ApiProperty({ description: '章节ID（可选）', example: 1, required: false })
 	@IsOptional()
 	@Transform(({ value }) => {
-		console.log('value:', value, 'typeof value:', typeof value);
+		// 使用 process.stdout.write 确保日志输出（console.log 在生产环境可能被抑制）
+		process.stdout.write(`[DTO Transform] chapterId value: ${value}, type: ${typeof value}\n`);
+
 		// 如果值为空，返回 undefined（可选参数）
 		if (value === undefined || value === null || value === '') {
+			process.stdout.write(`[DTO Transform] chapterId 为空，返回 undefined\n`);
 			return undefined;
 		}
 
@@ -17,7 +20,7 @@ export class GetAnswerRecordsDto {
 		if (typeof value === 'number') {
 			// 已经是数字，检查是否是 NaN
 			if (isNaN(value) || !Number.isFinite(value)) {
-				// 如果是 NaN 或 Infinity，返回 undefined，让验证器处理
+				process.stdout.write(`[DTO Transform] chapterId 是无效数字，返回 undefined\n`);
 				return undefined;
 			}
 			num = value;
@@ -25,21 +28,24 @@ export class GetAnswerRecordsDto {
 			// 字符串，使用 parseInt 转换
 			const trimmed = value.trim();
 			if (trimmed === '' || trimmed === 'undefined' || trimmed === 'null') {
+				process.stdout.write(`[DTO Transform] chapterId 字符串为空，返回 undefined\n`);
 				return undefined;
 			}
 			num = parseInt(trimmed, 10);
+			process.stdout.write(`[DTO Transform] chapterId 字符串转换: "${trimmed}" -> ${num}\n`);
 		} else {
 			// 其他类型，尝试 Number 转换
 			num = Number(value);
+			process.stdout.write(`[DTO Transform] chapterId 其他类型转换: ${value} -> ${num}\n`);
 		}
 
 		// 严格验证转换结果
 		if (isNaN(num) || !Number.isFinite(num) || num <= 0 || !Number.isInteger(num)) {
-			// 转换失败或无效，返回 undefined（让后续验证处理）
-			// 注意：不要返回 NaN，因为 enableImplicitConversion 可能会将其转换为字符串 'NaN'
+			process.stdout.write(`[DTO Transform] chapterId 验证失败: ${num}, 返回 undefined\n`);
 			return undefined;
 		}
 
+		process.stdout.write(`[DTO Transform] chapterId 转换成功: ${num}\n`);
 		return num;
 	})
 	@ValidateIf((o) => o.chapterId !== undefined && o.chapterId !== null)

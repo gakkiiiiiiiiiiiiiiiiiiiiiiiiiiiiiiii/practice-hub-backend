@@ -270,6 +270,7 @@ export class QuestionService {
 		this.logger.log(`最终查询条件: ${JSON.stringify(where)}`);
 		const checkWhere = (obj: any, path = ''): void => {
 			for (const key in obj) {
+				this.logger.log('key:', key, 'value:', obj[key]);
 				const value = obj[key];
 				const currentPath = path ? `${path}.${key}` : key;
 				if (value !== null && value !== undefined) {
