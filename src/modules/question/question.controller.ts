@@ -76,26 +76,45 @@ export class QuestionController {
 	@ApiBearerAuth()
 	@ApiOperation({ summary: '获取用户答题记录' })
 	async getAnswerRecords(@CurrentUser() user: any, @Query() dto: GetAnswerRecordsDto, @Req() request: Request) {
-		this.logger.log('=== getAnswerRecords 方法被调用 ===');
-		this.logger.log('request.query:', JSON.stringify(request.query));
-		this.logger.log('dto:', JSON.stringify(dto));
-		this.logger.log('user:', user ? JSON.stringify({ userId: user.userId, type: user.type }) : 'null');
+		try {
+			this.logger.log('=== getAnswerRecords 方法被调用 ===');
+			this.logger.log('request.query:', JSON.stringify(request.query));
+			this.logger.log('dto:', JSON.stringify(dto));
+			this.logger.log(
+				'dto.chapterId:',
+				dto?.chapterId,
+				'类型:',
+				typeof dto?.chapterId,
+				'isNaN:',
+				dto?.chapterId !== undefined ? isNaN(Number(dto.chapterId)) : 'N/A'
+			);
+			this.logger.log('user:', user ? JSON.stringify({ userId: user.userId, type: user.type }) : 'null');
 
-		const userId = user?.userId;
-		if (!userId) {
-			throw new BadRequestException('用户未登录');
+			const userId = user?.userId;
+			if (!userId) {
+				this.logger.error('用户未登录');
+				throw new BadRequestException('用户未登录');
+			}
+
+			const chapterId = dto?.chapterId;
+			const questionIds = dto?.questionIds;
+
+			this.logger.log(
+				`查询参数 - userId: ${userId}, chapterId: ${chapterId} (${typeof chapterId}), questionIds: ${JSON.stringify(questionIds)}`
+			);
+
+			const result = await this.questionService.getAnswerRecords(userId, chapterId, questionIds);
+
+			this.logger.log(`✅ 查询完成 - 记录数量: ${result.length}`);
+			return CommonResponseDto.success(result);
+		} catch (error) {
+			this.logger.error('❌ getAnswerRecords 异常:', {
+				message: error.message,
+				stack: error.stack,
+				dto: JSON.stringify(dto),
+				user: user ? { userId: user.userId } : null,
+			});
+			throw error;
 		}
-
-		const chapterId = dto?.chapterId;
-		const questionIds = dto?.questionIds;
-
-		this.logger.log(
-			`查询参数 - userId: ${userId}, chapterId: ${chapterId}, questionIds: ${JSON.stringify(questionIds)}`
-		);
-
-		const result = await this.questionService.getAnswerRecords(userId, chapterId, questionIds);
-
-		this.logger.log(`✅ 查询完成 - 记录数量: ${result.length}`);
-		return CommonResponseDto.success(result);
 	}
 }

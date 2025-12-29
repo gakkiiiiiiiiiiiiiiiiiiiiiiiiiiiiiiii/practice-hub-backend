@@ -189,22 +189,39 @@ export class QuestionService {
 	 */
 	async getAnswerRecords(userId: number, chapterId?: number, questionIds?: number[]) {
 		this.logger.log('开始查询答题记录...');
+		this.logger.log(
+			`Service 接收参数 - userId: ${userId} (${typeof userId}), chapterId: ${chapterId} (${typeof chapterId}), questionIds: ${JSON.stringify(questionIds)}`
+		);
 
 		// 1. 基础过滤条件：用户ID必须是有效数字
 		if (!Number.isSafeInteger(userId)) {
+			this.logger.error(`Invalid userId: ${userId} (${typeof userId})`);
 			throw new BadRequestException('Invalid UserID');
 		}
 
 		const where: any = { user_id: userId };
 
 		// 2. 处理章节过滤 (提取题目ID)
-		if (chapterId) {
-			// 强制转换并检查是否为有效正整数
-			const targetChapterId = Number(chapterId);
-			if (!Number.isSafeInteger(targetChapterId) || targetChapterId <= 0) {
-				throw new BadRequestException('Invalid ChapterID');
+		if (chapterId !== undefined && chapterId !== null) {
+			// 检查是否是 NaN
+			if (typeof chapterId === 'number' && isNaN(chapterId)) {
+				this.logger.error(`chapterId is NaN: ${chapterId}`);
+				throw new BadRequestException('Invalid ChapterID: NaN');
 			}
 
+			// 强制转换并检查是否为有效正整数
+			const targetChapterId = typeof chapterId === 'number' ? chapterId : Number(chapterId);
+
+			this.logger.log(
+				`转换后的 chapterId: ${targetChapterId} (${typeof targetChapterId}), isNaN: ${isNaN(targetChapterId)}, isSafeInteger: ${Number.isSafeInteger(targetChapterId)}`
+			);
+
+			if (!Number.isSafeInteger(targetChapterId) || targetChapterId <= 0) {
+				this.logger.error(`Invalid chapterId: ${targetChapterId} (${typeof targetChapterId})`);
+				throw new BadRequestException(`Invalid ChapterID: ${targetChapterId}`);
+			}
+
+			this.logger.log(`查询章节下的题目 - chapter_id: ${targetChapterId}`);
 			const questions = await this.queryWithRetry(() =>
 				this.questionRepository.find({
 					where: { chapter_id: targetChapterId },
@@ -215,6 +232,8 @@ export class QuestionService {
 			// 提取并过滤，确保只有纯数字 ID
 			const idsFromChapter = questions.map((q) => q.id).filter((id) => Number.isSafeInteger(id) && id > 0);
 
+			this.logger.log(`章节下题目数量: ${questions.length}, 有效ID数量: ${idsFromChapter.length}`);
+
 			if (idsFromChapter.length === 0) {
 				return []; // 章节没题，直接返回空
 			}
@@ -223,22 +242,59 @@ export class QuestionService {
 
 		// 3. 处理题目ID列表过滤 (如果有交集)
 		if (questionIds && Array.isArray(questionIds) && questionIds.length > 0) {
-			const targetIds = questionIds.map((id) => Number(id)).filter((id) => Number.isSafeInteger(id) && id > 0);
+			const targetIds = questionIds
+				.map((id) => {
+					const numId = typeof id === 'number' ? id : Number(id);
+					return Number.isSafeInteger(numId) && numId > 0 ? numId : null;
+				})
+				.filter((id): id is number => id !== null);
 
-			if (where.question_id) {
-				// 取交集
-				const existingInIds = (where.question_id as any).value;
-				const intersection = targetIds.filter((id) => existingInIds.includes(id));
-				if (intersection.length === 0) {
-					return [];
-				}
-				where.question_id = In(intersection);
+			if (targetIds.length === 0) {
+				this.logger.warn('questionIds 转换后没有有效ID');
 			} else {
-				where.question_id = In(targetIds);
+				if (where.question_id) {
+					// 取交集
+					const existingInIds = (where.question_id as any).value;
+					const intersection = targetIds.filter((id) => existingInIds.includes(id));
+					if (intersection.length === 0) {
+						return [];
+					}
+					where.question_id = In(intersection);
+				} else {
+					where.question_id = In(targetIds);
+				}
 			}
 		}
 
-		// 4. 执行查询
+		// 4. 最终验证 where 对象，确保没有 NaN
+		this.logger.log(`最终查询条件: ${JSON.stringify(where)}`);
+		const checkWhere = (obj: any, path = ''): void => {
+			for (const key in obj) {
+				const value = obj[key];
+				const currentPath = path ? `${path}.${key}` : key;
+				if (value !== null && value !== undefined) {
+					if (typeof value === 'number' && isNaN(value)) {
+						this.logger.error(`发现 NaN 在 ${currentPath}: ${value}`);
+						throw new BadRequestException(`查询条件包含无效值: ${currentPath}`);
+					}
+					if (value && typeof value === 'object' && 'value' in value) {
+						const inValue = (value as any).value;
+						if (Array.isArray(inValue)) {
+							inValue.forEach((item: any, index: number) => {
+								if (typeof item === 'number' && isNaN(item)) {
+									this.logger.error(`发现 NaN 在 ${currentPath}.value[${index}]: ${item}`);
+									throw new BadRequestException(`查询条件包含无效值: ${currentPath}.value[${index}]`);
+								}
+							});
+						}
+					}
+				}
+			}
+		};
+		checkWhere(where);
+
+		// 5. 执行查询
+		this.logger.log('执行数据库查询...');
 		const answerLogs = await this.queryWithRetry(() =>
 			this.answerLogRepository.find({
 				where,
