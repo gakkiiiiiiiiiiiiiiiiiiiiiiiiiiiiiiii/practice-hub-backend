@@ -51,13 +51,18 @@ export class GetAnswerRecordsDto {
     if (value === undefined || value === null || value === '') {
       return undefined;
     }
-    // 如果是数组，直接转换
+    // 如果是数组，直接转换并过滤
     if (Array.isArray(value)) {
-      return value.map(id => Number(id)).filter(id => !isNaN(id));
+      return value
+        .map((id) => Number(id))
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
     }
     // 如果是字符串（逗号分隔），转换为数组
     if (typeof value === 'string') {
-      return value.split(',').map(id => Number(id.trim())).filter(id => !isNaN(id));
+      return value
+        .split(',')
+        .map((id) => Number(id.trim()))
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
     }
     return undefined;
   })
