@@ -16,6 +16,9 @@ export class UserAnswerLog {
   @Column()
   question_id: number;
 
+  @Column()
+  chapter_id: number; // 章节ID（冗余字段，便于查询）
+
   @Column({ type: 'json' })
   user_option: string[]; // 用户答案（选项类型题目）
 

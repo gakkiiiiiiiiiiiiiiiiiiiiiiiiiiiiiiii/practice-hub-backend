@@ -201,7 +201,7 @@ export class QuestionService {
 
 		const where: any = { user_id: userId };
 
-		// 2. 处理章节过滤 (提取题目ID)
+		// 2. 处理章节过滤（直接使用 chapter_id 字段查询，如果表中有该字段）
 		if (chapterId !== undefined && chapterId !== null) {
 			// 检查是否是 NaN
 			if (typeof chapterId === 'number' && isNaN(chapterId)) {
@@ -221,23 +221,10 @@ export class QuestionService {
 				throw new BadRequestException(`Invalid ChapterID: ${targetChapterId}`);
 			}
 
-			this.logger.log(`查询章节下的题目 - chapter_id: ${targetChapterId}`);
-			const questions = await this.queryWithRetry(() =>
-				this.questionRepository.find({
-					where: { chapter_id: targetChapterId },
-					select: ['id'],
-				})
-			);
-
-			// 提取并过滤，确保只有纯数字 ID
-			const idsFromChapter = questions.map((q) => q.id).filter((id) => Number.isSafeInteger(id) && id > 0);
-
-			this.logger.log(`章节下题目数量: ${questions.length}, 有效ID数量: ${idsFromChapter.length}`);
-
-			if (idsFromChapter.length === 0) {
-				return []; // 章节没题，直接返回空
-			}
-			where.question_id = In(idsFromChapter);
+			// 优先使用 chapter_id 字段直接查询（如果表中有该字段）
+			// 如果没有该字段，则通过 question 表关联查询
+			this.logger.log(`使用章节ID过滤 - chapter_id: ${targetChapterId}`);
+			where.chapter_id = targetChapterId;
 		}
 
 		// 3. 处理题目ID列表过滤 (如果有交集)
@@ -296,14 +283,94 @@ export class QuestionService {
 
 		// 5. 执行查询
 		this.logger.log('执行数据库查询...');
-		const answerLogs = await this.queryWithRetry(() =>
-			this.answerLogRepository.find({
-				where,
-				order: { create_time: 'DESC' },
-			})
-		);
+		this.logger.log(`查询条件详情:`, {
+			where: JSON.stringify(where),
+			whereKeys: Object.keys(where),
+			whereValues: Object.values(where),
+		});
 
-		// 5. 对每个题目只保留最新的答题记录
+		let answerLogs: UserAnswerLog[] = [];
+		try {
+			answerLogs = await this.queryWithRetry(() =>
+				this.answerLogRepository.find({
+					where,
+					order: { create_time: 'DESC' },
+				})
+			);
+			this.logger.log(`✅ 数据库查询成功 - 返回记录数: ${answerLogs.length}`);
+
+			// 如果查询结果为空，记录详细信息用于调试
+			if (answerLogs.length === 0) {
+				this.logger.warn('⚠️  查询结果为空，可能的原因：');
+				this.logger.warn(`  - userId: ${userId}`);
+				if (where.chapter_id) {
+					this.logger.warn(`  - chapter_id: ${where.chapter_id}`);
+				}
+				if (where.question_id) {
+					const questionIds = (where.question_id as any).value || where.question_id;
+					this.logger.warn(`  - question_id: ${JSON.stringify(questionIds)}`);
+				}
+
+				// 尝试查询该用户的所有记录，用于对比
+				const allUserLogs = await this.queryWithRetry(() =>
+					this.answerLogRepository.find({
+						where: { user_id: userId },
+						select: ['id', 'user_id', 'question_id', 'chapter_id'],
+						take: 5, // 只取前5条
+					})
+				);
+				this.logger.log(`该用户总记录数（前5条）: ${allUserLogs.length}`);
+				if (allUserLogs.length > 0) {
+					this.logger.log('示例记录:', JSON.stringify(allUserLogs[0]));
+				}
+			}
+		} catch (error: any) {
+			// 如果是因为 chapter_id 字段不存在而报错，尝试使用关联查询
+			if (error.message && error.message.includes('chapter_id')) {
+				this.logger.warn('⚠️  chapter_id 字段不存在，尝试使用关联查询...');
+
+				// 回退到原来的逻辑：通过 question 表关联查询
+				if (chapterId !== undefined && chapterId !== null) {
+					const targetChapterId = typeof chapterId === 'number' ? chapterId : Number(chapterId);
+					const questions = await this.queryWithRetry(() =>
+						this.questionRepository.find({
+							where: { chapter_id: targetChapterId },
+							select: ['id'],
+						})
+					);
+					const idsFromChapter = questions.map((q) => q.id).filter((id) => Number.isSafeInteger(id) && id > 0);
+
+					if (idsFromChapter.length === 0) {
+						this.logger.warn('章节下没有题目');
+						return [];
+					}
+
+					// 移除 chapter_id，使用 question_id 过滤
+					delete where.chapter_id;
+					if (where.question_id) {
+						const existingIds = (where.question_id as any).value || [];
+						const intersection = idsFromChapter.filter((id) => existingIds.includes(id));
+						where.question_id = In(intersection.length > 0 ? intersection : idsFromChapter);
+					} else {
+						where.question_id = In(idsFromChapter);
+					}
+
+					answerLogs = await this.queryWithRetry(() =>
+						this.answerLogRepository.find({
+							where,
+							order: { create_time: 'DESC' },
+						})
+					);
+					this.logger.log(`✅ 关联查询成功 - 返回记录数: ${answerLogs.length}`);
+				} else {
+					throw error;
+				}
+			} else {
+				throw error;
+			}
+		}
+
+		// 6. 对每个题目只保留最新的答题记录
 		const recordMap = new Map<number, UserAnswerLog>();
 		answerLogs.forEach((log) => {
 			if (!recordMap.has(log.question_id)) {
@@ -469,6 +536,7 @@ export class QuestionService {
 			await this.answerLogRepository.save({
 				user_id: userId,
 				question_id: dto.qid,
+				chapter_id: question.chapter_id,
 				user_option: [],
 				text_answer: dto.text_answer || null,
 				image_answer: dto.image_answer || null,
@@ -512,6 +580,7 @@ export class QuestionService {
 		await this.answerLogRepository.save({
 			user_id: userId,
 			question_id: dto.qid,
+			chapter_id: question.chapter_id,
 			user_option: userAnswer,
 			text_answer: null,
 			image_answer: null,
@@ -558,6 +627,7 @@ export class QuestionService {
 				await this.answerLogRepository.save({
 					user_id: userId,
 					question_id: item.qid,
+					chapter_id: question.chapter_id,
 					user_option: [],
 					text_answer: (item as any).text_answer || null,
 					image_answer: (item as any).image_answer || null,
@@ -616,6 +686,7 @@ export class QuestionService {
 			await this.answerLogRepository.save({
 				user_id: userId,
 				question_id: item.qid,
+				chapter_id: question.chapter_id,
 				user_option: userAnswer,
 				text_answer: null,
 				image_answer: null,
