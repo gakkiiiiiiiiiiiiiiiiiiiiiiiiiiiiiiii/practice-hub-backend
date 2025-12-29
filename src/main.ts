@@ -13,7 +13,7 @@ async function bootstrap() {
 			forbidNonWhitelisted: true,
 			transform: true,
 			transformOptions: {
-				enableImplicitConversion: true, // 禁用隐式转换，使用 DTO 中的 @Transform 装饰器手动转换
+				enableImplicitConversion: false, // 禁用隐式转换，使用 DTO 中的 @Transform 装饰器手动转换
 			},
 			exceptionFactory: (errors) => {
 				// 自定义错误格式，便于调试
