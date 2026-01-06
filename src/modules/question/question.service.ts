@@ -657,14 +657,17 @@ export class QuestionService {
 		// 权限校验
 		await this.checkQuestionPermission(userId, question.chapter_id);
 
-		// 简答题特殊处理：不需要自动判断对错，需要人工批改
+		// 简答题特殊处理：支持自评结果
 		if (question.type === QuestionType.SHORT_ANSWER) {
 			// 验证答案格式
 			if (!dto.text_answer && !dto.image_answer) {
 				throw new BadRequestException('简答题答案不能为空，请填写文本答案或上传图片');
 			}
 
-			// 记录答题日志（简答题不自动判断对错）
+			// 如果提供了自评结果（is_correct），使用自评结果；否则为 null（待批改）
+			const isCorrect = dto.is_correct !== undefined ? dto.is_correct : null;
+
+			// 记录答题日志
 			await this.answerLogRepository.save({
 				user_id: userId,
 				question_id: dto.qid,
@@ -672,14 +675,19 @@ export class QuestionService {
 				user_option: [],
 				text_answer: dto.text_answer || null,
 				image_answer: dto.image_answer || null,
-				is_correct: null, // null 表示待批改
+				is_correct: isCorrect, // 使用自评结果或 null（待批改）
 			});
 
+			// 如果自评为错误，更新错题本
+			if (isCorrect === 0) {
+				await this.updateWrongBook(userId, question);
+			}
+
 			return {
-				is_correct: null, // 待批改
+				is_correct: isCorrect !== null ? isCorrect === 1 : null,
 				answer: question.answer,
 				analysis: question.analysis,
-				message: '答案已提交，等待批改',
+				message: isCorrect !== null ? (isCorrect === 1 ? '已标记为答对' : '已标记为答错') : '答案已提交，等待批改',
 			};
 		}
 

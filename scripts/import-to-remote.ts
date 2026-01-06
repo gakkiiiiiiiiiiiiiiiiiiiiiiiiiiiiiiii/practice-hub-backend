@@ -85,6 +85,7 @@ const TABLES = [
 	'sys_operation_log',
 	'home_recommend_category',
 	'home_recommend_item',
+	'feedback', // 反馈表
 ];
 
 /**

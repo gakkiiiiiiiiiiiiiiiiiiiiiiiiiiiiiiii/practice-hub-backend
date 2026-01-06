@@ -21,5 +21,10 @@ export class SubmitAnswerDto {
   @IsOptional()
   @IsString()
   image_answer?: string;
+
+  @ApiProperty({ description: '是否正确（简答题自评使用）', example: 1, required: false })
+  @IsOptional()
+  @IsNumber()
+  is_correct?: number; // 0-错误, 1-正确
 }
 

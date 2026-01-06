@@ -93,13 +93,26 @@ async function addChapterIdField(isRemote = false) {
 
 		// 更新现有数据的 chapter_id
 		console.log('更新现有记录的 chapter_id...');
-		const [updateResult] = await connection.execute(`
-      UPDATE \`user_answer_log\` ual
+		
+		// 先检查有多少条记录需要更新
+		const [checkResult] = await connection.execute(`
+      SELECT COUNT(*) as count FROM \`user_answer_log\` ual
       INNER JOIN \`question\` q ON ual.question_id = q.id
-      SET ual.chapter_id = q.chapter_id
-      WHERE ual.chapter_id = 0 OR ual.chapter_id IS NULL
+      WHERE ual.chapter_id = 0 OR ual.chapter_id IS NULL OR ual.chapter_id != q.chapter_id
     `);
-		console.log(`✅ 更新了 ${updateResult.affectedRows} 条记录的 chapter_id`);
+		console.log(`需要更新的记录数: ${checkResult[0].count}`);
+		
+		if (checkResult[0].count > 0) {
+			const [updateResult] = await connection.execute(`
+        UPDATE \`user_answer_log\` ual
+        INNER JOIN \`question\` q ON ual.question_id = q.id
+        SET ual.chapter_id = q.chapter_id
+        WHERE ual.chapter_id = 0 OR ual.chapter_id IS NULL OR ual.chapter_id != q.chapter_id
+      `);
+			console.log(`✅ 更新了 ${updateResult.affectedRows} 条记录的 chapter_id`);
+		} else {
+			console.log('✅ 所有记录的 chapter_id 都是正确的，无需更新');
+		}
 
 		// 显示表结构
 		console.log('\n📋 当前表结构:');
