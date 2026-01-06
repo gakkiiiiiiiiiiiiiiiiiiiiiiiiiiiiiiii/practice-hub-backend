@@ -1,10 +1,19 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, BadRequestException } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { NestExpressApplication } from '@nestjs/platform-express';
+import { join } from 'path';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-	const app = await NestFactory.create(AppModule);
+	const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+	// 配置静态文件服务，用于访问上传的文件
+	const uploadsPath = join(process.cwd(), 'uploads');
+	app.useStaticAssets(uploadsPath, {
+		prefix: '/uploads',
+	});
+	console.log(`[静态文件] 配置上传目录: ${uploadsPath}`);
 
 	// 全局验证管道
 	app.useGlobalPipes(

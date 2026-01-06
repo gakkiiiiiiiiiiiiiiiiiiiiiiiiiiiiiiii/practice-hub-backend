@@ -26,6 +26,7 @@ import { AdminQuestionModule } from './modules/admin-question/admin-question.mod
 import { AdminActivationCodeModule } from './modules/admin-activation-code/admin-activation-code.module';
 import { AdminChapterModule } from './modules/admin-chapter/admin-chapter.module';
 import { UploadModule } from './modules/upload/upload.module';
+import { FeedbackModule } from './modules/feedback/feedback.module';
 
 @Module({
   imports: [
@@ -109,6 +110,7 @@ import { UploadModule } from './modules/upload/upload.module';
     AdminActivationCodeModule,
     AdminChapterModule,
     UploadModule,
+    FeedbackModule,
   ],
   controllers: [AppController],
   providers: [

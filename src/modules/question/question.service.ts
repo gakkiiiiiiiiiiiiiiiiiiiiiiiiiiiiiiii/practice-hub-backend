@@ -182,6 +182,138 @@ export class QuestionService {
 	}
 
 	/**
+	 * 获取课程下的所有题目（用于随机练习和模拟考试）
+	 * @param courseId 课程ID
+	 * @param userId 用户ID（可选）
+	 * @param count 需要返回的题目数量（可选，用于模拟考试）
+	 * @param random 是否随机排序（可选，默认false）
+	 */
+	async getCourseQuestions(courseId: number, userId?: number, count?: number, random: boolean = false) {
+		try {
+			this.logger.debug(
+				`开始获取课程题目 - 课程ID: ${courseId}, 用户ID: ${userId || '未登录'}, 数量: ${count || '全部'}, 随机: ${random}`
+			);
+
+			// 获取课程信息
+			const course = await this.queryWithRetry(() =>
+				this.courseRepository.findOne({
+					where: { id: courseId },
+				})
+			);
+
+			if (!course) {
+				throw new NotFoundException('课程不存在');
+			}
+
+			// 获取课程下的所有章节
+			const chapters = await this.queryWithRetry(() =>
+				this.chapterRepository.find({
+					where: { course_id: courseId },
+					select: ['id'],
+				})
+			);
+
+			if (!chapters || chapters.length === 0) {
+				return [];
+			}
+
+			const chapterIds = chapters.map((c) => c.id);
+
+			// 获取所有章节下的题目
+			let questions = await this.queryWithRetry(() =>
+				this.questionRepository.find({
+					where: { chapter_id: In(chapterIds) },
+					order: random ? undefined : { id: 'ASC' },
+				})
+			);
+
+			// 如果要求随机排序
+			if (random && questions.length > 0) {
+				// Fisher-Yates 洗牌算法
+				for (let i = questions.length - 1; i > 0; i--) {
+					const j = Math.floor(Math.random() * (i + 1));
+					[questions[i], questions[j]] = [questions[j], questions[i]];
+				}
+			}
+
+			// 如果指定了数量，只返回前N个
+			if (count && count > 0 && questions.length > count) {
+				questions = questions.slice(0, count);
+			}
+
+			// 检查用户权限
+			let hasPermission = false;
+			const answeredQuestionIds = new Set<number>();
+
+			// 判断是否免费
+			const isFree = Number(course.price) === 0 || course.is_vip_free === 1;
+
+			if (isFree) {
+				hasPermission = true;
+			} else if (userId) {
+				try {
+					// 检查用户是否有课程权限（至少有一个章节有权限即可）
+					const userAuth = await this.userCourseAuthRepository.findOne({
+						where: {
+							user_id: userId,
+							course_id: courseId,
+						},
+					});
+					hasPermission = !!userAuth && (!userAuth.expire_time || userAuth.expire_time > new Date());
+				} catch (error) {
+					hasPermission = false;
+				}
+			}
+
+			// 获取已作答的题目ID
+			if (userId && questions.length > 0) {
+				const questionIds = questions.map((q) => q.id);
+				const answerLogs = await this.queryWithRetry(() =>
+					this.answerLogRepository.find({
+						where: {
+							user_id: userId,
+							question_id: In(questionIds),
+						},
+						select: ['question_id'],
+					})
+				);
+				answerLogs.forEach((log) => {
+					answeredQuestionIds.add(log.question_id);
+				});
+			}
+
+			// 格式化返回数据
+			const result = questions.map((q) => {
+				const result: any = {
+					id: q.id,
+					type: q.type,
+					stem: q.stem,
+					options: q.options,
+					parent_id: q.parent_id,
+					difficulty: q.difficulty,
+				};
+
+				// 如果有权限或已作答，返回答案和解析
+				if (isFree || hasPermission || answeredQuestionIds.has(q.id)) {
+					result.answer = q.answer;
+					result.analysis = q.analysis;
+				}
+
+				return result;
+			});
+
+			this.logger.log(`成功获取课程题目 - 课程ID: ${courseId}, 题目数量: ${result.length}`);
+			return result;
+		} catch (error) {
+			this.logger.error(`获取课程题目失败 - 课程ID: ${courseId}`, {
+				error: error.message,
+				stack: error.stack,
+			});
+			throw error;
+		}
+	}
+
+	/**
 	 * 获取用户答题记录
 	 * @param userId 用户ID
 	 * @param chapterId 章节ID（可选）

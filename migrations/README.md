@@ -162,6 +162,39 @@ SELECT
   (SELECT COUNT(*) FROM user_course_auth) as auth_count;
 ```
 
+### 4. `update_feedback_for_admin.sql`
+更新 `feedback` 表以支持管理员提交反馈：
+- 删除 `user_id` 字段的外键约束
+- 修改 `user_id` 字段为可空（nullable）
+- 允许 `user_id = 0` 表示管理员提交的反馈
+
+**执行方法：**
+```bash
+# 使用 MySQL 命令行
+mysql -h localhost -u root -p practice_hub < migrations/update_feedback_for_admin.sql
+
+# 使用 Docker Compose（推荐，使用服务名 mysql）
+cd back-end
+docker compose exec -T mysql mysql -uroot -proot123456 practice_hub < migrations/update_feedback_for_admin.sql
+
+# 使用容器名（如果容器名是 back-end）
+docker exec -i back-end mysql -uroot -proot123456 practice_hub < migrations/update_feedback_for_admin.sql
+
+# 或者先复制文件到容器再执行
+docker compose cp migrations/update_feedback_for_admin.sql mysql:/tmp/
+docker compose exec mysql mysql -uroot -proot123456 practice_hub -e "source /tmp/update_feedback_for_admin.sql"
+```
+
+**验证：**
+```sql
+-- 检查 user_id 字段是否可空
+SELECT COLUMN_NAME, IS_NULLABLE, COLUMN_COMMENT 
+FROM information_schema.COLUMNS 
+WHERE TABLE_SCHEMA = DATABASE() 
+AND TABLE_NAME = 'feedback' 
+AND COLUMN_NAME = 'user_id';
+```
+
 ## 注意事项
 
 1. ⚠️ **执行前务必备份数据库**

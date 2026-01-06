@@ -1,11 +1,12 @@
-# 依赖
-node_modules
-npm-debug.log
-yarn-error.log
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # 构建产物
-dist
-build
+dist/
+build/
 *.tsbuildinfo
 
 # 环境变量文件
@@ -13,21 +14,15 @@ build
 .env.local
 .env.*.local
 
-# 测试
-coverage
-.nyc_output
-*.test.js
-*.spec.js
-
 # IDE
-.vscode
-.idea
+.vscode/
+.idea/
 *.swp
 *.swo
 *~
 
 # Git
-.git
+.git/
 .gitignore
 .gitattributes
 
@@ -35,29 +30,32 @@ coverage
 *.md
 !README.md
 
-# Docker
-Dockerfile
-.dockerignore
-docker-compose.yml
+# 测试
+coverage/
+.nyc_output/
+*.test.ts
+*.spec.ts
 
 # 日志
-logs
+logs/
 *.log
 
-# 临时文件
-tmp
-temp
-.tmp
-
-# 数据库相关（不需要打包到镜像）
+# 数据库导出文件
+exports/
 *.sql
+*.csv
 
-# 脚本（生产环境不需要）
-scripts
+# 脚本（不需要在镜像中）
+scripts/
 
-# 导出文件
-exports
+# 迁移文件（不需要在镜像中）
+migrations/
 
-# 微信云托管相关（如果有示例文件）
-wxcloudrun*
-index.js
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# 其他
+.DS_Store
+Thumbs.db

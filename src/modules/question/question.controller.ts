@@ -17,6 +17,41 @@ export class QuestionController {
 
 	constructor(private readonly questionService: QuestionService) {}
 
+	@Get('courses/:id/questions')
+	@UseGuards(OptionalJwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '获取课程下的题目列表（用于随机练习和模拟考试）' })
+	async getCourseQuestions(
+		@Param('id') id: number,
+		@Query('count') count?: number,
+		@Query('random') random?: string,
+		@CurrentUser() user?: any
+	) {
+		try {
+			const courseId = +id;
+			const userId = user?.userId;
+			const questionCount = count ? +count : undefined;
+			const isRandom = random === 'true' || random === '1';
+
+			this.logger.log(
+				`获取课程题目列表 - 课程ID: ${courseId}, 用户ID: ${userId || '未登录'}, 数量: ${questionCount || '全部'}, 随机: ${isRandom}`
+			);
+
+			const result = await this.questionService.getCourseQuestions(courseId, userId, questionCount, isRandom);
+
+			this.logger.log(`成功获取课程题目列表 - 课程ID: ${courseId}, 题目数量: ${result.length}`);
+
+			return CommonResponseDto.success(result);
+		} catch (error) {
+			this.logger.error(`获取课程题目列表失败 - 课程ID: ${id}`, {
+				error: error.message,
+				stack: error.stack,
+				userId: user?.userId,
+			});
+			throw error;
+		}
+	}
+
 	@Get('chapters/:id/questions')
 	@UseGuards(OptionalJwtAuthGuard)
 	@ApiBearerAuth()

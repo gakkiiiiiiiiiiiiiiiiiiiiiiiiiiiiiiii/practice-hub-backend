@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import * as COS from 'cos-nodejs-sdk-v5';
 import axios from 'axios';
 import * as https from 'https';
+import * as fs from 'fs';
+import * as path from 'path';
 
 interface TempAuth {
 	TmpSecretId: string;
@@ -26,10 +28,22 @@ export class UploadService {
 	private region: string;
 	private tempAuth: TempAuth | null = null;
 	private authExpireTime: number = 0;
+	private uploadDir: string;
+	private baseUrl: string;
 
 	constructor(private configService: ConfigService) {
 		this.bucket = this.configService.get<string>('COS_BUCKET', '7072-prod-6g7tpqs40c5a758b-1392943725');
 		this.region = this.configService.get<string>('COS_REGION', 'ap-shanghai');
+
+		// 本地存储配置
+		this.uploadDir = path.join(process.cwd(), 'uploads');
+
+		// 获取基础 URL，优先使用环境变量，否则根据端口自动判断
+		const port = parseInt(process.env.PORT || '8080', 10);
+		this.baseUrl = this.configService.get<string>('BASE_URL') || `http://localhost:${port}`;
+
+		// 确保上传目录存在
+		this.ensureUploadDir();
 
 		// 初始化 COS 客户端，使用 getAuthorization 方式
 		this.cos = new COS({
@@ -97,18 +111,84 @@ export class UploadService {
 	}
 
 	/**
+	 * 确保上传目录存在
+	 */
+	private ensureUploadDir(): void {
+		if (!fs.existsSync(this.uploadDir)) {
+			fs.mkdirSync(this.uploadDir, { recursive: true });
+			console.log(`[本地存储] 创建上传目录: ${this.uploadDir}`);
+		}
+	}
+
+	/**
+	 * 检查是否在微信云托管环境
+	 */
+	private isWeChatCloudBase(): boolean {
+		// 检查环境变量或请求头，判断是否在微信云托管环境
+		// 微信云托管会设置特定的环境变量或请求头
+		return !!(
+			process.env.WX_CLOUD_ENV ||
+			process.env.WX_CLOUDBASE_ENV ||
+			process.env.TCB_ENV ||
+			// 检查是否能访问微信云托管内部 API
+			process.env.WX_CLOUD_RUN_ENV === 'true'
+		);
+	}
+
+	/**
+	 * 保存文件到本地
+	 * @param file 文件对象
+	 * @param folder 存储文件夹
+	 * @returns 文件相对路径
+	 */
+	private async saveFileToLocal(file: Express.Multer.File, folder: string = 'images'): Promise<string> {
+		// 生成唯一文件名
+		const timestamp = Date.now();
+		const randomStr = Math.random().toString(36).substring(2, 15);
+		const ext = this.getFileExtension(file.originalname);
+		const fileName = `${timestamp}-${randomStr}${ext}`;
+
+		// 创建文件夹目录
+		const folderPath = path.join(this.uploadDir, folder);
+		if (!fs.existsSync(folderPath)) {
+			fs.mkdirSync(folderPath, { recursive: true });
+		}
+
+		// 保存文件
+		const filePath = path.join(folderPath, fileName);
+		fs.writeFileSync(filePath, file.buffer);
+
+		console.log(`[本地存储] 文件保存成功: ${filePath}`);
+
+		// 返回相对路径，用于构建 URL
+		return `${folder}/${fileName}`;
+	}
+
+	/**
 	 * 获取文件元数据（必须，否则小程序端无法访问）
 	 * @param cloudPath 云上文件路径
 	 * @param openid 用户openid，管理端传空字符串
 	 */
-	private async getFileMetaData(cloudPath: string, openid: string = ''): Promise<string> {
+	private async getFileMetaData(cloudPath: string, openid: string = ''): Promise<string | null> {
+		// 如果不在微信云托管环境，返回 null，跳过元数据设置
+		if (!this.isWeChatCloudBase()) {
+			console.warn('[COS元数据] 非微信云托管环境，跳过元数据获取');
+			return null;
+		}
+
 		try {
 			// 微信云托管内部 API 使用 http（参考 demo）
-			const response = await axios.post('http://api.weixin.qq.com/_/cos/metaid/encode', {
-				openid: openid, // 管理端上传时传空字符串
-				bucket: this.bucket,
-				paths: [cloudPath],
-			});
+			const response = await axios.post(
+				'http://api.weixin.qq.com/_/cos/metaid/encode',
+				{
+					openid: openid, // 管理端上传时传空字符串
+					bucket: this.bucket,
+					paths: [cloudPath],
+				},
+				{
+					timeout: 5000, // 5秒超时
+				}
+			);
 
 			const result: MetaDataResponse = response.data;
 
@@ -122,13 +202,18 @@ export class UploadService {
 
 			return result.respdata.x_cos_meta_field_strs[0];
 		} catch (error: any) {
+			// 如果是 404 错误，说明不在微信云托管环境，返回 null
+			if (error.response?.status === 404 || error.code === 'ECONNREFUSED') {
+				console.warn('[COS元数据] 微信云托管 API 不可用，跳过元数据获取');
+				return null;
+			}
 			console.error('[COS元数据] 获取失败:', error.message);
 			throw new Error(`获取文件元数据失败: ${error.message}`);
 		}
 	}
 
 	/**
-	 * 上传图片到 COS
+	 * 上传图片（根据环境选择存储方式）
 	 * @param file 文件对象
 	 * @param folder 存储文件夹（可选，默认为 images）
 	 * @param openid 用户openid（可选，管理端上传时可不传）
@@ -151,6 +236,44 @@ export class UploadService {
 			throw new BadRequestException('文件大小不能超过 5MB');
 		}
 
+		// 根据环境选择存储方式
+		if (this.isWeChatCloudBase()) {
+			return this.uploadToCOS(file, folder, openid);
+		} else {
+			return this.uploadToLocal(file, folder);
+		}
+	}
+
+	/**
+	 * 上传图片到本地
+	 * @param file 文件对象
+	 * @param folder 存储文件夹
+	 * @returns 图片 URL
+	 */
+	private async uploadToLocal(file: Express.Multer.File, folder: string = 'images'): Promise<string> {
+		try {
+			const relativePath = await this.saveFileToLocal(file, folder);
+			const imageUrl = `${this.baseUrl}/uploads/${relativePath}`;
+			console.log(`[本地存储] 上传成功: ${imageUrl}`);
+			return imageUrl;
+		} catch (error: any) {
+			console.error('[本地存储] 上传失败:', error);
+			throw new BadRequestException(`图片上传失败: ${error.message || '未知错误'}`);
+		}
+	}
+
+	/**
+	 * 上传图片到 COS
+	 * @param file 文件对象
+	 * @param folder 存储文件夹（可选，默认为 images）
+	 * @param openid 用户openid（可选，管理端上传时可不传）
+	 * @returns 图片 URL
+	 */
+	private async uploadToCOS(
+		file: Express.Multer.File,
+		folder: string = 'images',
+		openid: string = ''
+	): Promise<string> {
 		// 生成唯一文件名
 		const timestamp = Date.now();
 		const randomStr = Math.random().toString(36).substring(2, 15);
@@ -159,11 +282,11 @@ export class UploadService {
 		const cloudPath = `/${fileName}`;
 
 		try {
-			// 1. 获取文件元数据（必须，否则小程序端无法访问）
+			// 1. 获取文件元数据（微信云托管环境必须，否则小程序端无法访问）
 			const metaFileId = await this.getFileMetaData(cloudPath, openid);
 
-			// 2. 上传到 COS，必须添加 x-cos-meta-fileid 元数据（参考 demo）
-			const result = await this.cos.putObject({
+			// 2. 上传到 COS，如果获取到元数据则添加 x-cos-meta-fileid（参考 demo）
+			const uploadOptions: any = {
 				Bucket: this.bucket,
 				Region: this.region,
 				Key: fileName,
@@ -171,48 +294,33 @@ export class UploadService {
 				ContentType: file.mimetype,
 				ContentLength: file.size, // 添加 ContentLength（参考 demo）
 				StorageClass: 'STANDARD',
-				Headers: {
-					'x-cos-meta-fileid': metaFileId,
-				},
-			});
-			console.log({ result });
+			};
 
-			if (result.statusCode !== 200) {
+			// 只有在微信云托管环境且有元数据时才添加 x-cos-meta-fileid
+			if (metaFileId) {
+				uploadOptions.Headers = {
+					'x-cos-meta-fileid': metaFileId,
+				};
+			}
+
+			const result = await this.cos.putObject(uploadOptions);
+			console.log('[COS上传] 上传结果:', { statusCode: result.statusCode, Location: result.Location });
+
+			if (result.statusCode !== 200 && result.statusCode !== 204) {
 				throw new Error(`上传失败，状态码: ${result.statusCode}`);
 			}
 
 			// 3. 获取可访问的图片 URL
-			// 参考 demo，使用 COS SDK 的 getObjectUrl 方法获取 URL
-			// getObjectUrl 返回字符串或对象，需要正确处理
-			// const urlResult = this.cos.getObjectUrl({
-			// 	Bucket: this.bucket,
-			// 	Region: this.region,
-			// 	Key: fileName,
-			// 	Sign: false, // 如果存储桶是公有读，不需要签名
-			// });
+			// 优先使用返回的 Location，否则使用默认格式
+			let imageUrl = '';
+			if (result.Location) {
+				imageUrl = result.Location.startsWith('http') ? result.Location : `https://${result.Location}`;
+			} else {
+				// 微信云托管环境使用 tcb 域名
+				imageUrl = `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
+			}
 
-			// // getObjectUrl 可能返回字符串或 Promise，需要处理
-			// let imageUrl: string = '';
-			// if (typeof urlResult === 'string') {
-			// 	imageUrl = urlResult;
-			// } else if (urlResult && typeof (urlResult as any).then === 'function') {
-			// 	// It is Promise-like
-			// 	const result = await (urlResult as Promise<any>);
-			// 	if (typeof result === 'string') {
-			// 		imageUrl = result;
-			// 	} else if (result) {
-			// 		imageUrl = result.Location || result.Url || '';
-			// 	}
-			// } else if (urlResult && typeof urlResult === 'object') {
-			// 	imageUrl = (urlResult as any).Location || (urlResult as any).Url || '';
-			// }
-
-			// // 如果获取失败，使用默认格式
-			// if (!imageUrl) {
-			// 	imageUrl = `https://${this.bucket}.cos.${this.region}.myqcloud.com/${fileName}`;
-			// }
-			const imageUrl = `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
-			console.log(`[COS上传] 成功: ${imageUrl}, 元数据: ${metaFileId}`);
+			console.log(`[COS上传] 成功: ${imageUrl}, 元数据: ${metaFileId || '未设置'}`);
 			return imageUrl;
 		} catch (error: any) {
 			console.error('[COS上传] 失败:', error);
@@ -221,26 +329,37 @@ export class UploadService {
 	}
 
 	/**
-	 * 删除 COS 中的文件
+	 * 删除文件（根据 URL 判断是本地还是 COS）
 	 * @param fileUrl 文件 URL
 	 */
 	async deleteImage(fileUrl: string): Promise<void> {
 		try {
-			// 从 URL 中提取 Key
-			const key = this.extractKeyFromUrl(fileUrl);
-			if (!key) {
-				throw new BadRequestException('无效的文件 URL');
+			// 判断是本地文件还是 COS 文件
+			if (fileUrl.includes('/uploads/')) {
+				// 本地文件
+				const relativePath = fileUrl.split('/uploads/')[1];
+				const filePath = path.join(this.uploadDir, relativePath);
+				if (fs.existsSync(filePath)) {
+					fs.unlinkSync(filePath);
+					console.log(`[本地存储] 删除成功: ${filePath}`);
+				}
+			} else {
+				// COS 文件
+				const key = this.extractKeyFromUrl(fileUrl);
+				if (!key) {
+					throw new BadRequestException('无效的文件 URL');
+				}
+
+				await this.cos.deleteObject({
+					Bucket: this.bucket,
+					Region: this.region,
+					Key: key,
+				});
+
+				console.log(`[COS删除] 成功: ${key}`);
 			}
-
-			await this.cos.deleteObject({
-				Bucket: this.bucket,
-				Region: this.region,
-				Key: key,
-			});
-
-			console.log(`[COS删除] 成功: ${key}`);
 		} catch (error: any) {
-			console.error('[COS删除] 失败:', error);
+			console.error('[删除文件] 失败:', error);
 			// 删除失败不抛出异常，避免影响主流程
 		}
 	}
@@ -259,7 +378,8 @@ export class UploadService {
 	private extractKeyFromUrl(url: string): string | null {
 		try {
 			// URL 格式：https://{bucket}.cos.{region}.myqcloud.com/{key}
-			const match = url.match(/\.myqcloud\.com\/(.+)$/);
+			// 或：https://{bucket}.tcb.qcloud.la/{key}
+			const match = url.match(/(?:\.myqcloud\.com|\.tcb\.qcloud\.la)\/(.+)$/);
 			return match ? match[1] : null;
 		} catch {
 			return null;

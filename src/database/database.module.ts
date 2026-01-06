@@ -14,6 +14,7 @@ import { Order } from './entities/order.entity';
 import { SysOperationLog } from './entities/sys-operation-log.entity';
 import { HomeRecommendCategory } from './entities/home-recommend-category.entity';
 import { HomeRecommendItem } from './entities/home-recommend-item.entity';
+import { Feedback } from './entities/feedback.entity';
 
 @Module({
 	imports: [
@@ -32,6 +33,7 @@ import { HomeRecommendItem } from './entities/home-recommend-item.entity';
 			SysOperationLog,
 			HomeRecommendCategory,
 			HomeRecommendItem,
+			Feedback,
 		]),
 	],
 	exports: [TypeOrmModule],
