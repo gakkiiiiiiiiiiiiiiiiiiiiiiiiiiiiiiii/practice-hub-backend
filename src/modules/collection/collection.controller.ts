@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Get, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { CollectionService } from './collection.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -17,6 +17,16 @@ export class CollectionController {
   @ApiOperation({ summary: '收藏/取消收藏' })
   async toggleCollection(@CurrentUser() user: any, @Body() dto: ToggleCollectionDto) {
     const result = await this.collectionService.toggleCollection(user.userId, dto.question_id);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('list')
+  @ApiOperation({ summary: '获取收藏列表' })
+  async getCollectionList(@CurrentUser() user: any, @Query('question_ids') questionIds?: string) {
+    const questionIdArray = questionIds
+      ? questionIds.split(',').map((id) => parseInt(id.trim())).filter((id) => !isNaN(id))
+      : undefined;
+    const result = await this.collectionService.getCollectionList(user.userId, questionIdArray);
     return CommonResponseDto.success(result);
   }
 }
