@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { Course } from '../../database/entities/course.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { DistributorService } from '../distributor/distributor.service';
 
 @Injectable()
 export class OrderService {
@@ -12,6 +13,8 @@ export class OrderService {
     private orderRepository: Repository<Order>,
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
+    @Inject(forwardRef(() => DistributorService))
+    private distributorService: DistributorService,
   ) {}
 
   /**
@@ -59,6 +62,33 @@ export class OrderService {
     const timestamp = Date.now();
     const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
     return `ORDER${timestamp}${random}`;
+  }
+
+  /**
+   * 订单支付成功回调（需要对接微信支付回调时调用）
+   */
+  async handlePaymentSuccess(orderId: number) {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+    });
+
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+
+    // 更新订单状态为已支付
+    order.status = OrderStatus.PAID;
+    await this.orderRepository.save(order);
+
+    // 处理分销分成
+    try {
+      await this.distributorService.processOrderCommission(orderId);
+    } catch (error) {
+      // 分成失败不影响订单状态，只记录日志
+      console.error('订单分成处理失败:', error.message);
+    }
+
+    return { message: '订单支付成功' };
   }
 }
 

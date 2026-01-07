@@ -8,10 +8,12 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { DatabaseModule } from '../../database/database.module';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { SysUser } from '../../database/entities/sys-user.entity';
+import { DistributorModule } from '../distributor/distributor.module';
 
 @Module({
   imports: [
     DatabaseModule,
+    DistributorModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

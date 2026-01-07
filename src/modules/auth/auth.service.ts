@@ -8,6 +8,7 @@ import * as https from 'https';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { SysUser } from '../../database/entities/sys-user.entity';
 import { ConfigService } from '@nestjs/config';
+import { DistributorService } from '../distributor/distributor.service';
 
 @Injectable()
 export class AuthService {
@@ -17,13 +18,14 @@ export class AuthService {
 		@InjectRepository(SysUser)
 		private sysUserRepository: Repository<SysUser>,
 		private jwtService: JwtService,
-		private configService: ConfigService
+		private configService: ConfigService,
+		private distributorService: DistributorService,
 	) {}
 
 	/**
 	 * 小程序端 - 微信一键登录
 	 */
-	async appLogin(code: string) {
+	async appLogin(code: string, distributorCode?: string) {
 		if (!code) {
 			throw new BadRequestException('code 不能为空');
 		}
@@ -91,6 +93,7 @@ export class AuthService {
 
 			// 查找或创建用户
 			let user = await this.appUserRepository.findOne({ where: { openid } });
+			const isNewUser = !user;
 
 			if (!user) {
 				user = this.appUserRepository.create({
@@ -98,6 +101,16 @@ export class AuthService {
 					nickname: '新用户',
 				});
 				await this.appUserRepository.save(user);
+			}
+
+			// 如果是新用户且提供了分销商编号，绑定分销关系
+			if (isNewUser && distributorCode) {
+				try {
+					await this.distributorService.bindDistributionRelation(user.id, distributorCode);
+				} catch (error) {
+					// 绑定失败不影响登录，只记录日志
+					console.warn('绑定分销关系失败:', error.message);
+				}
 			}
 
 			// 生成 Token

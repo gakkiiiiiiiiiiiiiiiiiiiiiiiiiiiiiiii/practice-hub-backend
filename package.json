@@ -35,7 +35,9 @@
 		"fix:is-correct": "node scripts/fix-is-correct-nullable.js",
 		"fix:is-correct:remote": "node scripts/fix-is-correct-nullable.js --remote",
 		"fix:chapter-id": "node scripts/add-chapter-id-to-user-answer-log.js",
-		"fix:chapter-id:remote": "node scripts/add-chapter-id-to-user-answer-log.js --remote"
+		"fix:chapter-id:remote": "node scripts/add-chapter-id-to-user-answer-log.js --remote",
+		"migrate:distribution": "node scripts/create-distribution-tables.js",
+		"migrate:distribution:remote": "node scripts/create-distribution-tables.js --remote"
 	},
 	"dependencies": {
 		"@nestjs/common": "^10.3.0",

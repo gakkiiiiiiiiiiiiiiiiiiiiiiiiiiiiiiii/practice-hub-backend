@@ -15,7 +15,7 @@ export class AuthController {
   @Post('app/login')
   @ApiOperation({ summary: '小程序端 - 微信一键登录' })
   async appLogin(@Body() dto: AppLoginDto) {
-    const result = await this.authService.appLogin(dto.code);
+    const result = await this.authService.appLogin(dto.code, dto.distributor_code);
     return CommonResponseDto.success(result);
   }
 

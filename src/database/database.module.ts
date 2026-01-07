@@ -15,6 +15,10 @@ import { SysOperationLog } from './entities/sys-operation-log.entity';
 import { HomeRecommendCategory } from './entities/home-recommend-category.entity';
 import { HomeRecommendItem } from './entities/home-recommend-item.entity';
 import { Feedback } from './entities/feedback.entity';
+import { Distributor } from './entities/distributor.entity';
+import { DistributionRelation } from './entities/distribution-relation.entity';
+import { DistributionOrder } from './entities/distribution-order.entity';
+import { DistributionConfig } from './entities/distribution-config.entity';
 
 @Module({
 	imports: [
@@ -34,6 +38,10 @@ import { Feedback } from './entities/feedback.entity';
 			HomeRecommendCategory,
 			HomeRecommendItem,
 			Feedback,
+			Distributor,
+			DistributionRelation,
+			DistributionOrder,
+			DistributionConfig,
 		]),
 	],
 	exports: [TypeOrmModule],
