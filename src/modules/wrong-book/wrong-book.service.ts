@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { UserWrongBook } from '../../database/entities/user-wrong-book.entity';
 import { Question } from '../../database/entities/question.entity';
+import { Course } from '../../database/entities/course.entity';
 
 @Injectable()
 export class WrongBookService {
@@ -11,6 +12,8 @@ export class WrongBookService {
     private wrongBookRepository: Repository<UserWrongBook>,
     @InjectRepository(Question)
     private questionRepository: Repository<Question>,
+    @InjectRepository(Course)
+    private courseRepository: Repository<Course>,
   ) {}
 
   /**
@@ -38,12 +41,22 @@ export class WrongBookService {
         })
       : [];
 
+    // 获取课程信息
+    const courseIds = [...new Set(wrongBooks.map((wb) => wb.course_id))];
+    const courses = courseIds.length > 0
+      ? await this.courseRepository.find({
+          where: { id: In(courseIds) },
+        })
+      : [];
+
     return wrongBooks.map((wb) => {
       const question = questions.find((q) => q.id === wb.question_id);
+      const course = courses.find((c) => c.id === wb.course_id);
       return {
         id: wb.id,
         question_id: wb.question_id,
         course_id: wb.course_id,
+        course_name: course?.name || '',
         error_count: wb.error_count,
         last_error_time: wb.last_error_time,
         question: question
