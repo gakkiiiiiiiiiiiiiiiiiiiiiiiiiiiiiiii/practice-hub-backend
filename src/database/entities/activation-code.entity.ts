@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
+import { Course } from './course.entity';
 
 export enum ActivationCodeStatus {
 	PENDING = 0, // 待用
@@ -40,4 +41,8 @@ export class ActivationCode {
 
 	@UpdateDateColumn()
 	update_time: Date;
+
+	@ManyToOne(() => Course)
+	@JoinColumn({ name: 'course_id' })
+	course: Course;
 }
