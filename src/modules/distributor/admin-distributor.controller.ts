@@ -15,6 +15,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
+import { GetDistributorListDto } from './dto/get-distributor-list.dto';
 
 @ApiTags('后台-分销管理')
 @Controller('admin/distributor')
@@ -26,15 +27,11 @@ export class AdminDistributorController {
 	// 静态路由必须放在动态路由之前
 	@Get('list')
 	@ApiOperation({ summary: '获取分销用户列表' })
-	async getDistributorList(
-		@Query('status') status?: number,
-		@Query('page') page: number = 1,
-		@Query('pageSize') pageSize: number = 20,
-	) {
+	async getDistributorList(@Query() dto: GetDistributorListDto) {
 		const result = await this.distributorService.getDistributorList(
-			status,
-			page,
-			pageSize,
+			dto.status,
+			dto.page || 1,
+			dto.pageSize || 20,
 		);
 		return CommonResponseDto.success(result);
 	}

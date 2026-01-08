@@ -545,17 +545,24 @@ export class DistributorService {
 	 * 获取分销用户列表（后台管理）
 	 */
 	async getDistributorList(status?: number, page: number = 1, pageSize: number = 20) {
+		// 确保 page 和 pageSize 是有效的数字
+		const validPage = Number.isSafeInteger(page) && page > 0 ? page : 1;
+		const validPageSize = Number.isSafeInteger(pageSize) && pageSize > 0 ? pageSize : 20;
+
 		const where: any = {};
-		if (status !== undefined) {
-			where.status = status;
+		if (status !== undefined && status !== null) {
+			const validStatus = Number(status);
+			if (Number.isSafeInteger(validStatus) && validStatus >= 0 && validStatus <= 3) {
+				where.status = validStatus;
+			}
 		}
 
 		const [distributors, total] = await this.distributorRepository.findAndCount({
 			where,
 			relations: ['user'],
 			order: { create_time: 'DESC' },
-			skip: (page - 1) * pageSize,
-			take: pageSize,
+			skip: (validPage - 1) * validPageSize,
+			take: validPageSize,
 		});
 
 		return {
@@ -572,8 +579,8 @@ export class DistributorService {
 				create_time: d.create_time,
 			})),
 			total,
-			page,
-			pageSize,
+			page: validPage,
+			pageSize: validPageSize,
 		};
 	}
 
