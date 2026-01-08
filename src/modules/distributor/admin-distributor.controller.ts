@@ -23,6 +23,7 @@ import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dt
 export class AdminDistributorController {
 	constructor(private readonly distributorService: DistributorService) {}
 
+	// 静态路由必须放在动态路由之前
 	@Get('list')
 	@ApiOperation({ summary: '获取分销用户列表' })
 	async getDistributorList(
@@ -35,16 +36,6 @@ export class AdminDistributorController {
 			page,
 			pageSize,
 		);
-		return CommonResponseDto.success(result);
-	}
-
-	@Patch(':id/status')
-	@ApiOperation({ summary: '更新分销用户状态' })
-	async updateDistributorStatus(
-		@Param('id') id: number,
-		@Body() dto: UpdateDistributorStatusDto,
-	) {
-		const result = await this.distributorService.updateDistributorStatus(id, dto);
 		return CommonResponseDto.success(result);
 	}
 
@@ -66,6 +57,17 @@ export class AdminDistributorController {
 	@ApiOperation({ summary: '获取分销统计数据（全部）' })
 	async getDistributionStats() {
 		const result = await this.distributorService.getAdminStats();
+		return CommonResponseDto.success(result);
+	}
+
+	// 动态路由放在最后
+	@Patch(':id/status')
+	@ApiOperation({ summary: '更新分销用户状态' })
+	async updateDistributorStatus(
+		@Param('id') id: number,
+		@Body() dto: UpdateDistributorStatusDto,
+	) {
+		const result = await this.distributorService.updateDistributorStatus(id, dto);
 		return CommonResponseDto.success(result);
 	}
 }

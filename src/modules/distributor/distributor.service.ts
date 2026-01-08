@@ -15,6 +15,8 @@ import { DistributionOrder } from '../../database/entities/distribution-order.en
 import { DistributionConfig } from '../../database/entities/distribution-config.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
+import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
+import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
 
 @Injectable()
 export class DistributorService {
@@ -536,6 +538,120 @@ export class DistributorService {
 				status: o.status,
 				create_time: o.create_time,
 			})),
+		};
+	}
+
+	/**
+	 * 获取分销用户列表（后台管理）
+	 */
+	async getDistributorList(status?: number, page: number = 1, pageSize: number = 20) {
+		const where: any = {};
+		if (status !== undefined) {
+			where.status = status;
+		}
+
+		const [distributors, total] = await this.distributorRepository.findAndCount({
+			where,
+			relations: ['user'],
+			order: { create_time: 'DESC' },
+			skip: (page - 1) * pageSize,
+			take: pageSize,
+		});
+
+		return {
+			list: distributors.map((d) => ({
+				id: d.id,
+				user_id: d.user_id,
+				user_nickname: d.user?.nickname,
+				distributor_code: d.distributor_code,
+				status: d.status,
+				total_earnings: d.total_earnings,
+				withdrawable_amount: d.withdrawable_amount,
+				subordinate_count: d.subordinate_count,
+				total_orders: d.total_orders,
+				create_time: d.create_time,
+			})),
+			total,
+			page,
+			pageSize,
+		};
+	}
+
+	/**
+	 * 更新分销用户状态（后台管理）
+	 */
+	async updateDistributorStatus(id: number, dto: UpdateDistributorStatusDto) {
+		const distributor = await this.distributorRepository.findOne({
+			where: { id },
+		});
+
+		if (!distributor) {
+			throw new NotFoundException('分销用户不存在');
+		}
+
+		distributor.status = dto.status;
+		if (dto.status === 2 && dto.reject_reason) {
+			distributor.reject_reason = dto.reject_reason;
+		}
+
+		await this.distributorRepository.save(distributor);
+
+		return { message: '状态更新成功' };
+	}
+
+	/**
+	 * 更新分销配置（后台管理）
+	 */
+	async updateDistributionConfig(dto: UpdateDistributionConfigDto) {
+		let config = await this.distributionConfigRepository.findOne({
+			where: { id: 1 },
+		});
+
+		if (!config) {
+			config = this.distributionConfigRepository.create({ id: 1 });
+		}
+
+		if (dto.max_level !== undefined) {
+			config.max_level = dto.max_level;
+		}
+		if (dto.commission_rates !== undefined) {
+			config.commission_rates = dto.commission_rates;
+		}
+		if (dto.min_withdraw_amount !== undefined) {
+			config.min_withdraw_amount = dto.min_withdraw_amount;
+		}
+		if (dto.is_enabled !== undefined) {
+			config.is_enabled = dto.is_enabled;
+		}
+		if (dto.description !== undefined) {
+			config.description = dto.description;
+		}
+
+		await this.distributionConfigRepository.save(config);
+
+		return { message: '配置更新成功', config };
+	}
+
+	/**
+	 * 获取分销统计数据（后台管理）
+	 */
+	async getAdminStats() {
+		const totalDistributors = await this.distributorRepository.count();
+		const approvedDistributors = await this.distributorRepository.count({
+			where: { status: 1 },
+		});
+		const totalRelations = await this.distributionRelationRepository.count();
+		const totalCommissions = await this.distributionOrderRepository
+			.createQueryBuilder('do')
+			.select('SUM(do.commission_amount)', 'total')
+			.where('do.status = :status', { status: 1 })
+			.getRawOne();
+
+		return {
+			total_distributors: totalDistributors,
+			approved_distributors: approvedDistributors,
+			total_relations: totalRelations,
+			total_commissions: Number(totalCommissions?.total || 0),
 		};
 	}
 }
