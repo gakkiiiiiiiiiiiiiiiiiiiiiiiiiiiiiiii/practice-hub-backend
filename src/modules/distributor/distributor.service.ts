@@ -414,7 +414,7 @@ export class DistributorService {
 			`https://api.weixin.qq.com/wxa/getwxacodeunlimit?access_token=${accessToken}`,
 			{
 				scene: distributorCode, // 场景值，传递分销商编号
-				page: 'pages/login/index', // 扫码后跳转的页面
+				page: 'pages/index/index', // 扫码后跳转的页面（首页）
 				width: 280, // 二维码宽度
 				auto_color: false,
 				line_color: { r: 0, g: 0, b: 0 },
@@ -424,6 +424,23 @@ export class DistributorService {
 				responseType: 'arraybuffer', // 返回二进制数据
 			},
 		);
+
+		// 检查响应是否是错误信息（微信 API 错误时返回 JSON）
+		const contentType = response.headers['content-type'] || '';
+		if (contentType.includes('application/json') || contentType.includes('text/')) {
+			// 尝试解析为 JSON 错误信息
+			try {
+				const errorData = JSON.parse(Buffer.from(response.data).toString('utf-8'));
+				if (errorData.errcode) {
+					this.logger.error('微信生成二维码失败:', errorData);
+					throw new BadRequestException(
+						`生成二维码失败: ${errorData.errmsg || '未知错误'} (错误码: ${errorData.errcode})`,
+					);
+				}
+			} catch (e) {
+				// 如果不是 JSON，继续处理
+			}
+		}
 
 		// 将二维码图片上传到 COS 或保存到本地
 		// 这里需要根据实际情况处理，暂时返回一个占位符

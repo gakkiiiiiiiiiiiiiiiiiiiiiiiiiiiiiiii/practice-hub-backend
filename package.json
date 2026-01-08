@@ -37,7 +37,9 @@
 		"fix:chapter-id": "node scripts/add-chapter-id-to-user-answer-log.js",
 		"fix:chapter-id:remote": "node scripts/add-chapter-id-to-user-answer-log.js --remote",
 		"migrate:distribution": "node scripts/create-distribution-tables.js",
-		"migrate:distribution:remote": "node scripts/create-distribution-tables.js --remote"
+		"migrate:distribution:remote": "node scripts/create-distribution-tables.js --remote",
+		"migrate:exam": "node scripts/create-exam-tables.js",
+		"migrate:exam:remote": "node scripts/create-exam-tables.js --remote"
 	},
 	"dependencies": {
 		"@nestjs/common": "^10.3.0",

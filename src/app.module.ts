@@ -28,6 +28,7 @@ import { AdminChapterModule } from './modules/admin-chapter/admin-chapter.module
 import { UploadModule } from './modules/upload/upload.module';
 import { FeedbackModule } from './modules/feedback/feedback.module';
 import { DistributorModule } from './modules/distributor/distributor.module';
+import { ExamModule } from './modules/exam/exam.module';
 
 @Module({
   imports: [
@@ -113,6 +114,7 @@ import { DistributorModule } from './modules/distributor/distributor.module';
     UploadModule,
     FeedbackModule,
     DistributorModule,
+    ExamModule,
   ],
   controllers: [AppController],
   providers: [

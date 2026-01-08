@@ -19,6 +19,8 @@ import { Distributor } from './entities/distributor.entity';
 import { DistributionRelation } from './entities/distribution-relation.entity';
 import { DistributionOrder } from './entities/distribution-order.entity';
 import { DistributionConfig } from './entities/distribution-config.entity';
+import { ExamConfig } from './entities/exam-config.entity';
+import { ExamRecord } from './entities/exam-record.entity';
 
 @Module({
 	imports: [
@@ -42,6 +44,8 @@ import { DistributionConfig } from './entities/distribution-config.entity';
 			DistributionRelation,
 			DistributionOrder,
 			DistributionConfig,
+			ExamConfig,
+			ExamRecord,
 		]),
 	],
 	exports: [TypeOrmModule],
