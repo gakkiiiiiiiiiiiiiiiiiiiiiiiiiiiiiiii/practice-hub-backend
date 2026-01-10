@@ -39,7 +39,19 @@
 		"migrate:distribution": "node scripts/create-distribution-tables.js",
 		"migrate:distribution:remote": "node scripts/create-distribution-tables.js --remote",
 		"migrate:exam": "node scripts/create-exam-tables.js",
-		"migrate:exam:remote": "node scripts/create-exam-tables.js --remote"
+		"migrate:exam:remote": "node scripts/create-exam-tables.js --remote",
+		"test-data": "node scripts/insert-test-data.js",
+		"test-data:remote": "node scripts/insert-test-data.js --remote",
+		"verify-data": "node scripts/verify-test-data.js",
+		"verify-data:remote": "node scripts/verify-test-data.js --remote",
+		"delete-test-data": "node scripts/delete-test-data.js",
+		"delete-test-data:remote": "node scripts/delete-test-data.js --remote",
+		"delete-questions": "node scripts/delete-test-questions.js",
+		"delete-questions:remote": "node scripts/delete-test-questions.js --remote",
+		"insert-english": "node scripts/insert-english-questions.js",
+		"insert-english:remote": "node scripts/insert-english-questions.js --remote",
+		"fix:foreign-key": "node scripts/fix-chapter-foreign-key.js",
+		"fix:foreign-key:remote": "node scripts/fix-chapter-foreign-key.js --remote"
 	},
 	"dependencies": {
 		"@nestjs/common": "^10.3.0",

@@ -26,6 +26,7 @@ import { HttpExceptionFilter } from '../../common/filters/http-exception.filter'
 import { CreateQuestionDto } from './dto/create-question.dto';
 import { UpdateQuestionDto } from './dto/update-question.dto';
 import { ImportQuestionDto } from './dto/import-question.dto';
+import { BatchDeleteQuestionsDto } from './dto/batch-delete-questions.dto';
 import { QuestionType } from '../../database/entities/question.entity';
 
 @ApiTags('管理后台-题目管理')
@@ -98,6 +99,13 @@ export class AdminQuestionController {
   @ApiOperation({ summary: '删除题目' })
   async deleteQuestion(@Param('id') id: number) {
     const result = await this.adminQuestionService.deleteQuestion(+id);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('batch-delete')
+  @ApiOperation({ summary: '批量删除题目' })
+  async batchDeleteQuestions(@Body() dto: BatchDeleteQuestionsDto) {
+    const result = await this.adminQuestionService.batchDeleteQuestions(dto.ids);
     return CommonResponseDto.success(result);
   }
 }

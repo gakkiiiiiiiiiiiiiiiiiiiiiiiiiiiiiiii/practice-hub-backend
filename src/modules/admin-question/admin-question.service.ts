@@ -279,6 +279,32 @@ export class AdminQuestionService {
   }
 
   /**
+   * 批量删除题目
+   */
+  async batchDeleteQuestions(ids: number[]) {
+    if (!ids || ids.length === 0) {
+      throw new BadRequestException('请选择要删除的题目');
+    }
+
+    // 查找所有要删除的题目
+    const questions = await this.questionRepository.find({
+      where: { id: In(ids) },
+    });
+
+    if (questions.length === 0) {
+      throw new NotFoundException('未找到要删除的题目');
+    }
+
+    // 批量删除
+    await this.questionRepository.remove(questions);
+    
+    return {
+      success: true,
+      deletedCount: questions.length,
+    };
+  }
+
+  /**
    * 批量导入题目
    */
   async importQuestions(dto: ImportQuestionDto) {
