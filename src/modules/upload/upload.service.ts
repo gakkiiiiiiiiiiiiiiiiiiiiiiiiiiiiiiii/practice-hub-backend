@@ -130,6 +130,7 @@ export class UploadService {
 			process.env.WX_CLOUD_ENV ||
 			process.env.WX_CLOUDBASE_ENV ||
 			process.env.TCB_ENV ||
+			process.env.COS_BUCKET ||
 			// 检查是否能访问微信云托管内部 API
 			process.env.WX_CLOUD_RUN_ENV === 'true'
 		);
