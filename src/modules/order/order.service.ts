@@ -90,5 +90,37 @@ export class OrderService {
 
     return { message: '订单支付成功' };
   }
+
+  /**
+   * 获取订单统计数量
+   */
+  async getOrderCounts(userId: number) {
+    const [pendingCount, paidCount, refundCount] = await Promise.all([
+      this.orderRepository.count({
+        where: {
+          user_id: userId,
+          status: OrderStatus.PENDING,
+        },
+      }),
+      this.orderRepository.count({
+        where: {
+          user_id: userId,
+          status: OrderStatus.PAID,
+        },
+      }),
+      this.orderRepository.count({
+        where: {
+          user_id: userId,
+          status: OrderStatus.REFUNDED,
+        },
+      }),
+    ]);
+
+    return {
+      pending: pendingCount,
+      paid: paidCount,
+      refund: refundCount,
+    };
+  }
 }
 
