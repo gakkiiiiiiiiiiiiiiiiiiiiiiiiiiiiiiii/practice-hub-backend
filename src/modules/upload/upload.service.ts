@@ -314,12 +314,13 @@ export class UploadService {
 			// 3. 获取可访问的图片 URL
 			// 优先使用返回的 Location，否则使用默认格式
 			let imageUrl = '';
-			if (result.Location) {
-				imageUrl = result.Location.startsWith('http') ? result.Location : `https://${result.Location}`;
-			} else {
-				// 微信云托管环境使用 tcb 域名
-				imageUrl = `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
-			}
+			// if (result.Location) {
+			// 	imageUrl = result.Location.startsWith('http') ? result.Location : `https://${result.Location}`;
+			// } else {
+			// 	// 微信云托管环境使用 tcb 域名
+			// 	imageUrl = `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
+			// }
+			imageUrl = `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
 
 			console.log(`[COS上传] 成功: ${imageUrl}, 元数据: ${metaFileId || '未设置'}`);
 			return imageUrl;
