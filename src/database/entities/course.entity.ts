@@ -39,6 +39,9 @@ export class Course {
 	@Column({ type: 'int', default: 0 })
 	sort: number; // 排序
 
+	@Column({ type: 'text', nullable: true })
+	introduction: string; // 课程介绍（富文本）
+
 	@CreateDateColumn()
 	create_time: Date;
 
