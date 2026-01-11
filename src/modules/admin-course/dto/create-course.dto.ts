@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsString, IsNumber, IsOptional } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateCourseDto {
 	@ApiProperty({ description: '课程名称', example: '2024年考研数学一' })
@@ -39,16 +40,24 @@ export class CreateCourseDto {
 
 	@ApiProperty({ description: '价格', example: 99.99 })
 	@IsOptional()
+	@Type(() => Number)
 	@IsNumber()
 	price?: number;
 
 	@ApiProperty({ description: '是否VIP免费', example: 0, enum: [0, 1] })
 	@IsOptional()
+	@Type(() => Number)
 	@IsNumber()
 	is_vip_free?: number;
 
 	@ApiProperty({ description: '排序', example: 0 })
 	@IsOptional()
+	@Type(() => Number)
 	@IsNumber()
 	sort?: number;
+
+	@ApiProperty({ description: '课程介绍（富文本）', required: false })
+	@IsOptional()
+	@IsString()
+	introduction?: string;
 }
