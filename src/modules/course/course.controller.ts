@@ -1,7 +1,7 @@
 import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { CourseService } from './course.service';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 
@@ -18,12 +18,15 @@ export class CourseController {
   }
 
   @Get(':id/detail')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: '课程详情' })
   async getCourseDetail(
     @Param('id') id: number,
     @CurrentUser() user?: any,
   ) {
     // 注意：这里不强制要求登录，因为需要支持未登录用户查看课程信息
+    // 但如果用户已登录，会检查权限
     const userId = user?.userId;
     const result = await this.courseService.getCourseDetail(+id, userId);
     return CommonResponseDto.success(result);
