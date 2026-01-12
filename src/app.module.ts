@@ -29,6 +29,7 @@ import { UploadModule } from './modules/upload/upload.module';
 import { FeedbackModule } from './modules/feedback/feedback.module';
 import { DistributorModule } from './modules/distributor/distributor.module';
 import { ExamModule } from './modules/exam/exam.module';
+import { SystemAccountModule } from './modules/system-account/system-account.module';
 
 @Module({
   imports: [
@@ -116,9 +117,9 @@ import { ExamModule } from './modules/exam/exam.module';
     WrongBookModule,
     CollectionModule,
     HomeModule,
-    AdminModule,
+    AdminModule, // 必须在 SystemModule 之前，避免路由冲突
     DashboardModule,
-    SystemModule,
+    SystemModule, // SystemController 使用 @Controller('admin')，可能拦截其他 admin 路由
     RecommendModule,
     AdminCourseModule,
     AdminQuestionModule,
@@ -128,6 +129,7 @@ import { ExamModule } from './modules/exam/exam.module';
     FeedbackModule,
     DistributorModule,
     ExamModule,
+    SystemAccountModule,
   ],
   controllers: [AppController],
   providers: [
