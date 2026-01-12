@@ -161,19 +161,13 @@ export class AdminService {
 				collectionCount,
 				courseAuthCount,
 			},
-			wrongQuestions: wrongQuestions.map((wb) => ({
-				id: wb.id,
-				questionId: wb.question_id,
-				courseId: wb.course_id,
-				errorCount: wb.error_count,
-				lastErrorTime: wb.last_error_time,
-				content: (wb as any).question?.stem || '',
-			})),
+			wrongQuestions,
 		};
 	}
 
 	/**
 	 * 封禁/解封小程序用户
+	 * 注意：AppUser实体目前没有status字段，此功能需要先添加status字段到数据库
 	 */
 	async updateUserStatus(userId: number, dto: UpdateUserStatusDto) {
 		const user = await this.appUserRepository.findOne({ where: { id: userId } });
@@ -182,17 +176,15 @@ export class AdminService {
 			throw new NotFoundException('用户不存在');
 		}
 
-		// 如果AppUser实体有status字段，则更新
-		// 否则可以通过其他方式实现（如添加status字段到数据库）
-		if ((user as any).status !== undefined) {
-			await this.appUserRepository.update(userId, { status: dto.status as any });
-		} else {
-			// 如果没有status字段，可以通过其他方式标记封禁
-			// 例如：在nickname前加标记，或者使用其他字段
-			// 这里暂时返回成功，实际项目中需要添加status字段
-		}
+		// 注意：AppUser实体目前没有status字段
+		// 如果需要实现封禁功能，需要：
+		// 1. 在AppUser实体中添加status字段
+		// 2. 在数据库中执行ALTER TABLE app_user ADD COLUMN status TINYINT DEFAULT 1;
+		// 3. 然后取消下面的注释
+		// await this.appUserRepository.update(userId, { status: dto.status as any });
 
-		return { success: true };
+		// 暂时返回成功，实际项目中需要先添加status字段
+		return { success: true, message: '功能暂未实现，需要先添加status字段到数据库' };
 	}
 }
 
