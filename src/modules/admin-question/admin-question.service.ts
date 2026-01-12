@@ -386,21 +386,18 @@ export class AdminQuestionService {
 
 		// 获取所有工作表
 		const worksheets = workbook.worksheets;
-		if (process.env.NODE_ENV === 'development') {
-			this.logger.debug(`找到 ${worksheets.length} 个工作表`);
-		}
+		this.logger.log(`[导入] 找到 ${worksheets.length} 个工作表`);
 
 		// 遍历所有工作表
 		for (const worksheet of worksheets) {
 			const sheetName = worksheet.name;
 			const questionType = sheetNameToType[sheetName];
 
-			if (process.env.NODE_ENV === 'development') {
-				this.logger.debug(`处理工作表: ${sheetName}, 类型: ${questionType || '未识别'}`);
-			}
+			this.logger.log(`[导入] 处理工作表: ${sheetName}, 类型: ${questionType || '未识别'}`);
 
 			if (!questionType) {
 				// 跳过未识别的工作表
+				this.logger.warn(`[导入] 跳过未识别的工作表: ${sheetName}`);
 				continue;
 			}
 
@@ -408,9 +405,7 @@ export class AdminQuestionService {
 			let noteRowIndex = -1;
 			let maxRow = worksheet.rowCount;
 
-			if (process.env.NODE_ENV === 'development') {
-				this.logger.debug(`工作表 ${sheetName} 共有 ${maxRow} 行`);
-			}
+			this.logger.log(`[导入] 工作表 ${sheetName} 共有 ${maxRow} 行`);
 
 			// 先找到说明行（从第2行开始查找，因为第1行是表头）
 			for (let rowNum = 2; rowNum <= maxRow && rowNum <= 10; rowNum++) {
@@ -422,9 +417,7 @@ export class AdminQuestionService {
 					firstCellValue.includes('1. 题干')
 				) {
 					noteRowIndex = rowNum;
-					if (process.env.NODE_ENV === 'development') {
-						this.logger.debug(`找到说明行: 第 ${noteRowIndex} 行`);
-					}
+					this.logger.log(`[导入] 找到说明行: 第 ${noteRowIndex} 行, 内容: ${firstCellValue.substring(0, 100)}`);
 					break;
 				}
 			}
@@ -449,8 +442,8 @@ export class AdminQuestionService {
 
 				// 跳过说明行及其之后的行
 				if (noteRowIndex > 0 && rowNumber >= noteRowIndex) {
-					if (process.env.NODE_ENV === 'development' && rowNumber === noteRowIndex) {
-						this.logger.debug(`跳过说明行: 第 ${rowNumber} 行`);
+					if (rowNumber === noteRowIndex) {
+						this.logger.log(`[导入] 跳过说明行: 第 ${rowNumber} 行`);
 					}
 					continue;
 				}
@@ -472,21 +465,22 @@ export class AdminQuestionService {
 				}
 
 				// 检查是否是示例数据行（第2行且内容匹配示例数据）
+				// 只检查第2行，因为模板中示例数据固定在第2行
 				if (rowNumber === 2) {
 					const firstCellValue = row.getCell(1).value?.toString() || '';
-					const isExampleRow = exampleStems.some((exampleStem) => {
-						// 检查是否完全匹配或包含示例数据的关键部分
-						return (
-							firstCellValue.includes(exampleStem.split('？')[0]) ||
-							firstCellValue.includes(exampleStem.split('。')[0]) ||
-							exampleStem.includes(firstCellValue)
-						);
-					});
+					// 检查是否包含示例数据的关键词
+					const exampleKeywords = [
+						'下列哪个选项是正确的',
+						'以下哪些选项是正确的',
+						'这个说法是否正确',
+						'请填写空白处：中国的首都是',
+						'请简述某个概念',
+						'阅读以下材料，回答问题',
+					];
+					const isExampleRow = exampleKeywords.some((keyword) => firstCellValue.includes(keyword));
 
 					if (isExampleRow) {
-						if (process.env.NODE_ENV === 'development') {
-							this.logger.debug(`跳过示例数据行: 第 ${rowNumber} 行, 内容: ${firstCellValue.substring(0, 50)}`);
-						}
+						this.logger.log(`[导入] 跳过示例数据行: 第 ${rowNumber} 行, 内容: ${firstCellValue.substring(0, 50)}`);
 						skippedCount++;
 						continue;
 					}
@@ -498,25 +492,18 @@ export class AdminQuestionService {
 				if (parsedQuestion && parsedQuestion.stem && parsedQuestion.stem.trim() !== '') {
 					questions.push(parsedQuestion);
 					parsedCount++;
-					if (process.env.NODE_ENV === 'development') {
-						this.logger.debug(`解析成功: 第 ${rowNumber} 行, 题干: ${parsedQuestion.stem.substring(0, 50)}`);
-					}
+					this.logger.log(`[导入] 解析成功: 第 ${rowNumber} 行, 题干: ${parsedQuestion.stem.substring(0, 50)}`);
 				} else {
 					skippedCount++;
-					if (process.env.NODE_ENV === 'development') {
-						this.logger.debug(`跳过无效行: 第 ${rowNumber} 行, 题干为空或解析失败`);
-					}
+					const firstCell = row.getCell(1).value?.toString() || '';
+					this.logger.warn(`[导入] 跳过无效行: 第 ${rowNumber} 行, 题干: ${firstCell.substring(0, 50)}`);
 				}
 			}
 
-			if (process.env.NODE_ENV === 'development') {
-				this.logger.debug(`工作表 ${sheetName} 解析完成: 成功 ${parsedCount} 条, 跳过 ${skippedCount} 行`);
-			}
+			this.logger.log(`[导入] 工作表 ${sheetName} 解析完成: 成功 ${parsedCount} 条, 跳过 ${skippedCount} 行`);
 		}
 
-		if (process.env.NODE_ENV === 'development') {
-			this.logger.debug(`总共解析到 ${questions.length} 条题目`);
-		}
+		this.logger.log(`[导入] 总共解析到 ${questions.length} 条题目`);
 
 		// 批量插入（异步处理，避免阻塞）
 		if (questions.length > 0) {
