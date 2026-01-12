@@ -4,9 +4,9 @@ import { AdminController } from './admin.controller';
 import { DatabaseModule } from '../../database/database.module';
 
 @Module({
-  imports: [DatabaseModule],
-  controllers: [AdminController],
-  providers: [AdminService],
+	imports: [DatabaseModule],
+	controllers: [AdminController],
+	providers: [AdminService],
 })
 export class AdminModule {}
 
