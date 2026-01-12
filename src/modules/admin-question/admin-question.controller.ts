@@ -12,7 +12,9 @@ import {
   UseFilters,
   UploadedFile,
   BadRequestException,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AdminQuestionService } from './admin-question.service';
@@ -66,6 +68,15 @@ export class AdminQuestionController {
       type,
     );
     return CommonResponseDto.success(result);
+  }
+
+  @Get('template')
+  @ApiOperation({ summary: '下载题目导入模板' })
+  async downloadTemplate(@Res() res: Response) {
+    const buffer = await this.adminQuestionService.generateTemplate();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=题目导入模板.xlsx');
+    res.send(buffer);
   }
 
   @Post('import')
