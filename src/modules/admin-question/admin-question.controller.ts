@@ -74,8 +74,14 @@ export class AdminQuestionController {
   @ApiOperation({ summary: '下载题目导入模板' })
   async downloadTemplate(@Res() res: Response) {
     const buffer = await this.adminQuestionService.generateTemplate();
+    const filename = '题目导入模板.xlsx';
+    // 对中文文件名进行编码，兼容不同浏览器
+    const encodedFilename = encodeURIComponent(filename);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename=题目导入模板.xlsx');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+    );
     res.send(buffer);
   }
 
