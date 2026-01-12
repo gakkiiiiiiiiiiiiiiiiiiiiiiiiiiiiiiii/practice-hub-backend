@@ -402,22 +402,28 @@ export class AdminQuestionService {
 			}
 
 			// 找到说明行的位置（通常包含"填写说明"）
+			// 说明行之后可能还有数据行，所以需要更智能地识别
 			let noteRowIndex = -1;
 			let maxRow = worksheet.rowCount;
 
 			this.logger.log(`[导入] 工作表 ${sheetName} 共有 ${maxRow} 行`);
 
 			// 先找到说明行（从第2行开始查找，因为第1行是表头）
+			// 说明行通常在第3行（示例数据在第2行），但之后可能还有数据行
 			for (let rowNum = 2; rowNum <= maxRow && rowNum <= 10; rowNum++) {
 				const row = worksheet.getRow(rowNum);
 				const firstCellValue = row.getCell(1).value?.toString() || '';
+				// 说明行的特征：包含"填写说明"或"1. 题干"等，且通常跨多列合并
 				if (
-					firstCellValue.includes('填写说明') ||
-					firstCellValue.includes('说明：') ||
-					firstCellValue.includes('1. 题干')
+					(firstCellValue.includes('填写说明') ||
+						firstCellValue.includes('说明：') ||
+						firstCellValue.includes('1. 题干')) &&
+					rowNum <= 5 // 说明行通常在前5行内
 				) {
 					noteRowIndex = rowNum;
 					this.logger.log(`[导入] 找到说明行: 第 ${noteRowIndex} 行, 内容: ${firstCellValue.substring(0, 100)}`);
+					// 不立即break，继续查找是否有更后面的说明行
+					// 但实际上说明行通常只有一个，找到后可以break
 					break;
 				}
 			}
@@ -440,50 +446,71 @@ export class AdminQuestionService {
 				// 跳过表头（第1行）
 				if (rowNumber === 1) continue;
 
-				// 跳过说明行及其之后的行
-				if (noteRowIndex > 0 && rowNumber >= noteRowIndex) {
-					if (rowNumber === noteRowIndex) {
-						this.logger.log(`[导入] 跳过说明行: 第 ${rowNumber} 行`);
-					}
+				// 跳过说明行本身
+				if (noteRowIndex > 0 && rowNumber === noteRowIndex) {
+					this.logger.log(`[导入] 跳过说明行: 第 ${rowNumber} 行`);
 					continue;
+				}
+
+				// 说明行之后的行需要检查：如果第一列包含"填写说明"相关关键词，跳过
+				// 但如果是正常的数据行（第一列是题干内容），应该处理
+				if (noteRowIndex > 0 && rowNumber > noteRowIndex) {
+					const row = worksheet.getRow(rowNumber);
+					const firstCellValue = row.getCell(1).value?.toString() || '';
+					// 如果第一列仍然包含说明相关关键词，说明是说明行的延续，跳过
+					if (
+						firstCellValue.includes('填写说明') ||
+						firstCellValue.includes('说明：') ||
+						firstCellValue.includes('1. 题干') ||
+						firstCellValue.includes('2. ')
+					) {
+						this.logger.log(`[导入] 跳过说明行延续: 第 ${rowNumber} 行`);
+						continue;
+					}
+					// 否则，说明行之后的行可能是数据行，继续处理
 				}
 
 				const row = worksheet.getRow(rowNumber);
 
-				// 检查是否是空行（所有单元格都为空）
-				let isEmptyRow = true;
-				for (let col = 1; col <= 10; col++) {
-					const cellValue = row.getCell(col).value?.toString()?.trim();
-					if (cellValue) {
-						isEmptyRow = false;
-						break;
-					}
-				}
-				if (isEmptyRow) {
-					skippedCount++;
-					continue;
-				}
-
-				// 检查是否是示例数据行（第2行且内容匹配示例数据）
+				// 检查是否是示例数据行（第2行且内容完全匹配示例数据）
 				// 只检查第2行，因为模板中示例数据固定在第2行
 				if (rowNumber === 2) {
 					const firstCellValue = row.getCell(1).value?.toString() || '';
-					// 检查是否包含示例数据的关键词
-					const exampleKeywords = [
-						'下列哪个选项是正确的',
-						'以下哪些选项是正确的',
-						'这个说法是否正确',
-						'请填写空白处：中国的首都是',
-						'请简述某个概念',
-						'阅读以下材料，回答问题',
+					// 检查是否完全匹配示例数据的完整内容
+					const exactExampleStems = [
+						'下列哪个选项是正确的？',
+						'以下哪些选项是正确的？（多选）',
+						'这个说法是否正确？',
+						'请填写空白处：中国的首都是______。',
+						'请简述某个概念的主要内容。',
+						'阅读以下材料，回答问题。\n材料内容...',
 					];
-					const isExampleRow = exampleKeywords.some((keyword) => firstCellValue.includes(keyword));
 
-					if (isExampleRow) {
+					// 只有完全匹配示例数据时才跳过
+					const isExactExample = exactExampleStems.some((exampleStem) => {
+						// 去除换行符和多余空格后比较
+						const normalizedExample = exampleStem.replace(/\s+/g, '').replace(/\n/g, '');
+						const normalizedValue = firstCellValue.replace(/\s+/g, '').replace(/\n/g, '');
+						return (
+							normalizedValue === normalizedExample || normalizedValue.includes(normalizedExample.substring(0, 10))
+						);
+					});
+
+					if (isExactExample) {
 						this.logger.log(`[导入] 跳过示例数据行: 第 ${rowNumber} 行, 内容: ${firstCellValue.substring(0, 50)}`);
 						skippedCount++;
 						continue;
+					} else {
+						this.logger.log(`[导入] 第2行不是示例数据，作为数据行处理: ${firstCellValue.substring(0, 50)}`);
 					}
+				}
+
+				// 检查是否是空行（第一列必须不为空，因为题干是必填的）
+				const firstCellValue = row.getCell(1).value?.toString()?.trim();
+				if (!firstCellValue || firstCellValue === '') {
+					skippedCount++;
+					this.logger.log(`[导入] 跳过空行: 第 ${rowNumber} 行（第一列为空）`);
+					continue;
 				}
 
 				// 根据题目类型解析数据
@@ -495,8 +522,9 @@ export class AdminQuestionService {
 					this.logger.log(`[导入] 解析成功: 第 ${rowNumber} 行, 题干: ${parsedQuestion.stem.substring(0, 50)}`);
 				} else {
 					skippedCount++;
-					const firstCell = row.getCell(1).value?.toString() || '';
-					this.logger.warn(`[导入] 跳过无效行: 第 ${rowNumber} 行, 题干: ${firstCell.substring(0, 50)}`);
+					this.logger.warn(
+						`[导入] 跳过无效行: 第 ${rowNumber} 行, 题干: ${firstCellValue.substring(0, 50)}, 解析结果: ${JSON.stringify(parsedQuestion)}`
+					);
 				}
 			}
 
