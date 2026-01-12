@@ -30,6 +30,7 @@ import { FeedbackModule } from './modules/feedback/feedback.module';
 import { DistributorModule } from './modules/distributor/distributor.module';
 import { ExamModule } from './modules/exam/exam.module';
 import { SystemAccountModule } from './modules/system-account/system-account.module';
+import { SystemRoleModule } from './modules/system-role/system-role.module';
 
 @Module({
   imports: [
@@ -130,6 +131,7 @@ import { SystemAccountModule } from './modules/system-account/system-account.mod
     DistributorModule,
     ExamModule,
     SystemAccountModule,
+    SystemRoleModule,
   ],
   controllers: [AppController],
   providers: [
