@@ -4,7 +4,7 @@ import {
 	BadRequestException,
 	Logger,
 	Inject,
-	ForwardRef,
+	forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -39,7 +39,7 @@ export class DistributorService {
 		@InjectRepository(Order)
 		private orderRepository: Repository<Order>,
 		private configService: ConfigService,
-		@Inject(ForwardRef(() => UploadService))
+		@Inject(forwardRef(() => UploadService))
 		private uploadService: UploadService,
 	) {}
 
