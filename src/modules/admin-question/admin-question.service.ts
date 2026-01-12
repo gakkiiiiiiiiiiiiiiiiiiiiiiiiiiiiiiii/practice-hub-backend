@@ -370,35 +370,88 @@ export class AdminQuestionService {
 		const buffer = Buffer.isBuffer(dto.file.buffer) ? dto.file.buffer : Buffer.from(new Uint8Array(dto.file.buffer));
 		await workbook.xlsx.load(buffer as any);
 
-		const worksheet = workbook.getWorksheet(1);
-		if (!worksheet) {
-			throw new BadRequestException('Excel 文件格式错误');
-		}
-
 		const questions = [];
 
-		// 跳过表头，从第二行开始
-		worksheet.eachRow((row, rowNumber) => {
-			if (rowNumber === 1) return; // 跳过表头
+		// 工作表名称到题目类型的映射
+		const sheetNameToType: Record<string, QuestionType> = {
+			单选题模板: QuestionType.SINGLE_CHOICE,
+			多选题模板: QuestionType.MULTIPLE_CHOICE,
+			判断题模板: QuestionType.JUDGE,
+			填空题模板: QuestionType.FILL_BLANK,
+			阅读理解模板: QuestionType.READING_COMPREHENSION,
+			简答题模板: QuestionType.SHORT_ANSWER,
+		};
 
-			const type = this.parseQuestionType(row.getCell(1).value?.toString() || '');
-			const stem = row.getCell(2).value?.toString() || '';
-			const options = this.parseOptions(row, 3, 6); // 选项A-D
-			const answer = this.parseAnswer(row.getCell(7).value?.toString() || '');
-			const analysis = row.getCell(8).value?.toString() || '';
-			const difficulty = this.parseDifficulty(row.getCell(9).value?.toString() || '');
+		// 遍历所有工作表
+		workbook.eachSheet((worksheet, sheetId) => {
+			const sheetName = worksheet.name;
+			const questionType = sheetNameToType[sheetName];
 
-			if (stem) {
-				questions.push({
-					chapter_id: dto.chapterId,
-					parent_id: 0, // 默认，阅读理解需要特殊处理
-					type,
-					stem: this.escapeLatex(stem),
-					options,
-					answer,
-					analysis: this.escapeLatex(analysis),
-					difficulty,
-				});
+			if (!questionType) {
+				// 跳过未识别的工作表
+				return;
+			}
+
+			// 找到说明行的位置（通常包含"填写说明"）
+			let noteRowIndex = -1;
+			let maxRow = worksheet.rowCount;
+
+			// 先找到说明行
+			for (let rowNum = 1; rowNum <= maxRow; rowNum++) {
+				const row = worksheet.getRow(rowNum);
+				const firstCellValue = row.getCell(1).value?.toString() || '';
+				if (firstCellValue.includes('填写说明') || firstCellValue.includes('说明：')) {
+					noteRowIndex = rowNum;
+					break;
+				}
+			}
+
+			// 示例数据的特征关键词（根据模板中的示例数据）
+			const exampleKeywords = [
+				'下列哪个选项是正确的',
+				'以下哪些选项是正确的',
+				'这个说法是否正确',
+				'请填写空白处',
+				'请简述某个概念',
+				'阅读以下材料',
+			];
+
+			// 解析该工作表的数据
+			for (let rowNumber = 2; rowNumber <= maxRow; rowNumber++) {
+				// 跳过表头（第1行）
+				if (rowNumber === 1) continue;
+
+				// 跳过说明行及其之后的行
+				if (noteRowIndex > 0 && rowNumber >= noteRowIndex) continue;
+
+				const row = worksheet.getRow(rowNumber);
+
+				// 检查是否是空行（所有单元格都为空）
+				let isEmptyRow = true;
+				for (let col = 1; col <= 10; col++) {
+					const cellValue = row.getCell(col).value?.toString()?.trim();
+					if (cellValue) {
+						isEmptyRow = false;
+						break;
+					}
+				}
+				if (isEmptyRow) continue;
+
+				// 检查是否是示例数据行
+				const firstCellValue = row.getCell(1).value?.toString() || '';
+				const isExampleRow = exampleKeywords.some((keyword) => firstCellValue.includes(keyword));
+
+				// 如果匹配示例数据特征，跳过（通常示例数据在第2行，但为了兼容性，检查前3行）
+				if (isExampleRow && rowNumber <= 3) {
+					continue;
+				}
+
+				// 根据题目类型解析数据
+				const parsedQuestion = this.parseQuestionByType(row, questionType, dto.chapterId);
+
+				if (parsedQuestion && parsedQuestion.stem && parsedQuestion.stem.trim() !== '') {
+					questions.push(parsedQuestion);
+				}
 			}
 		});
 
@@ -410,6 +463,81 @@ export class AdminQuestionService {
 		return {
 			success: true,
 			count: questions.length,
+		};
+	}
+
+	/**
+	 * 根据题目类型解析题目数据
+	 */
+	private parseQuestionByType(row: ExcelJS.Row, type: QuestionType, chapterId: number): any {
+		let stem = '';
+		let options: Array<{ label: string; text: string }> = [];
+		let answer: string[] = [];
+		let analysis = '';
+		let difficulty = 2;
+
+		switch (type) {
+			case QuestionType.SINGLE_CHOICE:
+			case QuestionType.MULTIPLE_CHOICE:
+				// 单选题/多选题：题干、选项A、选项B、选项C、选项D、答案、解析、难度
+				stem = row.getCell(1).value?.toString() || '';
+				options = this.parseOptions(row, 2, 5); // 选项A-D（列2-5）
+				answer = this.parseAnswer(row.getCell(6).value?.toString() || '');
+				analysis = row.getCell(7).value?.toString() || '';
+				difficulty = this.parseDifficulty(row.getCell(8).value?.toString() || '');
+				break;
+
+			case QuestionType.JUDGE:
+				// 判断题：题干、选项A、选项B、答案、解析、难度
+				stem = row.getCell(1).value?.toString() || '';
+				options = this.parseOptions(row, 2, 3); // 选项A-B（列2-3）
+				answer = this.parseAnswer(row.getCell(4).value?.toString() || '');
+				analysis = row.getCell(5).value?.toString() || '';
+				difficulty = this.parseDifficulty(row.getCell(6).value?.toString() || '');
+				break;
+
+			case QuestionType.FILL_BLANK:
+				// 填空题：题干、答案、解析、难度
+				stem = row.getCell(1).value?.toString() || '';
+				answer = this.parseAnswer(row.getCell(2).value?.toString() || '');
+				analysis = row.getCell(3).value?.toString() || '';
+				difficulty = this.parseDifficulty(row.getCell(4).value?.toString() || '');
+				break;
+
+			case QuestionType.SHORT_ANSWER:
+				// 简答题：题干、参考答案、解析、难度
+				stem = row.getCell(1).value?.toString() || '';
+				answer = this.parseAnswer(row.getCell(2).value?.toString() || ''); // 参考答案作为答案
+				analysis = row.getCell(3).value?.toString() || '';
+				difficulty = this.parseDifficulty(row.getCell(4).value?.toString() || '');
+				break;
+
+			case QuestionType.READING_COMPREHENSION:
+				// 阅读理解：题干（阅读材料）、子题1题干、子题1选项A-D、子题1答案、子题1解析、子题2题干、子题2选项A-D、子题2答案、子题2解析、难度
+				// 注意：阅读理解需要特殊处理，这里只解析材料，子题需要单独处理
+				stem = row.getCell(1).value?.toString() || '';
+				difficulty = this.parseDifficulty(row.getCell(14).value?.toString() || '');
+				// 阅读理解暂时只保存材料，子题需要手动添加
+				break;
+
+			default:
+				return null;
+		}
+
+		// 如果题干为空，跳过
+		if (!stem || stem.trim() === '') {
+			return null;
+		}
+
+		return {
+			chapter_id: chapterId,
+			parent_id: 0, // 默认，阅读理解需要特殊处理
+			type,
+			stem: this.escapeLatex(stem),
+			options: options.length > 0 ? options : null,
+			answer,
+			analysis: this.escapeLatex(analysis),
+			difficulty,
 		};
 	}
 
