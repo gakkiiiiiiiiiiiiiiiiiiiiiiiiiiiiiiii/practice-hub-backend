@@ -543,17 +543,25 @@ export class AdminQuestionService {
 				}
 
 				// 根据题目类型解析数据
-				const parsedQuestion = this.parseQuestionByType(row, questionType, dto.chapterId);
+				try {
+					const parsedQuestion = this.parseQuestionByType(row, questionType, dto.chapterId);
 
-				if (parsedQuestion && parsedQuestion.stem && parsedQuestion.stem.trim() !== '') {
-					questions.push(parsedQuestion);
-					parsedCount++;
-					this.logger.log(`[导入] 解析成功: 第 ${rowNumber} 行, 题干: ${parsedQuestion.stem.substring(0, 50)}`);
-				} else {
+					if (parsedQuestion && parsedQuestion.stem && parsedQuestion.stem.trim() !== '') {
+						questions.push(parsedQuestion);
+						parsedCount++;
+						this.logger.log(`[导入] 解析成功: 第 ${rowNumber} 行, 题干: ${parsedQuestion.stem.substring(0, 50)}`);
+					} else {
+						skippedCount++;
+						this.logger.warn(
+							`[导入] 跳过无效行: 第 ${rowNumber} 行, 题干: ${firstCellValue.substring(0, 50)}, 解析结果: ${JSON.stringify(parsedQuestion)}`
+						);
+					}
+				} catch (error: any) {
+					// 捕获解析错误（如答案为空等），记录错误并跳过该行
 					skippedCount++;
-					this.logger.warn(
-						`[导入] 跳过无效行: 第 ${rowNumber} 行, 题干: ${firstCellValue.substring(0, 50)}, 解析结果: ${JSON.stringify(parsedQuestion)}`
-					);
+					const errorMessage = error.message || '解析失败';
+					this.logger.error(`[导入] 第 ${rowNumber} 行解析失败: ${errorMessage}`);
+					throw new BadRequestException(`第 ${rowNumber} 行导入失败：${errorMessage}`);
 				}
 			}
 
@@ -587,18 +595,24 @@ export class AdminQuestionService {
 			case QuestionType.SINGLE_CHOICE:
 			case QuestionType.MULTIPLE_CHOICE:
 				// 单选题/多选题：题干、选项A、选项B、选项C、选项D、答案、解析、难度
+				// 注意：选项可以为空，为空的不计入选项
 				stem = row.getCell(1).value?.toString() || '';
-				options = this.parseOptions(row, 2, 5); // 选项A-D（列2-5）
-				answer = this.parseAnswer(row.getCell(6).value?.toString() || '');
+				options = this.parseOptions(row, 2, 5); // 选项A-D（列2-5），空选项会被自动过滤
+				answer = this.parseAnswer(row.getCell(6).value?.toString() || '', false, options); // 验证答案对应的选项必须存在
 				analysis = row.getCell(7).value?.toString() || '';
 				difficulty = this.parseDifficulty(row.getCell(8).value?.toString() || '');
 				break;
 
 			case QuestionType.JUDGE:
 				// 判断题：题干、选项A、选项B、答案、解析、难度
+				// 注意：判断题的选项内容不需要填写，系统会自动使用"正确"/"错误"
 				stem = row.getCell(1).value?.toString() || '';
-				options = this.parseOptions(row, 2, 3); // 选项A-B（列2-3）
-				answer = this.parseAnswer(row.getCell(4).value?.toString() || '');
+				// 判断题固定使用"正确"和"错误"作为选项，不读取Excel中的选项内容
+				options = [
+					{ label: 'A', text: '正确' },
+					{ label: 'B', text: '错误' },
+				];
+				answer = this.parseAnswer(row.getCell(4).value?.toString() || '', true); // 判断题答案必须是小写a或b
 				analysis = row.getCell(5).value?.toString() || '';
 				difficulty = this.parseDifficulty(row.getCell(6).value?.toString() || '');
 				break;
@@ -606,7 +620,7 @@ export class AdminQuestionService {
 			case QuestionType.FILL_BLANK:
 				// 填空题：题干、答案、解析、难度
 				stem = row.getCell(1).value?.toString() || '';
-				answer = this.parseAnswer(row.getCell(2).value?.toString() || '');
+				answer = this.parseAnswer(row.getCell(2).value?.toString() || '', false); // 填空题答案不能为空
 				analysis = row.getCell(3).value?.toString() || '';
 				difficulty = this.parseDifficulty(row.getCell(4).value?.toString() || '');
 				break;
@@ -661,11 +675,19 @@ export class AdminQuestionService {
 		return typeMap[typeStr] || QuestionType.SINGLE_CHOICE;
 	}
 
+	/**
+	 * 解析选项
+	 * @param row Excel行对象
+	 * @param startCol 起始列号（从1开始）
+	 * @param endCol 结束列号（从1开始）
+	 * @returns 选项数组，空选项会被过滤掉
+	 */
 	private parseOptions(row: ExcelJS.Row, startCol: number, endCol: number) {
 		const options = [];
 		for (let i = startCol; i <= endCol; i++) {
-			const value = row.getCell(i).value?.toString();
-			if (value) {
+			const value = row.getCell(i).value?.toString()?.trim();
+			// 只添加非空选项，空选项不计入
+			if (value && value !== '') {
 				options.push({
 					label: String.fromCharCode(65 + i - startCol), // A, B, C, D
 					text: value,
@@ -675,11 +697,59 @@ export class AdminQuestionService {
 		return options;
 	}
 
-	private parseAnswer(answerStr: string): string[] {
-		return answerStr
+	/**
+	 * 解析答案
+	 * @param answerStr 答案字符串
+	 * @param isJudge 是否为判断题（判断题答案需要转换为大写）
+	 * @param options 选项数组（用于验证答案对应的选项是否存在）
+	 * @returns 答案数组
+	 * @throws BadRequestException 如果答案为空或答案对应的选项不存在
+	 */
+	private parseAnswer(
+		answerStr: string,
+		isJudge: boolean = false,
+		options?: Array<{ label: string; text: string }>
+	): string[] {
+		const trimmedAnswer = answerStr.trim();
+
+		// 答案不能为空
+		if (!trimmedAnswer || trimmedAnswer === '') {
+			throw new BadRequestException('答案不能为空，请填写答案');
+		}
+
+		// 解析答案（支持逗号分隔的多选答案）
+		const answers = trimmedAnswer
 			.split(',')
-			.map((a) => a.trim())
+			.map((a) => {
+				const trimmed = a.trim().toUpperCase(); // 转换为大写
+				if (isJudge) {
+					// 判断题：只接受A或B，不区分大小写
+					if (trimmed === 'A' || trimmed === 'B') {
+						return trimmed;
+					}
+					throw new BadRequestException(`判断题答案只能填写 A 或 B，当前填写的是：${a.trim()}`);
+				}
+				return trimmed;
+			})
 			.filter(Boolean);
+
+		// 验证答案不能为空数组
+		if (answers.length === 0) {
+			throw new BadRequestException('答案不能为空，请填写答案');
+		}
+
+		// 如果有选项数组，验证答案对应的选项必须存在
+		if (options && options.length > 0) {
+			const availableLabels = options.map((opt) => opt.label);
+			const invalidAnswers = answers.filter((ans) => !availableLabels.includes(ans));
+			if (invalidAnswers.length > 0) {
+				throw new BadRequestException(
+					`答案中包含不存在的选项：${invalidAnswers.join(', ')}。当前可用选项：${availableLabels.join(', ')}`
+				);
+			}
+		}
+
+		return answers;
 	}
 
 	private parseDifficulty(difficultyStr: string): number {
