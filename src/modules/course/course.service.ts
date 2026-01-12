@@ -55,10 +55,10 @@ export class CourseService {
     // 检查用户是否有权限
     let hasAuth = false;
     
-    // 免费或VIP免费课程，直接有权限
+    // 免费课程，直接有权限
     const price = Number(course.price) || 0;
-    const isVipFree = course.is_vip_free === 1;
-    if (price === 0 || isVipFree) {
+    const isFree = course.is_free === 1;
+    if (price === 0 || isFree) {
       hasAuth = true;
     } else if (userId) {
       // 付费课程，检查用户权限

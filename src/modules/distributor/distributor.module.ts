@@ -10,6 +10,7 @@ import { DistributorService } from './distributor.service';
 import { DistributorController } from './distributor.controller';
 import { AdminDistributorController } from './admin-distributor.controller';
 import { OrderModule } from '../order/order.module';
+import { UploadModule } from '../upload/upload.module';
 
 @Module({
 	imports: [
@@ -22,6 +23,7 @@ import { OrderModule } from '../order/order.module';
 			Order,
 		]),
 		forwardRef(() => OrderModule),
+		forwardRef(() => UploadModule),
 	],
 	controllers: [DistributorController, AdminDistributorController],
 	providers: [DistributorService],

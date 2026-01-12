@@ -137,26 +137,87 @@ export class UploadService {
 	}
 
 	/**
+	 * 验证文件名安全性（防止路径遍历攻击）
+	 * @param filename 文件名
+	 * @returns 是否安全
+	 */
+	private isValidFilename(filename: string): boolean {
+		// 检查是否包含路径遍历字符
+		if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+			return false;
+		}
+		// 检查文件名长度
+		if (filename.length > 255) {
+			return false;
+		}
+		// 检查是否包含控制字符
+		if (/[\x00-\x1F\x7F]/.test(filename)) {
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * 清理文件名（移除不安全字符）
+	 * @param filename 原始文件名
+	 * @returns 清理后的文件名
+	 */
+	private sanitizeFilename(filename: string): string {
+		// 移除路径分隔符和危险字符
+		return filename
+			.replace(/[\/\\]/g, '')
+			.replace(/\.\./g, '')
+			.replace(/[\x00-\x1F\x7F]/g, '')
+			.substring(0, 255);
+	}
+
+	/**
 	 * 保存文件到本地
 	 * @param file 文件对象
 	 * @param folder 存储文件夹
 	 * @returns 文件相对路径
 	 */
 	private async saveFileToLocal(file: Express.Multer.File, folder: string = 'images'): Promise<string> {
-		// 生成唯一文件名
+		// 验证原始文件名
+		if (!this.isValidFilename(file.originalname)) {
+			throw new BadRequestException('文件名包含不安全字符');
+		}
+
+		// 验证文件夹名称
+		if (!this.isValidFilename(folder)) {
+			throw new BadRequestException('文件夹名称包含不安全字符');
+		}
+
+		// 生成唯一文件名（使用时间戳和随机字符串，不依赖原始文件名）
 		const timestamp = Date.now();
 		const randomStr = Math.random().toString(36).substring(2, 15);
 		const ext = this.getFileExtension(file.originalname);
-		const fileName = `${timestamp}-${randomStr}${ext}`;
 
-		// 创建文件夹目录
+		// 验证扩展名
+		const allowedExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+		const normalizedExt = ext.toLowerCase();
+		if (!allowedExts.includes(normalizedExt)) {
+			throw new BadRequestException('不支持的文件扩展名');
+		}
+
+		const fileName = `${timestamp}-${randomStr}${normalizedExt}`;
+
+		// 创建文件夹目录（使用 path.join 防止路径遍历）
 		const folderPath = path.join(this.uploadDir, folder);
 		if (!fs.existsSync(folderPath)) {
 			fs.mkdirSync(folderPath, { recursive: true });
 		}
 
-		// 保存文件
+		// 保存文件（使用 path.join 确保路径安全）
 		const filePath = path.join(folderPath, fileName);
+
+		// 双重验证：确保文件路径在 uploadDir 内
+		const resolvedPath = path.resolve(filePath);
+		const resolvedUploadDir = path.resolve(this.uploadDir);
+		if (!resolvedPath.startsWith(resolvedUploadDir)) {
+			throw new BadRequestException('文件路径不安全');
+		}
+
 		fs.writeFileSync(filePath, file.buffer);
 
 		console.log(`[本地存储] 文件保存成功: ${filePath}`);
@@ -275,11 +336,27 @@ export class UploadService {
 		folder: string = 'images',
 		openid: string = ''
 	): Promise<string> {
-		// 生成唯一文件名
+		// 验证文件名和文件夹名
+		if (!this.isValidFilename(file.originalname)) {
+			throw new BadRequestException('文件名包含不安全字符');
+		}
+		if (!this.isValidFilename(folder)) {
+			throw new BadRequestException('文件夹名称包含不安全字符');
+		}
+
+		// 生成唯一文件名（使用时间戳和随机字符串，不依赖原始文件名）
 		const timestamp = Date.now();
 		const randomStr = Math.random().toString(36).substring(2, 15);
 		const ext = this.getFileExtension(file.originalname);
-		const fileName = `${folder}/${timestamp}-${randomStr}${ext}`;
+
+		// 验证扩展名
+		const allowedExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+		const normalizedExt = ext.toLowerCase();
+		if (!allowedExts.includes(normalizedExt)) {
+			throw new BadRequestException('不支持的文件扩展名');
+		}
+
+		const fileName = `${folder}/${timestamp}-${randomStr}${normalizedExt}`;
 		const cloudPath = `/${fileName}`;
 
 		try {

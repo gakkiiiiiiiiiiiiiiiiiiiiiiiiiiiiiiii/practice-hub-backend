@@ -36,11 +36,10 @@ export class AuthService {
 
 		// 检查配置
 		if (!appid || !secret) {
+			// 安全：不在日志中打印敏感信息（如 secret）
 			console.error('微信配置缺失:', {
 				hasAppid: !!appid,
 				hasSecret: !!secret,
-				appidLength: appid?.length || 0,
-				secretLength: secret?.length || 0,
 			});
 			throw new UnauthorizedException('微信登录配置错误，请联系管理员');
 		}
@@ -65,7 +64,8 @@ export class AuthService {
 
 			// 处理微信 API 返回的错误
 			if (errcode) {
-				console.error('微信 API 错误:', { errcode, errmsg, code: code.substring(0, 10) + '...' });
+				// 安全：不在日志中打印完整的 code（可能包含敏感信息）
+				console.error('微信 API 错误:', { errcode, errmsg });
 				let errorMessage = '微信登录失败';
 
 				// 根据错误码返回更具体的错误信息
@@ -203,5 +203,76 @@ export class AuthService {
 		} catch (error) {
 			throw new UnauthorizedException('Token 无效或已过期');
 		}
+	}
+
+	/**
+	 * 根据角色获取权限列表
+	 */
+	getPermissionsByRole(role: string): string[] {
+		const permissionMap: Record<string, string[]> = {
+			super_admin: [
+				'dashboard:view',
+				'question:view',
+				'question:create',
+				'question:edit',
+				'question:delete',
+				'question:import',
+				'course:view',
+				'course:create',
+				'course:edit',
+				'course:delete',
+				'chapter:view',
+				'chapter:create',
+				'chapter:edit',
+				'chapter:delete',
+				'agent:view',
+				'agent:generate',
+				'agent:export',
+				'user:view',
+				'user:manage',
+				'system:account:view',
+				'system:account:create',
+				'system:account:edit',
+				'system:account:delete',
+				'system:role:view',
+				'system:role:create',
+				'system:role:edit',
+				'system:role:delete',
+				'system:config:view',
+				'system:config:edit',
+				'system:feedback:view',
+				'system:feedback:reply',
+				'system:feedback:delete',
+				'system:distributor:view',
+				'system:distributor:manage',
+				'system:recommend:view',
+				'system:recommend:edit',
+			],
+			content_admin: [
+				'dashboard:view',
+				'question:view',
+				'question:create',
+				'question:edit',
+				'question:delete',
+				'question:import',
+				'course:view',
+				'course:create',
+				'course:edit',
+				'course:delete',
+				'chapter:view',
+				'chapter:create',
+				'chapter:edit',
+				'chapter:delete',
+			],
+			agent: [
+				'dashboard:view',
+				'agent:view',
+				'agent:buy',
+				'agent:export',
+				'agent:balance:view',
+			],
+		};
+
+		return permissionMap[role] || [];
 	}
 }

@@ -46,7 +46,8 @@ import { ExamModule } from './modules/exam/exam.module';
         const dbDatabase = configService.get('DB_DATABASE', 'practice_hub');
         const nodeEnv = configService.get('NODE_ENV', 'development');
 
-        console.log(`[数据库配置] 连接地址: ${dbHost}:${dbPort}, 数据库: ${dbDatabase}, 用户: ${dbUsername}`);
+		// 安全：不在日志中打印敏感信息（如密码）
+		console.log(`[数据库配置] 连接地址: ${dbHost}:${dbPort}, 数据库: ${dbDatabase}`);
 
         return {
           type: 'mysql',

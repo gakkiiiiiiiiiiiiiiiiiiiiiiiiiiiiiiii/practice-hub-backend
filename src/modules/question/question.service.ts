@@ -87,13 +87,13 @@ export class QuestionService {
 			}
 
 			this.logger.debug(
-				`找到课程 - ID: ${course.id}, 名称: ${course.name}, 价格: ${course.price}, VIP免费: ${course.is_vip_free}`
+				`找到课程 - ID: ${course.id}, 名称: ${course.name}, 价格: ${course.price}, 是否免费: ${course.is_free}`
 			);
 
-			// 判断是否免费：章节免费 或 课程免费/VIP免费
-			const isFree = chapter.is_free === 1 || Number(course.price) === 0 || course.is_vip_free === 1;
+			// 判断是否免费：章节免费 或 课程免费
+			const isFree = chapter.is_free === 1 || Number(course.price) === 0 || course.is_free === 1;
 			this.logger.debug(
-				`权限判断 - 章节免费: ${chapter.is_free === 1}, 课程免费: ${Number(course.price) === 0}, VIP免费: ${course.is_vip_free === 1}, 最终结果: ${isFree}`
+				`权限判断 - 章节免费: ${chapter.is_free === 1}, 课程免费: ${Number(course.price) === 0}, 课程标记免费: ${course.is_free === 1}, 最终结果: ${isFree}`
 			);
 
 			const questions = await this.queryWithRetry(() =>
@@ -246,7 +246,7 @@ export class QuestionService {
 			const answeredQuestionIds = new Set<number>();
 
 			// 判断是否免费
-			const isFree = Number(course.price) === 0 || course.is_vip_free === 1;
+			const isFree = Number(course.price) === 0 || course.is_free === 1;
 
 			if (isFree) {
 				hasPermission = true;
@@ -621,8 +621,8 @@ export class QuestionService {
 
 		const course = chapter.course;
 
-		// 免费或VIP免费，直接放行
-		if (Number(course.price) === 0 || course.is_vip_free === 1) {
+		// 免费课程，直接放行
+		if (Number(course.price) === 0 || course.is_free === 1) {
 			return;
 		}
 

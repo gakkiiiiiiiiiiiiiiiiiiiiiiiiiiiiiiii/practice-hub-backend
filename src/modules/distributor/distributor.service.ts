@@ -3,6 +3,8 @@ import {
 	NotFoundException,
 	BadRequestException,
 	Logger,
+	Inject,
+	ForwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -17,6 +19,7 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
+import { UploadService } from '../upload/upload.service';
 
 @Injectable()
 export class DistributorService {
@@ -36,6 +39,8 @@ export class DistributorService {
 		@InjectRepository(Order)
 		private orderRepository: Repository<Order>,
 		private configService: ConfigService,
+		@Inject(ForwardRef(() => UploadService))
+		private uploadService: UploadService,
 	) {}
 
 	/**
@@ -443,12 +448,32 @@ export class DistributorService {
 		}
 
 		// 将二维码图片上传到 COS 或保存到本地
-		// 这里需要根据实际情况处理，暂时返回一个占位符
-		// TODO: 上传到 COS 并返回 URL
+		try {
+			// 创建一个模拟的 Multer File 对象用于上传
+			const fileBuffer = Buffer.from(response.data);
+			const mockFile: Express.Multer.File = {
+				fieldname: 'qrcode',
+				originalname: `qrcode_${distributorCode}_${Date.now()}.png`,
+				encoding: '7bit',
+				mimetype: 'image/png',
+				size: fileBuffer.length,
+				buffer: fileBuffer,
+				destination: '',
+				filename: '',
+				path: '',
+				stream: null as any,
+			};
 
-		// 临时方案：将图片转为 base64（不推荐，应该上传到 COS）
-		const base64 = Buffer.from(response.data).toString('base64');
-		return `data:image/png;base64,${base64}`;
+			// 使用 UploadService 上传图片（管理端上传，openid 为空）
+			const imageUrl = await this.uploadService.uploadImage(mockFile, 'qrcodes', '');
+			this.logger.log(`二维码上传成功: ${imageUrl}`);
+			return imageUrl;
+		} catch (uploadError: any) {
+			this.logger.warn('二维码上传失败，使用 base64 方案:', uploadError?.message || uploadError);
+			// 临时方案：将图片转为 base64（如果上传失败）
+			const base64 = Buffer.from(response.data).toString('base64');
+			return `data:image/png;base64,${base64}`;
+		}
 	}
 
 	/**

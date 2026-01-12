@@ -31,7 +31,7 @@ export class Course {
 	price: number; // 价格
 
 	@Column({ type: 'tinyint', default: 0 })
-	is_vip_free: number; // 0-否, 1-是
+	is_free: number; // 0-付费, 1-免费
 
 	@Column({ type: 'int', default: 0 })
 	student_count: number; // 学习人数

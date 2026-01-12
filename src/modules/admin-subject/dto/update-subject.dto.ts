@@ -17,10 +17,10 @@ export class UpdateSubjectDto {
   @IsNumber()
   price?: number;
 
-  @ApiProperty({ description: '是否VIP免费', required: false, enum: [0, 1] })
+  @ApiProperty({ description: '是否免费', required: false, enum: [0, 1] })
   @IsOptional()
   @IsNumber()
-  is_vip_free?: number;
+  is_free?: number;
 
   @ApiProperty({ description: '排序', required: false })
   @IsOptional()

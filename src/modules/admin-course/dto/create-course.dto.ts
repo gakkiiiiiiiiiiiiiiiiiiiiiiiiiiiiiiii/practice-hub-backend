@@ -44,11 +44,11 @@ export class CreateCourseDto {
 	@IsNumber()
 	price?: number;
 
-	@ApiProperty({ description: '是否VIP免费', example: 0, enum: [0, 1] })
+	@ApiProperty({ description: '是否免费', example: 0, enum: [0, 1] })
 	@IsOptional()
 	@Type(() => Number)
 	@IsNumber()
-	is_vip_free?: number;
+	is_free?: number;
 
 	@ApiProperty({ description: '排序', example: 0 })
 	@IsOptional()

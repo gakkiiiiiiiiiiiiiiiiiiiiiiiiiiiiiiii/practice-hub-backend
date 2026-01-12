@@ -40,9 +40,33 @@ async function bootstrap() {
 	);
 
 	// 跨域配置
+	// 安全：限制允许的来源，避免过于宽松的 CORS 配置
+	const allowedOrigins = process.env.ALLOWED_ORIGINS
+		? process.env.ALLOWED_ORIGINS.split(',')
+		: ['http://localhost:3000', 'http://localhost:5173']; // 开发环境默认允许的源
+
 	app.enableCors({
-		origin: true,
+		origin: (origin, callback) => {
+			// 允许没有 origin 的请求（如移动应用、Postman 等）
+			if (!origin) {
+				return callback(null, true);
+			}
+			// 检查 origin 是否在允许列表中
+			if (allowedOrigins.includes(origin)) {
+				callback(null, true);
+			} else {
+				// 生产环境严格检查，开发环境可以放宽
+				const nodeEnv = process.env.NODE_ENV || 'development';
+				if (nodeEnv === 'development') {
+					callback(null, true);
+				} else {
+					callback(new Error('不允许的跨域请求'));
+				}
+			}
+		},
 		credentials: true,
+		methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+		allowedHeaders: ['Content-Type', 'Authorization'],
 	});
 
 	// API 前缀

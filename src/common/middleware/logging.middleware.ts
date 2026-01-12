@@ -6,11 +6,17 @@ export class LoggingMiddleware implements NestMiddleware {
   private readonly logger = new Logger('HTTP');
 
   use(req: Request, res: Response, next: NextFunction) {
-    const { method, originalUrl, query, body } = req;
-    const userAgent = req.get('user-agent') || '';
+    const { method, originalUrl, query } = req;
     const ip = req.ip || req.connection.remoteAddress;
 
-    this.logger.log(`${method} ${originalUrl} - IP: ${ip} - Query: ${JSON.stringify(query)}`);
+    // 安全：不在日志中记录敏感信息（如密码、token等）
+    const sanitizedQuery = { ...query };
+    // 移除可能的敏感字段
+    delete sanitizedQuery.password;
+    delete sanitizedQuery.token;
+    delete sanitizedQuery.code;
+
+    this.logger.log(`${method} ${originalUrl} - IP: ${ip} - Query: ${JSON.stringify(sanitizedQuery)}`);
 
     res.on('finish', () => {
       const { statusCode } = res;

@@ -31,11 +31,11 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: '获取当前管理员信息' })
   async getAdminInfo(@CurrentUser() user: any) {
-    // 这里需要根据实际需求返回权限列表
+    const permissions = this.authService.getPermissionsByRole(user.role);
     return CommonResponseDto.success({
       id: user.adminId,
       role: user.role,
-      permissions: [], // TODO: 实现权限列表
+      permissions,
     });
   }
 }

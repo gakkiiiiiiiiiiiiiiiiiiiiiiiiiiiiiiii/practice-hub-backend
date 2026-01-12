@@ -48,7 +48,10 @@ export class AdminQuestionService {
 				processedDto.options = [];
 			}
 
-			console.log('保存时的 options:', JSON.stringify(processedDto.options, null, 2));
+			// 调试信息：仅在开发环境输出
+			if (process.env.NODE_ENV === 'development') {
+				console.log('保存时的 options:', JSON.stringify(processedDto.options, null, 2));
+			}
 		}
 
 		if (id) {
@@ -133,25 +136,36 @@ export class AdminQuestionService {
 		let processedOptions: Array<{ label: string; text: string }> = [];
 
 		if (question.options !== null && question.options !== undefined) {
-			console.log('开始处理 options，类型:', typeof question.options, '是否为数组:', Array.isArray(question.options));
+			// 调试信息：仅在开发环境输出
+			if (process.env.NODE_ENV === 'development') {
+				console.log('开始处理 options，类型:', typeof question.options, '是否为数组:', Array.isArray(question.options));
+			}
 
 			// 如果 options 是数组格式 [{label: "A", text: "aaaa"}]
 			if (Array.isArray(question.options)) {
-				console.log('options 是数组，长度:', question.options.length);
+				if (process.env.NODE_ENV === 'development') {
+					console.log('options 是数组，长度:', question.options.length);
+				}
 
 				// 检查是否是嵌套数组格式 [[], []]（错误格式）
 				const firstItem = question.options[0];
 				if (Array.isArray(firstItem) && firstItem.length === 0) {
-					console.log('检测到错误格式：嵌套空数组，返回空数组');
+					if (process.env.NODE_ENV === 'development') {
+						console.log('检测到错误格式：嵌套空数组，返回空数组');
+					}
 					processedOptions = [];
 				} else {
 					processedOptions = question.options
 						.map((opt: any, index: number) => {
-							console.log(`处理选项 ${index}:`, JSON.stringify(opt));
+							if (process.env.NODE_ENV === 'development') {
+								console.log(`处理选项 ${index}:`, JSON.stringify(opt));
+							}
 
 							// 如果是空数组，跳过
 							if (Array.isArray(opt) && opt.length === 0) {
-								console.log(`选项 ${index} 是空数组，跳过`);
+								if (process.env.NODE_ENV === 'development') {
+									console.log(`选项 ${index} 是空数组，跳过`);
+								}
 								return null;
 							}
 
@@ -164,7 +178,9 @@ export class AdminQuestionService {
 								'label' in opt &&
 								'text' in opt
 							) {
-								console.log(`选项 ${index} 格式正确`);
+								if (process.env.NODE_ENV === 'development') {
+									console.log(`选项 ${index} 格式正确`);
+								}
 								return {
 									label: String(opt.label || ''),
 									text: String(opt.text || ''),
@@ -174,7 +190,9 @@ export class AdminQuestionService {
 							// 如果是对象格式但没有 label 和 text，可能是单个对象
 							if (typeof opt === 'object' && opt !== null && !Array.isArray(opt)) {
 								const keys = Object.keys(opt);
-								console.log(`选项 ${index} 是对象，键:`, keys);
+								if (process.env.NODE_ENV === 'development') {
+									console.log(`选项 ${index} 是对象，键:`, keys);
+								}
 								// 如果是单个键值对，转换为选项
 								if (keys.length === 1) {
 									return {
@@ -191,7 +209,9 @@ export class AdminQuestionService {
 
 							// 如果是字符串，尝试解析
 							if (typeof opt === 'string') {
-								console.log(`选项 ${index} 是字符串，尝试解析`);
+								if (process.env.NODE_ENV === 'development') {
+									console.log(`选项 ${index} 是字符串，尝试解析`);
+								}
 								try {
 									const parsed = JSON.parse(opt);
 									if (Array.isArray(parsed)) {
@@ -206,11 +226,15 @@ export class AdminQuestionService {
 										}));
 									}
 								} catch (e) {
-									console.log(`解析选项 ${index} 失败:`, e);
+									if (process.env.NODE_ENV === 'development') {
+										console.log(`解析选项 ${index} 失败:`, e);
+									}
 								}
 							}
 
-							console.log(`选项 ${index} 无法处理，返回 null`);
+							if (process.env.NODE_ENV === 'development') {
+								console.log(`选项 ${index} 无法处理，返回 null`);
+							}
 							return null;
 						})
 						.filter((item: any) => item !== null) // 过滤掉 null 值
@@ -219,7 +243,9 @@ export class AdminQuestionService {
 			}
 			// 如果是对象格式 {A: "aaaa", B: "bbbb"}
 			else if (typeof question.options === 'object' && question.options !== null && !Array.isArray(question.options)) {
-				console.log('options 是对象格式');
+				if (process.env.NODE_ENV === 'development') {
+					console.log('options 是对象格式');
+				}
 				processedOptions = Object.keys(question.options).map((key) => ({
 					label: key,
 					text: String((question.options as any)[key] || ''),
@@ -227,10 +253,14 @@ export class AdminQuestionService {
 			}
 			// 如果是字符串，尝试解析 JSON
 			else if (typeof question.options === 'string') {
-				console.log('options 是字符串，尝试解析 JSON');
+				if (process.env.NODE_ENV === 'development') {
+					console.log('options 是字符串，尝试解析 JSON');
+				}
 				try {
 					const parsed = JSON.parse(question.options);
-					console.log('解析后的数据:', JSON.stringify(parsed, null, 2));
+					if (process.env.NODE_ENV === 'development') {
+						console.log('解析后的数据:', JSON.stringify(parsed, null, 2));
+					}
 					if (Array.isArray(parsed)) {
 						processedOptions = parsed.map((item: any) => ({
 							label: String(item.label || ''),
@@ -243,16 +273,24 @@ export class AdminQuestionService {
 						}));
 					}
 				} catch (e) {
-					console.log('解析 JSON 失败:', e, '原始字符串:', question.options);
+					if (process.env.NODE_ENV === 'development') {
+						console.log('解析 JSON 失败:', e);
+					}
 				}
 			} else {
-				console.log('options 类型未知:', typeof question.options);
+				if (process.env.NODE_ENV === 'development') {
+					console.log('options 类型未知:', typeof question.options);
+				}
 			}
 		} else {
-			console.log('question.options 为空或未定义');
+			if (process.env.NODE_ENV === 'development') {
+				console.log('question.options 为空或未定义');
+			}
 		}
 
-		console.log('处理后的 options:', JSON.stringify(processedOptions, null, 2));
+		if (process.env.NODE_ENV === 'development') {
+			console.log('处理后的 options:', JSON.stringify(processedOptions, null, 2));
+		}
 		result.options = processedOptions;
 
 		// 添加章节和科目信息
