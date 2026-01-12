@@ -67,15 +67,15 @@ import { ExamModule } from './modules/exam/exam.module';
           // 连接池配置，防止 ECONNRESET 错误
           extra: {
             // 连接池最大连接数
-            connectionLimit: 10,
+            connectionLimit: 20,
             // 连接超时时间（毫秒）
             connectTimeout: 60000,
             // 获取连接超时时间（毫秒）
             acquireTimeout: 60000,
             // 连接空闲超时时间（毫秒），超过此时间未使用的连接会被关闭
-            idleTimeout: 300000,
+            idleTimeout: 600000, // 10分钟
             // 连接最大存活时间（毫秒），超过此时间的连接会被关闭并重新创建
-            maxIdle: 10000,
+            maxIdle: 10,
             // 启用连接自动重连
             reconnect: true,
             // 连接被重置时自动重连
@@ -85,9 +85,21 @@ import { ExamModule } from './modules/exam/exam.module';
             // 是否在连接断开时自动重连
             autoReconnect: true,
             // 连接重试次数
-            reconnectAttempts: 5,
+            reconnectAttempts: 10,
             // 连接重试延迟（毫秒）
             reconnectDelay: 2000,
+            // 启用连接池队列
+            queueLimit: 0,
+            // 连接池最小连接数
+            min: 2,
+            // 连接池最大连接数
+            max: 20,
+            // 连接验证查询（用于保持连接活跃）
+            evictionRunIntervalMillis: 10000,
+            // 连接空闲时间（毫秒），超过此时间未使用的连接会被关闭
+            idleTimeoutMillis: 300000,
+            // 连接最大存活时间（毫秒）
+            maxLifetime: 1800000, // 30分钟
           },
         };
       },

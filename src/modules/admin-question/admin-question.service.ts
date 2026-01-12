@@ -73,29 +73,58 @@ export class AdminQuestionService {
 	 * 获取题目列表
 	 */
 	async getQuestionList(courseId?: number, chapterId?: number, type?: QuestionType) {
-		const queryBuilder = this.questionRepository
-			.createQueryBuilder('question')
-			.leftJoinAndSelect('question.chapter', 'chapter')
-			.leftJoinAndSelect('chapter.course', 'course');
+		// 添加重试机制，防止数据库连接错误
+		const maxRetries = 3;
+		let lastError: any;
 
-		if (chapterId) {
-			queryBuilder.where('question.chapter_id = :chapterId', { chapterId });
-		} else if (courseId) {
-			queryBuilder.where('chapter.course_id = :courseId', { courseId });
+		for (let attempt = 1; attempt <= maxRetries; attempt++) {
+			try {
+				const queryBuilder = this.questionRepository
+					.createQueryBuilder('question')
+					.leftJoinAndSelect('question.chapter', 'chapter')
+					.leftJoinAndSelect('chapter.course', 'course');
+
+				if (chapterId) {
+					queryBuilder.where('question.chapter_id = :chapterId', { chapterId });
+				} else if (courseId) {
+					queryBuilder.where('chapter.course_id = :courseId', { courseId });
+				}
+
+				if (type) {
+					queryBuilder.andWhere('question.type = :type', { type });
+				}
+
+				const questions = await queryBuilder.orderBy('question.id', 'ASC').getMany();
+
+				// 格式化返回数据，添加课程和章节名称
+				return questions.map((q: any) => ({
+					...q,
+					courseName: q.chapter?.course?.name || '',
+					chapterName: q.chapter?.name || '',
+				}));
+			} catch (error: any) {
+				lastError = error;
+				this.logger.warn(`[获取题目列表] 第 ${attempt} 次尝试失败: ${error.message}`);
+
+				// 如果是连接错误，等待后重试
+				if (
+					error.code === 'ECONNRESET' ||
+					error.code === 'PROTOCOL_CONNECTION_LOST' ||
+					error.message?.includes('ECONNRESET')
+				) {
+					if (attempt < maxRetries) {
+						await new Promise((resolve) => setTimeout(resolve, 1000 * attempt)); // 递增延迟
+						continue;
+					}
+				}
+
+				// 如果不是连接错误，或者已经重试3次，直接抛出错误
+				throw error;
+			}
 		}
 
-		if (type) {
-			queryBuilder.andWhere('question.type = :type', { type });
-		}
-
-		const questions = await queryBuilder.orderBy('question.id', 'ASC').getMany();
-
-		// 格式化返回数据，添加课程和章节名称
-		return questions.map((q: any) => ({
-			...q,
-			courseName: q.chapter?.course?.name || '',
-			chapterName: q.chapter?.name || '',
-		}));
+		// 如果所有重试都失败，抛出最后一个错误
+		throw lastError;
 	}
 
 	/**
