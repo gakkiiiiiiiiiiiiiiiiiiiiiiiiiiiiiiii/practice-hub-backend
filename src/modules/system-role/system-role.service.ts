@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Role } from '../../database/entities/role.entity';
@@ -20,6 +20,7 @@ export class SystemRoleService implements OnModuleInit {
 		private rolePermissionRepository: Repository<RolePermission>,
 		@InjectRepository(SysUser)
 		private sysUserRepository: Repository<SysUser>,
+		@Inject(forwardRef(() => AuthService))
 		private readonly authService: AuthService,
 	) {}
 
