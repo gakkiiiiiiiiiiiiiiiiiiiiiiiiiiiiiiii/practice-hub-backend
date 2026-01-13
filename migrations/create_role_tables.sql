@@ -25,8 +25,24 @@ CREATE TABLE IF NOT EXISTS `sys_role_permission` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='角色权限关联表';
 
 -- 为 sys_user 表添加 role_id 字段（如果不存在）
-ALTER TABLE `sys_user` 
-ADD COLUMN IF NOT EXISTS `role_id` int(11) NULL COMMENT '角色ID（关联 sys_role 表）' AFTER `role`;
+-- MySQL 5.7+ 不支持 IF NOT EXISTS，需要先检查
+SET @dbname = DATABASE();
+SET @tablename = 'sys_user';
+SET @columnname = 'role_id';
+SET @preparedStatement = (SELECT IF(
+  (
+    SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE
+      (TABLE_SCHEMA = @dbname)
+      AND (TABLE_NAME = @tablename)
+      AND (COLUMN_NAME = @columnname)
+  ) > 0,
+  'SELECT 1',
+  CONCAT('ALTER TABLE ', @tablename, ' ADD COLUMN ', @columnname, ' int(11) NULL COMMENT ''角色ID（关联 sys_role 表）'' AFTER `role`')
+));
+PREPARE alterIfNotExists FROM @preparedStatement;
+EXECUTE alterIfNotExists;
+DEALLOCATE PREPARE alterIfNotExists;
 
 -- 添加外键约束（可选，如果已有数据需要先处理）
 -- ALTER TABLE `sys_user` 

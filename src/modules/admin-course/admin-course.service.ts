@@ -9,8 +9,10 @@ import { ExamRecord } from '../../database/entities/exam-record.entity';
 import { UserWrongBook } from '../../database/entities/user-wrong-book.entity';
 import { UserAnswerLog } from '../../database/entities/user-answer-log.entity';
 import { UserCollection } from '../../database/entities/user-collection.entity';
+import { CourseRecommendation } from '../../database/entities/course-recommendation.entity';
 import { CreateCourseDto } from './dto/create-course.dto';
 import { UpdateCourseDto } from './dto/update-course.dto';
+import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.dto';
 
 @Injectable()
 export class AdminCourseService {
@@ -31,6 +33,8 @@ export class AdminCourseService {
     private userAnswerLogRepository: Repository<UserAnswerLog>,
     @InjectRepository(UserCollection)
     private userCollectionRepository: Repository<UserCollection>,
+    @InjectRepository(CourseRecommendation)
+    private courseRecommendationRepository: Repository<CourseRecommendation>,
   ) {}
 
   /**
@@ -148,6 +152,53 @@ export class AdminCourseService {
     // 10. 最后删除课程
     await this.courseRepository.remove(course);
     return { success: true };
+  }
+
+  /**
+   * 获取相关推荐配置
+   * @param courseId 课程ID，不传或传null表示获取公共配置
+   */
+  async getRecommendations(courseId?: number | null) {
+    const recommendation = await this.courseRecommendationRepository.findOne({
+      where: { course_id: courseId ?? null },
+    });
+
+    if (!recommendation) {
+      return {
+        courseId: courseId ?? null,
+        recommendedCourseIds: [],
+      };
+    }
+
+    return {
+      courseId: recommendation.course_id,
+      recommendedCourseIds: recommendation.recommended_course_ids || [],
+    };
+  }
+
+  /**
+   * 更新相关推荐配置
+   */
+  async updateRecommendations(dto: UpdateRecommendationsDto) {
+    const courseId = dto.courseId ?? null;
+
+    // 查找是否已存在配置
+    let recommendation = await this.courseRecommendationRepository.findOne({
+      where: { course_id: courseId },
+    });
+
+    if (recommendation) {
+      // 更新现有配置
+      recommendation.recommended_course_ids = dto.recommendedCourseIds;
+      return await this.courseRecommendationRepository.save(recommendation);
+    } else {
+      // 创建新配置
+      recommendation = this.courseRecommendationRepository.create({
+        course_id: courseId,
+        recommended_course_ids: dto.recommendedCourseIds,
+      });
+      return await this.courseRecommendationRepository.save(recommendation);
+    }
   }
 }
 

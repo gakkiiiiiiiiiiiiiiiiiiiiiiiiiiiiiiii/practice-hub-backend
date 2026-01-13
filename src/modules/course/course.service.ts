@@ -1,9 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
+import { CourseRecommendation } from '../../database/entities/course-recommendation.entity';
 
 @Injectable()
 export class CourseService {
@@ -14,6 +15,8 @@ export class CourseService {
     private chapterRepository: Repository<Chapter>,
     @InjectRepository(UserCourseAuth)
     private userCourseAuthRepository: Repository<UserCourseAuth>,
+    @InjectRepository(CourseRecommendation)
+    private courseRecommendationRepository: Repository<CourseRecommendation>,
   ) {}
 
   /**
@@ -76,6 +79,37 @@ export class CourseService {
       chapters,
       hasAuth,
     };
+  }
+
+  /**
+   * 获取课程相关推荐
+   * 优先使用课程级别的配置，如果没有则使用公共配置
+   */
+  async getRecommendations(courseId?: number) {
+    // 先查找课程级别的配置
+    let recommendation = await this.courseRecommendationRepository.findOne({
+      where: { course_id: courseId || null },
+    });
+
+    // 如果没有课程级别的配置，查找公共配置
+    if (!recommendation) {
+      recommendation = await this.courseRecommendationRepository.findOne({
+        where: { course_id: null },
+      });
+    }
+
+    // 如果没有配置，返回空数组
+    if (!recommendation || !recommendation.recommended_course_ids || recommendation.recommended_course_ids.length === 0) {
+      return [];
+    }
+
+    // 获取推荐的课程详情
+    const recommendedCourses = await this.courseRepository.find({
+      where: { id: In(recommendation.recommended_course_ids) },
+      order: { sort: 'ASC' },
+    });
+
+    return recommendedCourses;
   }
 }
 

@@ -23,6 +23,7 @@ import { ExamConfig } from './entities/exam-config.entity';
 import { ExamRecord } from './entities/exam-record.entity';
 import { Role } from './entities/role.entity';
 import { RolePermission } from './entities/role-permission.entity';
+import { CourseRecommendation } from './entities/course-recommendation.entity';
 
 @Module({
 	imports: [
@@ -50,6 +51,7 @@ import { RolePermission } from './entities/role-permission.entity';
 			ExamRecord,
 			Role,
 			RolePermission,
+			CourseRecommendation,
 		]),
 	],
 	exports: [TypeOrmModule],

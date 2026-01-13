@@ -21,6 +21,7 @@ import { OperationLogInterceptor } from '../../common/interceptors/operation-log
 import { HttpExceptionFilter } from '../../common/filters/http-exception.filter';
 import { CreateCourseDto } from './dto/create-course.dto';
 import { UpdateCourseDto } from './dto/update-course.dto';
+import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.dto';
 
 @ApiTags('管理后台-课程管理')
 @Controller('admin/courses')
@@ -64,6 +65,20 @@ export class AdminCourseController {
   @ApiOperation({ summary: '删除课程' })
   async deleteCourse(@Param('id') id: number) {
     const result = await this.adminCourseService.deleteCourse(+id);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('recommendations')
+  @ApiOperation({ summary: '获取相关推荐配置' })
+  async getRecommendations(@Query('courseId') courseId?: number) {
+    const result = await this.adminCourseService.getRecommendations(courseId ? +courseId : null);
+    return CommonResponseDto.success(result);
+  }
+
+  @Put('recommendations')
+  @ApiOperation({ summary: '更新相关推荐配置' })
+  async updateRecommendations(@Body() dto: UpdateRecommendationsDto) {
+    const result = await this.adminCourseService.updateRecommendations(dto);
     return CommonResponseDto.success(result);
   }
 }

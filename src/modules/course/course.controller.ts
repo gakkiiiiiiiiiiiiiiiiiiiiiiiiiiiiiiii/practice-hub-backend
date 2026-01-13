@@ -31,5 +31,12 @@ export class CourseController {
     const result = await this.courseService.getCourseDetail(+id, userId);
     return CommonResponseDto.success(result);
   }
+
+  @Get('recommendations')
+  @ApiOperation({ summary: '获取课程相关推荐' })
+  async getRecommendations(@Query('courseId') courseId?: number) {
+    const result = await this.courseService.getRecommendations(courseId ? +courseId : undefined);
+    return CommonResponseDto.success(result);
+  }
 }
 
