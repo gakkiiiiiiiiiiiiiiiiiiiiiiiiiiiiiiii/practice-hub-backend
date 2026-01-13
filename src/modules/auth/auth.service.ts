@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -9,6 +9,7 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { SysUser } from '../../database/entities/sys-user.entity';
 import { ConfigService } from '@nestjs/config';
 import { DistributorService } from '../distributor/distributor.service';
+import { SystemRoleService } from '../system-role/system-role.service';
 
 @Injectable()
 export class AuthService {
@@ -20,6 +21,8 @@ export class AuthService {
 		private jwtService: JwtService,
 		private configService: ConfigService,
 		private distributorService: DistributorService,
+		@Inject(forwardRef(() => SystemRoleService))
+		private systemRoleService: SystemRoleService,
 	) {}
 
 	/**
@@ -207,8 +210,20 @@ export class AuthService {
 
 	/**
 	 * 根据角色获取权限列表
+	 * 优先从数据库读取，如果数据库中没有则使用硬编码的权限（向后兼容）
 	 */
-	getPermissionsByRole(role: string): string[] {
+	async getPermissionsByRole(role: string | number): Promise<string[]> {
+		try {
+			// 尝试从数据库读取权限
+			const permissions = await this.systemRoleService.getPermissionsByRoleIdOrValue(role);
+			if (permissions && permissions.length > 0) {
+				return permissions;
+			}
+		} catch (error) {
+			// 如果数据库中没有该角色，继续使用硬编码权限
+		}
+
+		// 回退到硬编码权限（向后兼容）
 		const permissionMap: Record<string, string[]> = {
 			super_admin: [
 				'dashboard:view',
@@ -273,6 +288,6 @@ export class AuthService {
 			],
 		};
 
-		return permissionMap[role] || [];
+		return permissionMap[String(role)] || [];
 	}
 }

@@ -31,7 +31,7 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: '获取当前管理员信息' })
   async getAdminInfo(@CurrentUser() user: any) {
-    const permissions = this.authService.getPermissionsByRole(user.role);
+    const permissions = await this.authService.getPermissionsByRole(user.role);
     return CommonResponseDto.success({
       id: user.adminId,
       role: user.role,

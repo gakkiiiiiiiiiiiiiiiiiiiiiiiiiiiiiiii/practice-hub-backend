@@ -21,6 +21,8 @@ import { DistributionOrder } from './entities/distribution-order.entity';
 import { DistributionConfig } from './entities/distribution-config.entity';
 import { ExamConfig } from './entities/exam-config.entity';
 import { ExamRecord } from './entities/exam-record.entity';
+import { Role } from './entities/role.entity';
+import { RolePermission } from './entities/role-permission.entity';
 
 @Module({
 	imports: [
@@ -46,6 +48,8 @@ import { ExamRecord } from './entities/exam-record.entity';
 			DistributionConfig,
 			ExamConfig,
 			ExamRecord,
+			Role,
+			RolePermission,
 		]),
 	],
 	exports: [TypeOrmModule],

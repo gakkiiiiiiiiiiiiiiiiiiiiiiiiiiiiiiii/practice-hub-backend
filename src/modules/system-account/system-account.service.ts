@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { SysUser } from '../../database/entities/sys-user.entity';
+import { Role } from '../../database/entities/role.entity';
 import { GetAccountListDto } from './dto/get-account-list.dto';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
@@ -12,6 +13,8 @@ export class SystemAccountService {
 	constructor(
 		@InjectRepository(SysUser)
 		private sysUserRepository: Repository<SysUser>,
+		@InjectRepository(Role)
+		private roleRepository: Repository<Role>,
 	) {}
 
 	/**
@@ -107,6 +110,12 @@ export class SystemAccountService {
 			throw new BadRequestException('用户名已存在');
 		}
 
+		// 根据角色枚举值查找角色ID
+		const roleEntity = await this.roleRepository.findOne({ where: { value: dto.role } });
+		if (!roleEntity) {
+			throw new BadRequestException(`角色 ${dto.role} 不存在`);
+		}
+
 		// 加密密码
 		const hashedPassword = await bcrypt.hash(dto.password, 10);
 
@@ -114,7 +123,8 @@ export class SystemAccountService {
 		const user = this.sysUserRepository.create({
 			username: dto.username,
 			password: hashedPassword,
-			role: dto.role,
+			role: dto.role, // 保留枚举值用于兼容
+			role_id: roleEntity.id, // 关联角色表
 			status: dto.status !== undefined ? dto.status : 1, // 默认启用
 			balance: 0,
 		});
@@ -148,7 +158,12 @@ export class SystemAccountService {
 
 		// 更新角色（如果提供）
 		if (dto.role !== undefined) {
-			user.role = dto.role;
+			const roleEntity = await this.roleRepository.findOne({ where: { value: dto.role } });
+			if (!roleEntity) {
+				throw new BadRequestException(`角色 ${dto.role} 不存在`);
+			}
+			user.role = dto.role; // 保留枚举值用于兼容
+			user.role_id = roleEntity.id; // 更新角色关联
 		}
 
 		// 更新状态（如果提供）
