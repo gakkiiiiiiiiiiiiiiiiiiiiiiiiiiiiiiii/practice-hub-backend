@@ -71,8 +71,16 @@ export class AdminCourseController {
 
   @Get('recommendations')
   @ApiOperation({ summary: '获取相关推荐配置' })
-  async getRecommendations(@Query('courseId') courseId?: number) {
-    const result = await this.adminCourseService.getRecommendations(courseId ? +courseId : null);
+  async getRecommendations(@Query('courseId') courseId?: string | number) {
+    // 处理 courseId：如果为空、undefined 或无效，则传递 null
+    let parsedCourseId: number | null = null;
+    if (courseId !== undefined && courseId !== null && courseId !== '') {
+      const numId = typeof courseId === 'string' ? parseInt(courseId, 10) : courseId;
+      if (!isNaN(numId) && numId > 0) {
+        parsedCourseId = numId;
+      }
+    }
+    const result = await this.adminCourseService.getRecommendations(parsedCourseId);
     return CommonResponseDto.success(result);
   }
 

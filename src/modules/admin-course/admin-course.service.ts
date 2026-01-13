@@ -159,8 +159,13 @@ export class AdminCourseService {
    * @param courseId 课程ID，不传或传null表示获取公共配置
    */
   async getRecommendations(courseId?: number | null) {
+    // 确保 courseId 是有效的数字或 null
+    const validCourseId = courseId !== undefined && courseId !== null && !isNaN(courseId) && courseId > 0 
+      ? courseId 
+      : null;
+    
     const recommendation = await this.courseRecommendationRepository.findOne({
-      where: { course_id: courseId ?? null },
+      where: { course_id: validCourseId },
     });
 
     if (!recommendation) {
