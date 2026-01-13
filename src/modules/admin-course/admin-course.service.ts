@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, IsNull } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { Question } from '../../database/entities/question.entity';
@@ -164,8 +164,13 @@ export class AdminCourseService {
       ? courseId 
       : null;
     
+    // 使用 IsNull() 显式处理 null 值查询
+    const whereCondition = validCourseId === null 
+      ? { course_id: IsNull() }
+      : { course_id: validCourseId };
+    
     const recommendation = await this.courseRecommendationRepository.findOne({
-      where: { course_id: validCourseId },
+      where: whereCondition,
     });
 
     if (!recommendation) {
@@ -185,11 +190,19 @@ export class AdminCourseService {
    * 更新相关推荐配置
    */
   async updateRecommendations(dto: UpdateRecommendationsDto) {
-    const courseId = dto.courseId ?? null;
+    // 确保 courseId 是有效的数字或 null
+    const courseId = dto.courseId !== undefined && dto.courseId !== null && !isNaN(dto.courseId) && dto.courseId > 0
+      ? dto.courseId
+      : null;
+
+    // 使用 IsNull() 显式处理 null 值查询
+    const whereCondition = courseId === null 
+      ? { course_id: IsNull() }
+      : { course_id: courseId };
 
     // 查找是否已存在配置
     let recommendation = await this.courseRecommendationRepository.findOne({
-      where: { course_id: courseId },
+      where: whereCondition,
     });
 
     if (recommendation) {
