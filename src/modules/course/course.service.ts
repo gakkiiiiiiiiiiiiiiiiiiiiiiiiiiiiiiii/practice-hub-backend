@@ -83,33 +83,64 @@ export class CourseService {
 
   /**
    * 获取课程相关推荐
-   * 优先使用课程级别的配置，如果没有则使用公共配置
+   * 优先使用课程级别的配置（course.recommended_course_ids），如果没有则使用公共配置（course_recommendation）
+   * 如果都没有配置，返回默认推荐（排除当前课程的其他课程）
    */
   async getRecommendations(courseId?: number) {
-    // 先查找课程级别的配置
-    let recommendation = await this.courseRecommendationRepository.findOne({
-      where: { course_id: courseId || null },
-    });
-
-    // 如果没有课程级别的配置，查找公共配置
-    if (!recommendation) {
-      recommendation = await this.courseRecommendationRepository.findOne({
-        where: { course_id: null },
+    let recommendedCourseIds: number[] = [];
+    
+    if (courseId !== undefined && courseId !== null) {
+      const numValue = typeof courseId === 'number' ? courseId : Number(courseId);
+      if (Number.isFinite(numValue) && !isNaN(numValue) && numValue > 0) {
+        // 先查找课程级别的配置（存储在 course 表中）
+        const course = await this.courseRepository.findOne({
+          where: { id: numValue },
+          select: ['id', 'recommended_course_ids'],
+        });
+        
+        if (course && course.recommended_course_ids && course.recommended_course_ids.length > 0) {
+          recommendedCourseIds = course.recommended_course_ids;
+        }
+      }
+    }
+    
+    // 如果没有课程级别的配置，查找公共配置（course_recommendation 表）
+    if (recommendedCourseIds.length === 0) {
+      const recommendation = await this.courseRecommendationRepository.findOne({
+        order: { id: 'ASC' }, // 获取第一条记录（应该只有一条）
       });
+      
+      if (recommendation && recommendation.recommended_course_ids && recommendation.recommended_course_ids.length > 0) {
+        recommendedCourseIds = recommendation.recommended_course_ids;
+      }
     }
 
-    // 如果没有配置，返回空数组
-    if (!recommendation || !recommendation.recommended_course_ids || recommendation.recommended_course_ids.length === 0) {
-      return [];
+    // 如果有配置的推荐课程ID，返回这些课程
+    if (recommendedCourseIds.length > 0) {
+      const recommendedCourses = await this.courseRepository.find({
+        where: { id: In(recommendedCourseIds) },
+        order: { sort: 'ASC' },
+      });
+      return recommendedCourses;
     }
 
-    // 获取推荐的课程详情
-    const recommendedCourses = await this.courseRepository.find({
-      where: { id: In(recommendation.recommended_course_ids) },
-      order: { sort: 'ASC' },
-    });
-
-    return recommendedCourses;
+    // 如果没有配置或配置为空，返回默认推荐（排除当前课程的其他课程）
+    const queryBuilder = this.courseRepository.createQueryBuilder('course');
+    queryBuilder.orderBy('course.sort', 'ASC');
+    
+    // 如果有当前课程ID，排除它
+    if (courseId !== undefined && courseId !== null) {
+      const numValue = typeof courseId === 'number' ? courseId : Number(courseId);
+      if (Number.isFinite(numValue) && !isNaN(numValue) && numValue > 0) {
+        queryBuilder.where('course.id != :courseId', { courseId: numValue });
+      }
+    }
+    
+    // 限制返回数量，避免返回过多课程
+    queryBuilder.limit(10);
+    
+    const defaultCourses = await queryBuilder.getMany();
+    return defaultCourses;
   }
 }
 

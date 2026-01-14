@@ -3,21 +3,15 @@ import { Course } from './course.entity';
 
 /**
  * 课程相关推荐实体
- * course_id 为 null 时表示公共配置，否则表示该课程的单独配置
+ * 只用于存储公共配置（course_id 始终为 null）
+ * 课程级别的推荐配置存储在 course 表的 recommended_course_ids 字段中
  */
 @Entity('course_recommendation')
 export class CourseRecommendation {
 	@PrimaryGeneratedColumn()
 	id: number;
 
-	@Column({ type: 'int', nullable: true, comment: '课程ID，null表示公共配置' })
-	course_id: number | null;
-
-	@ManyToOne(() => Course, { nullable: true })
-	@JoinColumn({ name: 'course_id' })
-	course: Course | null;
-
-	@Column({ type: 'json', comment: '推荐课程ID列表' })
+	@Column({ type: 'json', comment: '推荐课程ID列表（JSON数组）' })
 	recommended_course_ids: number[];
 
 	@CreateDateColumn()

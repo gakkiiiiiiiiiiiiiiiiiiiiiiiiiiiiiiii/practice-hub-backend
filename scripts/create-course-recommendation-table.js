@@ -1,28 +1,29 @@
 const mysql = require('mysql2/promise');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '../.env') });
-
-// 从环境变量读取数据库配置
-const DB_CONFIG = {
-	host: process.env.REMOTE_DB_HOST || process.env.DB_HOST || 'localhost',
-	port: parseInt(process.env.REMOTE_DB_PORT || process.env.DB_PORT || '3306'),
-	user: process.env.REMOTE_DB_USERNAME || process.env.DB_USERNAME || 'root',
-	password: process.env.REMOTE_DB_PASSWORD || process.env.DB_PASSWORD || '',
-	database: process.env.REMOTE_DB_DATABASE || process.env.DB_DATABASE || 'practice_hub',
-};
+const dotenv = require('dotenv');
 
 // 检查是否使用远程数据库
 const isRemote = process.argv.includes('--remote');
 
-// 如果是远程，使用 REMOTE_DB_* 环境变量
-if (isRemote) {
-	DB_CONFIG.host = process.env.REMOTE_DB_HOST;
-	DB_CONFIG.port = parseInt(process.env.REMOTE_DB_PORT || '3306');
-	DB_CONFIG.user = process.env.REMOTE_DB_USERNAME;
-	DB_CONFIG.password = process.env.REMOTE_DB_PASSWORD;
-	DB_CONFIG.database = process.env.REMOTE_DB_DATABASE || 'practice_hub';
+// 加载环境变量
+const envPath = path.join(__dirname, '../.env');
+const envRemotePath = path.join(__dirname, '../.env.remote');
+if (isRemote && fs.existsSync(envRemotePath)) {
+	dotenv.config({ path: envRemotePath });
+	console.log('✓ 已加载环境变量文件: .env.remote');
+} else if (fs.existsSync(envPath)) {
+	dotenv.config({ path: envPath });
 }
+
+// 从环境变量读取数据库配置
+const DB_CONFIG = {
+	host: isRemote ? process.env.REMOTE_DB_HOST || 'localhost' : process.env.DB_HOST || 'localhost',
+	port: isRemote ? parseInt(process.env.REMOTE_DB_PORT || '3306') : parseInt(process.env.DB_PORT || '3306'),
+	user: isRemote ? process.env.REMOTE_DB_USERNAME || 'root' : process.env.DB_USERNAME || 'root',
+	password: isRemote ? process.env.REMOTE_DB_PASSWORD || '' : process.env.DB_PASSWORD || '',
+	database: isRemote ? process.env.REMOTE_DB_DATABASE || 'practice_hub' : process.env.DB_DATABASE || 'practice_hub',
+};
 
 async function checkTableExists(connection, tableName) {
 	try {
@@ -98,7 +99,9 @@ async function createCourseRecommendationTable() {
 
 		console.log('\n表结构:');
 		columns.forEach((col) => {
-			console.log(`  - ${col.COLUMN_NAME}: ${col.COLUMN_TYPE} ${col.IS_NULLABLE === 'YES' ? 'NULL' : 'NOT NULL'} ${col.COLUMN_COMMENT ? `(${col.COLUMN_COMMENT})` : ''}`);
+			console.log(
+				`  - ${col.COLUMN_NAME}: ${col.COLUMN_TYPE} ${col.IS_NULLABLE === 'YES' ? 'NULL' : 'NOT NULL'}${col.COLUMN_COMMENT ? ` (${col.COLUMN_COMMENT})` : ''}`
+			);
 		});
 
 		console.log('\n========================================');

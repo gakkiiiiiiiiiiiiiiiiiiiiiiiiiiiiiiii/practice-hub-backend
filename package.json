@@ -44,6 +44,8 @@
 		"migrate:role:remote": "node scripts/create-role-tables.js --remote",
 		"migrate:recommendation": "node scripts/create-course-recommendation-table.js",
 		"migrate:recommendation:remote": "node scripts/create-course-recommendation-table.js --remote",
+		"update:recommendation": "node scripts/update-course-recommendation-structure.js",
+		"update:recommendation:remote": "node scripts/update-course-recommendation-structure.js --remote",
 		"test-data": "node scripts/insert-test-data.js",
 		"test-data:remote": "node scripts/insert-test-data.js --remote",
 		"verify-data": "node scripts/verify-test-data.js",

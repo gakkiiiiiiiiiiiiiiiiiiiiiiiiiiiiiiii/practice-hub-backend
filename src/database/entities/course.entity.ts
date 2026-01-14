@@ -42,6 +42,9 @@ export class Course {
 	@Column({ type: 'text', nullable: true })
 	introduction: string; // 课程介绍（富文本）
 
+	@Column({ type: 'json', nullable: true, comment: '推荐课程ID列表（JSON数组）' })
+	recommended_course_ids: number[] | null; // 课程推荐列表
+
 	@CreateDateColumn()
 	create_time: Date;
 

@@ -159,83 +159,93 @@ export class AdminCourseService {
    * @param courseId 课程ID，不传或传null表示获取公共配置
    */
   async getRecommendations(courseId?: number | null) {
-    // 确保 courseId 是有效的数字或 null
-    // 严格检查：必须是数字类型，且不是 NaN，且大于 0
-    let validCourseId: number | null = null;
+    // 如果 courseId 存在，从 course 表读取；如果为 null，从 course_recommendation 表读取公共配置
     
     if (courseId !== undefined && courseId !== null) {
-      // 确保是数字类型
+      // 验证 courseId
       const numValue = typeof courseId === 'number' ? courseId : Number(courseId);
-      
-      // 严格验证：必须是有限数字且大于 0
-      if (Number.isFinite(numValue) && !isNaN(numValue) && numValue > 0) {
-        validCourseId = numValue;
+      if (!Number.isFinite(numValue) || isNaN(numValue) || numValue <= 0) {
+        throw new Error(`无效的 courseId: ${courseId}`);
       }
-    }
-    
-    console.log('[getRecommendations Service] courseId:', courseId, 'validCourseId:', validCourseId);
-    
-    // 使用 QueryBuilder 显式构建查询，避免 TypeORM 处理 null 值的问题
-    const queryBuilder = this.courseRecommendationRepository.createQueryBuilder('recommendation');
-    
-    if (validCourseId === null) {
-      queryBuilder.where('recommendation.course_id IS NULL');
-    } else {
-      queryBuilder.where('recommendation.course_id = :courseId', { courseId: validCourseId });
-    }
-    
-    const recommendation = await queryBuilder.getOne();
-
-    if (!recommendation) {
+      
+      // 从 course 表读取课程推荐配置
+      const course = await this.courseRepository.findOne({
+        where: { id: numValue },
+        select: ['id', 'recommended_course_ids'],
+      });
+      
+      if (!course) {
+        throw new NotFoundException('课程不存在');
+      }
+      
       return {
-        courseId: courseId ?? null,
-        recommendedCourseIds: [],
+        courseId: numValue,
+        recommendedCourseIds: course.recommended_course_ids || [],
+      };
+    } else {
+      // 从 course_recommendation 表读取公共配置
+      // course_recommendation 表现在只存储公共配置（只有一条记录）
+      const recommendation = await this.courseRecommendationRepository.findOne({
+        order: { id: 'ASC' }, // 获取第一条记录（应该只有一条）
+      });
+      
+      return {
+        courseId: null,
+        recommendedCourseIds: recommendation?.recommended_course_ids || [],
       };
     }
-
-    return {
-      courseId: recommendation.course_id,
-      recommendedCourseIds: recommendation.recommended_course_ids || [],
-    };
   }
 
   /**
    * 更新相关推荐配置
+   * 如果 courseId 存在，更新 course 表；如果为 null，更新 course_recommendation 表的公共配置
    */
   async updateRecommendations(dto: UpdateRecommendationsDto) {
-    // 确保 courseId 是有效的数字或 null
-    let courseId: number | null = null;
-    
     if (dto.courseId !== undefined && dto.courseId !== null) {
+      // 更新课程级别的配置（存储在 course 表中）
       const numValue = typeof dto.courseId === 'number' ? dto.courseId : Number(dto.courseId);
-      if (Number.isFinite(numValue) && !isNaN(numValue) && numValue > 0) {
-        courseId = numValue;
+      if (!Number.isFinite(numValue) || isNaN(numValue) || numValue <= 0) {
+        throw new Error(`无效的 courseId: ${dto.courseId}`);
       }
-    }
-
-    // 使用 QueryBuilder 显式构建查询，避免 TypeORM 处理 null 值的问题
-    const queryBuilder = this.courseRecommendationRepository.createQueryBuilder('recommendation');
-    
-    if (courseId === null) {
-      queryBuilder.where('recommendation.course_id IS NULL');
-    } else {
-      queryBuilder.where('recommendation.course_id = :courseId', { courseId });
-    }
-
-    // 查找是否已存在配置
-    let recommendation = await queryBuilder.getOne();
-
-    if (recommendation) {
-      // 更新现有配置
-      recommendation.recommended_course_ids = dto.recommendedCourseIds;
-      return await this.courseRecommendationRepository.save(recommendation);
-    } else {
-      // 创建新配置
-      recommendation = this.courseRecommendationRepository.create({
-        course_id: courseId,
-        recommended_course_ids: dto.recommendedCourseIds,
+      
+      const course = await this.courseRepository.findOne({
+        where: { id: numValue },
       });
-      return await this.courseRecommendationRepository.save(recommendation);
+      
+      if (!course) {
+        throw new NotFoundException('课程不存在');
+      }
+      
+      course.recommended_course_ids = dto.recommendedCourseIds;
+      await this.courseRepository.save(course);
+      
+      return {
+        courseId: numValue,
+        recommendedCourseIds: dto.recommendedCourseIds,
+      };
+    } else {
+      // 更新公共配置（存储在 course_recommendation 表中）
+      // course_recommendation 表现在只存储公共配置（只有一条记录）
+      let recommendation = await this.courseRecommendationRepository.findOne({
+        order: { id: 'ASC' },
+      });
+      
+      if (recommendation) {
+        // 更新现有公共配置
+        recommendation.recommended_course_ids = dto.recommendedCourseIds;
+        await this.courseRecommendationRepository.save(recommendation);
+      } else {
+        // 创建新的公共配置（如果不存在）
+        recommendation = this.courseRecommendationRepository.create({
+          recommended_course_ids: dto.recommendedCourseIds,
+        });
+        await this.courseRecommendationRepository.save(recommendation);
+      }
+      
+      return {
+        courseId: null,
+        recommendedCourseIds: dto.recommendedCourseIds,
+      };
     }
   }
 }

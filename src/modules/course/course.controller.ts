@@ -34,8 +34,18 @@ export class CourseController {
 
   @Get('recommendations')
   @ApiOperation({ summary: '获取课程相关推荐' })
-  async getRecommendations(@Query('courseId') courseId?: number) {
-    const result = await this.courseService.getRecommendations(courseId ? +courseId : undefined);
+  async getRecommendations(@Query('courseId') courseId?: string | number) {
+    // 处理 courseId：如果为空、undefined 或无效，则传递 undefined
+    let parsedCourseId: number | undefined = undefined;
+    
+    if (courseId !== undefined && courseId !== null && courseId !== '') {
+      const numId = typeof courseId === 'string' ? parseInt(courseId, 10) : Number(courseId);
+      if (!isNaN(numId) && Number.isFinite(numId) && numId > 0) {
+        parsedCourseId = numId;
+      }
+    }
+    
+    const result = await this.courseService.getRecommendations(parsedCourseId);
     return CommonResponseDto.success(result);
   }
 }
