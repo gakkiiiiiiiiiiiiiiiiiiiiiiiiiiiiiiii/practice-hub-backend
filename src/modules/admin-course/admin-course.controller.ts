@@ -55,20 +55,8 @@ export class AdminCourseController {
     return CommonResponseDto.success(result);
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: '获取课程详情' })
-  async getCourseDetail(@Param('id') id: number) {
-    const result = await this.adminCourseService.getCourseDetail(+id);
-    return CommonResponseDto.success(result);
-  }
-
-  @Delete(':id')
-  @ApiOperation({ summary: '删除课程' })
-  async deleteCourse(@Param('id') id: number) {
-    const result = await this.adminCourseService.deleteCourse(+id);
-    return CommonResponseDto.success(result);
-  }
-
+  // 注意：具体的路由（recommendations）必须放在动态路由（:id）之前
+  // 否则 /admin/courses/recommendations 会被匹配为 /admin/courses/:id，其中 id = 'recommendations'
   @Get('recommendations')
   @ApiOperation({ summary: '获取相关推荐配置' })
   async getRecommendations(@Query('courseId') courseId?: string | number) {
@@ -96,6 +84,20 @@ export class AdminCourseController {
   @ApiOperation({ summary: '更新相关推荐配置' })
   async updateRecommendations(@Body() dto: UpdateRecommendationsDto) {
     const result = await this.adminCourseService.updateRecommendations(dto);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: '获取课程详情' })
+  async getCourseDetail(@Param('id') id: number) {
+    const result = await this.adminCourseService.getCourseDetail(+id);
+    return CommonResponseDto.success(result);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: '删除课程' })
+  async deleteCourse(@Param('id') id: number) {
+    const result = await this.adminCourseService.deleteCourse(+id);
     return CommonResponseDto.success(result);
   }
 }
