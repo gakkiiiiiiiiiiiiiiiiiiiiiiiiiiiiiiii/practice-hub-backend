@@ -39,34 +39,9 @@ async function bootstrap() {
 		})
 	);
 
-	// 跨域配置
-	// 安全：限制允许的来源，避免过于宽松的 CORS 配置
-	const allowedOrigins = process.env.ALLOWED_ORIGINS
-		? process.env.ALLOWED_ORIGINS.split(',').map((origin) => origin.trim())
-		: ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:8080']; // 开发环境默认允许的源
-
-	const nodeEnv = process.env.NODE_ENV || 'development';
-
+	// 跨域配置 - 允许所有来源
 	app.enableCors({
-		origin: (origin, callback) => {
-			// 允许没有 origin 的请求（如移动应用、Postman、OPTIONS预检请求等）
-			if (!origin) {
-				return callback(null, true);
-			}
-			// 检查 origin 是否在允许列表中
-			if (allowedOrigins.includes(origin)) {
-				callback(null, true);
-			} else {
-				// 开发环境允许所有来源，生产环境严格检查
-				if (nodeEnv === 'development') {
-					callback(null, true);
-				} else {
-					// 生产环境：记录被拒绝的origin以便调试
-					console.warn(`[CORS] 拒绝来源: ${origin}`);
-					callback(new Error('不允许的跨域请求'));
-				}
-			}
-		},
+		origin: true, // 允许所有来源
 		credentials: true,
 		methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
 		allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
