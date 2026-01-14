@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull } from 'typeorm';
+import { Repository, In, IsNull, Equal } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { Question } from '../../database/entities/question.entity';
@@ -160,18 +160,31 @@ export class AdminCourseService {
    */
   async getRecommendations(courseId?: number | null) {
     // 确保 courseId 是有效的数字或 null
-    const validCourseId = courseId !== undefined && courseId !== null && !isNaN(courseId) && courseId > 0 
-      ? courseId 
-      : null;
+    // 严格检查：必须是数字类型，且不是 NaN，且大于 0
+    let validCourseId: number | null = null;
     
-    // 使用 IsNull() 显式处理 null 值查询
-    const whereCondition = validCourseId === null 
-      ? { course_id: IsNull() }
-      : { course_id: validCourseId };
+    if (courseId !== undefined && courseId !== null) {
+      // 确保是数字类型
+      const numValue = typeof courseId === 'number' ? courseId : Number(courseId);
+      
+      // 严格验证：必须是有限数字且大于 0
+      if (Number.isFinite(numValue) && !isNaN(numValue) && numValue > 0) {
+        validCourseId = numValue;
+      }
+    }
     
-    const recommendation = await this.courseRecommendationRepository.findOne({
-      where: whereCondition,
-    });
+    console.log('[getRecommendations Service] courseId:', courseId, 'validCourseId:', validCourseId);
+    
+    // 使用 QueryBuilder 显式构建查询，避免 TypeORM 处理 null 值的问题
+    const queryBuilder = this.courseRecommendationRepository.createQueryBuilder('recommendation');
+    
+    if (validCourseId === null) {
+      queryBuilder.where('recommendation.course_id IS NULL');
+    } else {
+      queryBuilder.where('recommendation.course_id = :courseId', { courseId: validCourseId });
+    }
+    
+    const recommendation = await queryBuilder.getOne();
 
     if (!recommendation) {
       return {
@@ -191,19 +204,26 @@ export class AdminCourseService {
    */
   async updateRecommendations(dto: UpdateRecommendationsDto) {
     // 确保 courseId 是有效的数字或 null
-    const courseId = dto.courseId !== undefined && dto.courseId !== null && !isNaN(dto.courseId) && dto.courseId > 0
-      ? dto.courseId
-      : null;
+    let courseId: number | null = null;
+    
+    if (dto.courseId !== undefined && dto.courseId !== null) {
+      const numValue = typeof dto.courseId === 'number' ? dto.courseId : Number(dto.courseId);
+      if (Number.isFinite(numValue) && !isNaN(numValue) && numValue > 0) {
+        courseId = numValue;
+      }
+    }
 
-    // 使用 IsNull() 显式处理 null 值查询
-    const whereCondition = courseId === null 
-      ? { course_id: IsNull() }
-      : { course_id: courseId };
+    // 使用 QueryBuilder 显式构建查询，避免 TypeORM 处理 null 值的问题
+    const queryBuilder = this.courseRecommendationRepository.createQueryBuilder('recommendation');
+    
+    if (courseId === null) {
+      queryBuilder.where('recommendation.course_id IS NULL');
+    } else {
+      queryBuilder.where('recommendation.course_id = :courseId', { courseId });
+    }
 
     // 查找是否已存在配置
-    let recommendation = await this.courseRecommendationRepository.findOne({
-      where: whereCondition,
-    });
+    let recommendation = await queryBuilder.getOne();
 
     if (recommendation) {
       // 更新现有配置

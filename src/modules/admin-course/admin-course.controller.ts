@@ -74,12 +74,20 @@ export class AdminCourseController {
   async getRecommendations(@Query('courseId') courseId?: string | number) {
     // 处理 courseId：如果为空、undefined 或无效，则传递 null
     let parsedCourseId: number | null = null;
+    
+    // 调试日志
+    console.log('[getRecommendations] 原始 courseId:', courseId, '类型:', typeof courseId);
+    
     if (courseId !== undefined && courseId !== null && courseId !== '') {
-      const numId = typeof courseId === 'string' ? parseInt(courseId, 10) : courseId;
-      if (!isNaN(numId) && numId > 0) {
+      const numId = typeof courseId === 'string' ? parseInt(courseId, 10) : Number(courseId);
+      console.log('[getRecommendations] 转换后的 numId:', numId, 'isNaN:', isNaN(numId));
+      
+      if (!isNaN(numId) && Number.isFinite(numId) && numId > 0) {
         parsedCourseId = numId;
       }
     }
+    
+    console.log('[getRecommendations] 最终 parsedCourseId:', parsedCourseId);
     const result = await this.adminCourseService.getRecommendations(parsedCourseId);
     return CommonResponseDto.success(result);
   }
