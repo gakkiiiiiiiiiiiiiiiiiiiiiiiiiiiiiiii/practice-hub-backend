@@ -106,9 +106,13 @@ export class CourseService {
     
     // 如果没有课程级别的配置，查找公共配置（course_recommendation 表）
     if (recommendedCourseIds.length === 0) {
-      const recommendation = await this.courseRecommendationRepository.findOne({
-        order: { id: 'ASC' }, // 获取第一条记录（应该只有一条）
+      // 使用 find 方法获取第一条记录，因为 findOne 需要 where 条件
+      const recommendations = await this.courseRecommendationRepository.find({
+        order: { id: 'ASC' },
+        take: 1, // 只取第一条记录
       });
+      
+      const recommendation = recommendations.length > 0 ? recommendations[0] : null;
       
       if (recommendation && recommendation.recommended_course_ids && recommendation.recommended_course_ids.length > 0) {
         recommendedCourseIds = recommendation.recommended_course_ids;

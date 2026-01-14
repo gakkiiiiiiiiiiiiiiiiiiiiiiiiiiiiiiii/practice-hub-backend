@@ -185,9 +185,13 @@ export class AdminCourseService {
     } else {
       // 从 course_recommendation 表读取公共配置
       // course_recommendation 表现在只存储公共配置（只有一条记录）
-      const recommendation = await this.courseRecommendationRepository.findOne({
-        order: { id: 'ASC' }, // 获取第一条记录（应该只有一条）
+      // 使用 find 方法获取第一条记录，因为 findOne 需要 where 条件
+      const recommendations = await this.courseRecommendationRepository.find({
+        order: { id: 'ASC' },
+        take: 1, // 只取第一条记录
       });
+      
+      const recommendation = recommendations.length > 0 ? recommendations[0] : null;
       
       return {
         courseId: null,
@@ -226,9 +230,13 @@ export class AdminCourseService {
     } else {
       // 更新公共配置（存储在 course_recommendation 表中）
       // course_recommendation 表现在只存储公共配置（只有一条记录）
-      let recommendation = await this.courseRecommendationRepository.findOne({
+      // 使用 find 方法获取第一条记录，因为 findOne 需要 where 条件
+      const recommendations = await this.courseRecommendationRepository.find({
         order: { id: 'ASC' },
+        take: 1, // 只取第一条记录
       });
+      
+      let recommendation = recommendations.length > 0 ? recommendations[0] : null;
       
       if (recommendation) {
         // 更新现有公共配置
