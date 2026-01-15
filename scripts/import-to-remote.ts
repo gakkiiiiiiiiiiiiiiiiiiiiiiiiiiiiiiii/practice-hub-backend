@@ -353,7 +353,7 @@ async function checkAndFixRemoteDatabase(remoteDataSource: DataSource): Promise<
 			console.log('   请在远程数据库上执行以下命令之一：');
 			console.log('   1. npm run migrate (如果远程服务器有代码)');
 			console.log('   2. 手动执行 migrations/migrate_subject_to_course.sql');
-			console.log('   3. 使用智能迁移脚本: node scripts/smart-migration.js\n');
+			console.log('   3. 使用通用迁移脚本: npm run migrate:remote\n');
 			console.log('   或者，你可以先导入数据，然后手动执行迁移。\n');
 		} else {
 			console.log('  ✅ 远程数据库结构检查通过\n');

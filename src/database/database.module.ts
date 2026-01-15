@@ -24,6 +24,7 @@ import { ExamRecord } from './entities/exam-record.entity';
 import { Role } from './entities/role.entity';
 import { RolePermission } from './entities/role-permission.entity';
 import { CourseRecommendation } from './entities/course-recommendation.entity';
+import { Banner } from './entities/banner.entity';
 
 @Module({
 	imports: [
@@ -52,6 +53,7 @@ import { CourseRecommendation } from './entities/course-recommendation.entity';
 			Role,
 			RolePermission,
 			CourseRecommendation,
+			Banner,
 		]),
 	],
 	exports: [TypeOrmModule],

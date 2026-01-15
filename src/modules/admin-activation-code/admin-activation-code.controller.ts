@@ -24,6 +24,7 @@ import { OperationLogInterceptor } from '../../common/interceptors/operation-log
 import { GenerateCodeDto } from './dto/generate-code.dto';
 import { GetCodeListDto } from './dto/get-code-list.dto';
 import { ActivationCodeStatus } from '../../database/entities/activation-code.entity';
+import { BuyCodeDto } from './dto/buy-code.dto';
 
 @ApiTags('管理后台-激活码管理')
 @Controller('admin/codes')
@@ -38,6 +39,17 @@ export class AdminActivationCodeController {
   @ApiOperation({ summary: '生成激活码' })
   async generateCodes(@CurrentUser() user: any, @Body() dto: GenerateCodeDto) {
     const result = await this.adminActivationCodeService.generateCodes(user.adminId, dto);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('buy')
+  @Roles(AdminRole.AGENT)
+  @ApiOperation({ summary: '购买激活码（代理商）' })
+  async buyCodes(@CurrentUser() user: any, @Body() dto: BuyCodeDto) {
+    const result = await this.adminActivationCodeService.generateCodes(user.adminId, {
+      course_id: dto.courseId,
+      count: dto.count,
+    });
     return CommonResponseDto.success(result);
   }
 

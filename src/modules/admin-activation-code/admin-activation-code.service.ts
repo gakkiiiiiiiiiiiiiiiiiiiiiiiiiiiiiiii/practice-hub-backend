@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { ActivationCode, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
+import { Course } from '../../database/entities/course.entity';
 import { SysUser, AdminRole } from '../../database/entities/sys-user.entity';
 import { GenerateCodeDto } from './dto/generate-code.dto';
 
@@ -13,6 +14,8 @@ export class AdminActivationCodeService {
     private activationCodeRepository: Repository<ActivationCode>,
     @InjectRepository(SysUser)
     private sysUserRepository: Repository<SysUser>,
+    @InjectRepository(Course)
+    private courseRepository: Repository<Course>,
   ) {}
 
   /**
@@ -27,10 +30,15 @@ export class AdminActivationCodeService {
 
     // SUPER_ADMIN 可以免费生成，AGENT 需要检查余额
     if (agent.role === AdminRole.AGENT) {
+      const course = await this.courseRepository.findOne({ where: { id: dto.course_id } });
+      if (!course) {
+        throw new BadRequestException('课程不存在');
+      }
+
+      const unitPrice = dto.price ?? course.agent_price ?? course.price ?? 0;
 
       // 校验余额（如果设置了单价）
-      const codePrice = dto.price || 0;
-      const totalCost = codePrice * dto.count;
+      const totalCost = unitPrice * dto.count;
 
       if (totalCost > agent.balance) {
         throw new BadRequestException('余额不足');
@@ -58,8 +66,9 @@ export class AdminActivationCodeService {
 
     // 扣除余额（仅代理商）
     if (agent.role === AdminRole.AGENT) {
-      const codePrice = dto.price || 0;
-      const totalCost = codePrice * dto.count;
+      const course = await this.courseRepository.findOne({ where: { id: dto.course_id } });
+      const unitPrice = dto.price ?? course?.agent_price ?? course?.price ?? 0;
+      const totalCost = unitPrice * dto.count;
       if (totalCost > 0) {
         agent.balance -= totalCost;
         await this.sysUserRepository.save(agent);

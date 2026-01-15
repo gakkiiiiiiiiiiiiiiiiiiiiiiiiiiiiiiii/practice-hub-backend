@@ -31,6 +31,7 @@ import { DistributorModule } from './modules/distributor/distributor.module';
 import { ExamModule } from './modules/exam/exam.module';
 import { SystemAccountModule } from './modules/system-account/system-account.module';
 import { SystemRoleModule } from './modules/system-role/system-role.module';
+import { BannerModule } from './modules/banner/banner.module';
 
 @Module({
   imports: [
@@ -132,6 +133,7 @@ import { SystemRoleModule } from './modules/system-role/system-role.module';
     ExamModule,
     SystemAccountModule,
     SystemRoleModule,
+    BannerModule,
   ],
   controllers: [AppController],
   providers: [

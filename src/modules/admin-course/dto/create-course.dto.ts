@@ -44,6 +44,12 @@ export class CreateCourseDto {
 	@IsNumber()
 	price?: number;
 
+	@ApiProperty({ description: '代理商售价', example: 79.99, required: false })
+	@IsOptional()
+	@Type(() => Number)
+	@IsNumber()
+	agent_price?: number;
+
 	@ApiProperty({ description: '是否免费', example: 0, enum: [0, 1] })
 	@IsOptional()
 	@Type(() => Number)

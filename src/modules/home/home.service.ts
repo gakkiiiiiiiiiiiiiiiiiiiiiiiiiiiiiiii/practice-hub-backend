@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { BannerService } from '../banner/banner.service';
 
 const QUOTES = [
   '宝剑锋从磨砺出，梅花香自苦寒来。',
@@ -14,7 +15,10 @@ const QUOTES = [
 
 @Injectable()
 export class HomeService {
-  constructor(private configService: ConfigService) {}
+  constructor(
+    private configService: ConfigService,
+    private bannerService: BannerService,
+  ) {}
 
   /**
    * 获取首页配置
@@ -23,14 +27,8 @@ export class HomeService {
     // 从配置或数据库获取倒计时日期
     const countdownDate = this.configService.get('COUNTDOWN_DATE', '2024-12-23');
     
-    // Banner 列表（可以从数据库或配置获取）
-    const banners = [
-      {
-        id: 1,
-        image: 'https://example.com/banner1.jpg',
-        link: '/pages/subject/1',
-      },
-    ];
+    // 从数据库获取启用的轮播图列表
+    const banners = await this.bannerService.getActiveBanners();
 
     return {
       countdown_date: countdownDate,

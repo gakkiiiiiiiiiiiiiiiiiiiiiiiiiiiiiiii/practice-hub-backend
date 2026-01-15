@@ -72,13 +72,20 @@ source migrations/migrate_subject_to_course.sql;
    DESCRIBE chapter;
    ```
 
-### 方法三：使用 Node.js 脚本执行
-
-创建一个执行脚本：
+### 方法三：使用通用迁移脚本（推荐）
 
 ```bash
-# 在 back-end 目录下执行
-node scripts/run-migration.js
+# 在 back-end 目录下执行（本地）
+npm run migrate
+
+# 远程数据库
+npm run migrate:remote
+
+# 只执行指定文件
+npm run migrate -- --file=update_feedback_for_admin.sql
+
+# 仅预览（不执行）
+npm run migrate -- --dry-run
 ```
 
 ## 执行步骤
@@ -96,13 +103,9 @@ docker exec practice-hub-mysql mysqldump -uroot -proot123456 practice_hub > back
 ### 执行迁移
 
 ```bash
-# 方法1：使用 MySQL 命令行
+# 通用迁移脚本（推荐）
 cd back-end
-mysql -h localhost -u root -p practice_hub < migrations/migrate_subject_to_course.sql
-
-# 方法2：使用 Docker
-cd back-end
-docker exec -i practice-hub-mysql mysql -uroot -proot123456 practice_hub < migrations/migrate_subject_to_course.sql
+npm run migrate
 ```
 
 ### 验证迁移结果
@@ -203,3 +206,9 @@ AND COLUMN_NAME = 'user_id';
 4. ✅ **迁移完成后，重启后端服务**
 5. ✅ **验证应用功能是否正常**
 
+## 通用迁移脚本说明
+
+1. 迁移脚本默认按文件名排序执行
+2. 自动创建 `schema_migrations` 记录执行历史
+3. 默认跳过以 `rollback_` 开头的 SQL 文件
+4. 如需重新执行，使用 `--force` 参数
