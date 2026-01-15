@@ -32,6 +32,7 @@ import { ExamModule } from './modules/exam/exam.module';
 import { SystemAccountModule } from './modules/system-account/system-account.module';
 import { SystemRoleModule } from './modules/system-role/system-role.module';
 import { BannerModule } from './modules/banner/banner.module';
+import { PageRouteModule } from './modules/page-route/page-route.module';
 
 @Module({
   imports: [
@@ -134,6 +135,7 @@ import { BannerModule } from './modules/banner/banner.module';
     SystemAccountModule,
     SystemRoleModule,
     BannerModule,
+    PageRouteModule,
   ],
   controllers: [AppController],
   providers: [
