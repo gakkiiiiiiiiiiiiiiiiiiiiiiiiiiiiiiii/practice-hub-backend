@@ -1,23 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BannerService } from '../banner/banner.service';
-
-const QUOTES = [
-  '宝剑锋从磨砺出，梅花香自苦寒来。',
-  '不经一番寒彻骨，怎得梅花扑鼻香。',
-  '路漫漫其修远兮，吾将上下而求索。',
-  '天行健，君子以自强不息。',
-  '业精于勤，荒于嬉；行成于思，毁于随。',
-  '书山有路勤为径，学海无涯苦作舟。',
-  '只要功夫深，铁杵磨成针。',
-  '不积跬步，无以至千里；不积小流，无以成江海。',
-];
+import { SystemService } from '../system/system.service';
 
 @Injectable()
 export class HomeService {
   constructor(
     private configService: ConfigService,
     private bannerService: BannerService,
+    private systemService: SystemService,
   ) {}
 
   /**
@@ -39,14 +30,21 @@ export class HomeService {
   /**
    * 获取每日励志语录
    * 根据日期生成固定的随机数，确保同一天返回相同的语录
+   * 从系统配置中读取提示语列表
    */
   async getDailyQuote() {
+    const quotes = await this.systemService.getDailyQuotes();
+    
+    if (quotes.length === 0) {
+      return { quote: '研途漫漫，终抵群星。' };
+    }
+
     const today = new Date().toISOString().split('T')[0];
     
     // 使用日期作为随机种子，确保同一天返回相同的语录
     const dateHash = today.split('-').reduce((acc, val) => acc + parseInt(val, 10), 0);
-    const randomIndex = dateHash % QUOTES.length;
-    const quote = QUOTES[randomIndex];
+    const randomIndex = dateHash % quotes.length;
+    const quote = quotes[randomIndex];
 
     return { quote };
   }

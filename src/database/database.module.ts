@@ -26,6 +26,7 @@ import { RolePermission } from './entities/role-permission.entity';
 import { CourseRecommendation } from './entities/course-recommendation.entity';
 import { Banner } from './entities/banner.entity';
 import { PageRoute } from './entities/page-route.entity';
+import { SystemConfig } from './entities/system-config.entity';
 
 @Module({
 	imports: [
@@ -56,6 +57,7 @@ import { PageRoute } from './entities/page-route.entity';
 			CourseRecommendation,
 			Banner,
 			PageRoute,
+			SystemConfig,
 		]),
 	],
 	exports: [TypeOrmModule],

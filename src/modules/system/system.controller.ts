@@ -7,6 +7,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { AdminRole } from '../../database/entities/sys-user.entity';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { SetCountdownDto } from './dto/set-countdown.dto';
+import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
 
 @ApiTags('系统管理')
 @Controller('admin')
@@ -28,6 +29,22 @@ export class SystemController {
   @ApiOperation({ summary: '获取操作日志列表' })
   async getOperationLogs(@Query('page') page?: number, @Query('pageSize') pageSize?: number) {
     const result = await this.systemService.getOperationLogs(page, pageSize);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('settings/daily-quotes')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取每日提示语列表' })
+  async getDailyQuotes() {
+    const result = await this.systemService.getDailyQuotes();
+    return CommonResponseDto.success(result);
+  }
+
+  @Put('settings/daily-quotes')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '设置每日提示语列表' })
+  async setDailyQuotes(@Body() dto: SetDailyQuotesDto) {
+    const result = await this.systemService.setDailyQuotes(dto);
     return CommonResponseDto.success(result);
   }
 }

@@ -3,13 +3,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { SysOperationLog } from '../../database/entities/sys-operation-log.entity';
+import { SystemConfig } from '../../database/entities/system-config.entity';
 import { SetCountdownDto } from './dto/set-countdown.dto';
+import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
 
 @Injectable()
 export class SystemService {
   constructor(
     @InjectRepository(SysOperationLog)
     private operationLogRepository: Repository<SysOperationLog>,
+    @InjectRepository(SystemConfig)
+    private systemConfigRepository: Repository<SystemConfig>,
     private configService: ConfigService,
   ) {}
 
@@ -39,6 +43,66 @@ export class SystemService {
       total,
       page,
       pageSize,
+    };
+  }
+
+  /**
+   * 获取每日提示语列表
+   */
+  async getDailyQuotes(): Promise<string[]> {
+    const config = await this.systemConfigRepository.findOne({
+      where: { configKey: 'daily_quotes' },
+    });
+
+    if (config && config.configValue) {
+      try {
+        const quotes = JSON.parse(config.configValue);
+        if (Array.isArray(quotes) && quotes.length > 0) {
+          return quotes;
+        }
+      } catch (e) {
+        console.error('解析提示语配置失败:', e);
+      }
+    }
+
+    // 如果没有配置，返回默认提示语
+    return [
+      '宝剑锋从磨砺出，梅花香自苦寒来。',
+      '不经一番寒彻骨，怎得梅花扑鼻香。',
+      '路漫漫其修远兮，吾将上下而求索。',
+      '天行健，君子以自强不息。',
+      '业精于勤，荒于嬉；行成于思，毁于随。',
+      '书山有路勤为径，学海无涯苦作舟。',
+      '只要功夫深，铁杵磨成针。',
+      '不积跬步，无以至千里；不积小流，无以成江海。',
+    ];
+  }
+
+  /**
+   * 设置每日提示语列表
+   */
+  async setDailyQuotes(dto: SetDailyQuotesDto) {
+    let config = await this.systemConfigRepository.findOne({
+      where: { configKey: 'daily_quotes' },
+    });
+
+    if (!config) {
+      config = this.systemConfigRepository.create({
+        configKey: 'daily_quotes',
+        configValue: JSON.stringify(dto.quotes),
+        description: '首页每日提示语列表',
+      });
+    } else {
+      config.configValue = JSON.stringify(dto.quotes);
+      config.updateTime = new Date();
+    }
+
+    await this.systemConfigRepository.save(config);
+
+    return {
+      success: true,
+      message: '提示语列表已更新',
+      quotes: dto.quotes,
     };
   }
 }
