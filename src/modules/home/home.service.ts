@@ -29,24 +29,18 @@ export class HomeService {
 
   /**
    * 获取每日励志语录
-   * 根据日期生成固定的随机数，确保同一天返回相同的语录
+   * 返回所有提示语列表，支持前端轮播显示
    * 从系统配置中读取提示语列表
    */
   async getDailyQuote() {
     const quotes = await this.systemService.getDailyQuotes();
     
     if (quotes.length === 0) {
-      return { quote: '研途漫漫，终抵群星。' };
+      return { quotes: ['研途漫漫，终抵群星。'] };
     }
 
-    const today = new Date().toISOString().split('T')[0];
-    
-    // 使用日期作为随机种子，确保同一天返回相同的语录
-    const dateHash = today.split('-').reduce((acc, val) => acc + parseInt(val, 10), 0);
-    const randomIndex = dateHash % quotes.length;
-    const quote = quotes[randomIndex];
-
-    return { quote };
+    // 返回所有提示语，由前端进行轮播
+    return { quotes };
   }
 }
 
