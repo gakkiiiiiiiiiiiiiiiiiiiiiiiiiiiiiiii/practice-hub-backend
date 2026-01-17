@@ -47,7 +47,7 @@ export class SystemService {
   }
 
   /**
-   * 获取每日提示语列表
+   * 获取广播消息列表
    */
   async getDailyQuotes(): Promise<string[]> {
     const config = await this.systemConfigRepository.findOne({
@@ -61,11 +61,11 @@ export class SystemService {
           return quotes;
         }
       } catch (e) {
-        console.error('解析提示语配置失败:', e);
+        console.error('解析广播消息配置失败:', e);
       }
     }
 
-    // 如果没有配置，返回默认提示语
+    // 如果没有配置，返回默认广播消息
     return [
       '宝剑锋从磨砺出，梅花香自苦寒来。',
       '不经一番寒彻骨，怎得梅花扑鼻香。',
@@ -79,7 +79,7 @@ export class SystemService {
   }
 
   /**
-   * 设置每日提示语列表
+   * 设置广播消息列表
    */
   async setDailyQuotes(dto: SetDailyQuotesDto) {
     let config = await this.systemConfigRepository.findOne({
@@ -90,7 +90,7 @@ export class SystemService {
       config = this.systemConfigRepository.create({
         configKey: 'daily_quotes',
         configValue: JSON.stringify(dto.quotes),
-        description: '首页每日提示语列表',
+        description: '首页广播消息列表',
       });
     } else {
       config.configValue = JSON.stringify(dto.quotes);
@@ -101,7 +101,7 @@ export class SystemService {
 
     return {
       success: true,
-      message: '提示语列表已更新',
+      message: '广播消息列表已更新',
       quotes: dto.quotes,
     };
   }

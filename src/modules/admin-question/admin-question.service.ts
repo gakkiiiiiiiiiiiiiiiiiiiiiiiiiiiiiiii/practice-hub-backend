@@ -784,12 +784,11 @@ export class AdminQuestionService {
 			{ width: 30 }, // 选项D
 			{ width: 20 }, // 答案
 			{ width: 50 }, // 解析
-			{ width: 12 }, // 难度
 		];
 
 		// 设置表头
 		const headerRow = worksheet.getRow(1);
-		headerRow.values = ['题型', '题干', '选项A', '选项B', '选项C', '选项D', '答案', '解析', '难度'];
+		headerRow.values = ['题型', '题干', '选项A', '选项B', '选项C', '选项D', '答案', '解析'];
 
 		// 设置表头样式
 		headerRow.font = { bold: true, size: 12 };
@@ -812,7 +811,6 @@ export class AdminQuestionService {
 				选项D: '选项D的内容',
 				答案: 'A',
 				解析: '这是解析内容',
-				难度: '中等',
 			},
 			{
 				题型: '多选',
@@ -823,7 +821,6 @@ export class AdminQuestionService {
 				选项D: '选项D的内容',
 				答案: 'A,B',
 				解析: '这是解析内容',
-				难度: '中等',
 			},
 			{
 				题型: '判断',
@@ -834,7 +831,6 @@ export class AdminQuestionService {
 				选项D: '',
 				答案: 'A',
 				解析: '这是解析内容',
-				难度: '简单',
 			},
 			{
 				题型: '填空',
@@ -845,7 +841,6 @@ export class AdminQuestionService {
 				选项D: '',
 				答案: '北京',
 				解析: '这是解析内容',
-				难度: '简单',
 			},
 		];
 
@@ -859,7 +854,6 @@ export class AdminQuestionService {
 				row.选项D,
 				row.答案,
 				row.解析,
-				row.难度,
 			]);
 			dataRow.height = 20;
 
@@ -876,7 +870,7 @@ export class AdminQuestionService {
 		// 添加说明行
 		const noteRow = worksheet.addRow([]);
 		noteRow.height = 30;
-		worksheet.mergeCells(`A${noteRow.number}:I${noteRow.number}`);
+		worksheet.mergeCells(`A${noteRow.number}:H${noteRow.number}`);
 		const noteCell = worksheet.getCell(`A${noteRow.number}`);
 		noteCell.value =
 			'填写说明：\n' +
@@ -884,8 +878,7 @@ export class AdminQuestionService {
 			'2. 题干：题目的主要内容，支持HTML格式\n' +
 			'3. 选项A-D：选择题的选项内容（判断题只需填写A和B，填空和简答题可不填）\n' +
 			'4. 答案：单选题填单个选项（如A），多选题填多个选项用逗号分隔（如A,B），判断题填A或B，填空题填答案内容\n' +
-			'5. 解析：题目的解析说明，支持HTML格式\n' +
-			'6. 难度：简单、中等、困难';
+			'5. 解析：题目的解析说明，支持HTML格式';
 		noteCell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
 		noteCell.font = { size: 10, color: { argb: 'FF666666' } };
 		noteCell.fill = {

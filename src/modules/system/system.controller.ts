@@ -34,7 +34,7 @@ export class SystemController {
 
   @Get('settings/daily-quotes')
   @Roles(AdminRole.SUPER_ADMIN)
-  @ApiOperation({ summary: '获取每日提示语列表' })
+  @ApiOperation({ summary: '获取广播消息列表' })
   async getDailyQuotes() {
     const result = await this.systemService.getDailyQuotes();
     return CommonResponseDto.success(result);
@@ -42,7 +42,7 @@ export class SystemController {
 
   @Put('settings/daily-quotes')
   @Roles(AdminRole.SUPER_ADMIN)
-  @ApiOperation({ summary: '设置每日提示语列表' })
+  @ApiOperation({ summary: '设置广播消息列表' })
   async setDailyQuotes(@Body() dto: SetDailyQuotesDto) {
     const result = await this.systemService.setDailyQuotes(dto);
     return CommonResponseDto.success(result);

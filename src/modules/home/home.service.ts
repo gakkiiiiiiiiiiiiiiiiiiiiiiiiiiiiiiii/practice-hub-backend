@@ -28,9 +28,9 @@ export class HomeService {
   }
 
   /**
-   * 获取每日励志语录
-   * 返回所有提示语列表，支持前端轮播显示
-   * 从系统配置中读取提示语列表
+   * 获取广播消息
+   * 返回所有广播消息列表，支持前端轮播显示
+   * 从系统配置中读取广播消息列表
    */
   async getDailyQuote() {
     const quotes = await this.systemService.getDailyQuotes();
@@ -39,7 +39,7 @@ export class HomeService {
       return { quotes: ['研途漫漫，终抵群星。'] };
     }
 
-    // 返回所有提示语，由前端进行轮播
+    // 返回所有广播消息，由前端进行轮播
     return { quotes };
   }
 }
