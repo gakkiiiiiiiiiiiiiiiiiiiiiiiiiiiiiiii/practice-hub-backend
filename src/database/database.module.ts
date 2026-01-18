@@ -27,6 +27,7 @@ import { CourseRecommendation } from './entities/course-recommendation.entity';
 import { Banner } from './entities/banner.entity';
 import { PageRoute } from './entities/page-route.entity';
 import { SystemConfig } from './entities/system-config.entity';
+import { UserNote } from './entities/user-note.entity';
 
 @Module({
 	imports: [
@@ -39,6 +40,7 @@ import { SystemConfig } from './entities/system-config.entity';
 			UserAnswerLog,
 			UserWrongBook,
 			UserCollection,
+			UserNote,
 			UserCourseAuth,
 			ActivationCode,
 			Order,

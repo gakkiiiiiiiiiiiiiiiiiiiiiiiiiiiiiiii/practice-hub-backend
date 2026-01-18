@@ -16,6 +16,7 @@ import { OrderModule } from './modules/order/order.module';
 import { ActivationCodeModule } from './modules/activation-code/activation-code.module';
 import { WrongBookModule } from './modules/wrong-book/wrong-book.module';
 import { CollectionModule } from './modules/collection/collection.module';
+import { NoteModule } from './modules/note/note.module';
 import { HomeModule } from './modules/home/home.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
@@ -119,6 +120,7 @@ import { PageRouteModule } from './modules/page-route/page-route.module';
     ActivationCodeModule,
     WrongBookModule,
     CollectionModule,
+    NoteModule,
     HomeModule,
     AdminModule, // 必须在 SystemModule 之前，避免路由冲突
     DashboardModule,
