@@ -56,6 +56,12 @@ export class CreateCourseDto {
 	@IsNumber()
 	is_free?: number;
 
+	@ApiProperty({ description: '有效期天数（仅付费课程有效），null表示永久有效', example: 30, required: false })
+	@IsOptional()
+	@Type(() => Number)
+	@IsNumber()
+	validity_days?: number | null;
+
 	@ApiProperty({ description: '排序', example: 0 })
 	@IsOptional()
 	@Type(() => Number)

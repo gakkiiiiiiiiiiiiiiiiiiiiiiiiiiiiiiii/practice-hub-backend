@@ -36,6 +36,9 @@ export class Course {
 	@Column({ type: 'tinyint', default: 0 })
 	is_free: number; // 0-付费, 1-免费
 
+	@Column({ type: 'int', nullable: true, comment: '有效期天数，null表示永久有效' })
+	validity_days: number | null; // 付费课程的有效期天数，null表示永久有效
+
 	@Column({ type: 'int', default: 0 })
 	student_count: number; // 学习人数
 

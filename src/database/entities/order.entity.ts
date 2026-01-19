@@ -2,9 +2,9 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateCol
 
 export enum OrderStatus {
 	PENDING = 'pending', // 待支付
-	PAID = 'paid', // 已支付
+	PAID = 'paid', // 支付完成
 	CANCELLED = 'cancelled', // 已取消
-	REFUNDED = 'refunded', // 已退款
+	AFTER_SALE = 'after_sale', // 售后
 }
 
 @Entity('order')

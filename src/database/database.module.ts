@@ -28,6 +28,7 @@ import { Banner } from './entities/banner.entity';
 import { PageRoute } from './entities/page-route.entity';
 import { SystemConfig } from './entities/system-config.entity';
 import { UserNote } from './entities/user-note.entity';
+import { OrderAfterSale } from './entities/order-after-sale.entity';
 
 @Module({
 	imports: [
@@ -60,6 +61,7 @@ import { UserNote } from './entities/user-note.entity';
 			Banner,
 			PageRoute,
 			SystemConfig,
+			OrderAfterSale,
 		]),
 	],
 	exports: [TypeOrmModule],

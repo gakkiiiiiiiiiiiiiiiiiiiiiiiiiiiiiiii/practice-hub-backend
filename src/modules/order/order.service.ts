@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { Course } from '../../database/entities/course.entity';
+import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { DistributorService } from '../distributor/distributor.service';
 
@@ -13,6 +14,8 @@ export class OrderService {
     private orderRepository: Repository<Order>,
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
+    @InjectRepository(UserCourseAuth)
+    private userCourseAuthRepository: Repository<UserCourseAuth>,
     @Inject(forwardRef(() => DistributorService))
     private distributorService: DistributorService,
   ) {}
@@ -80,6 +83,47 @@ export class OrderService {
     order.status = OrderStatus.PAID;
     await this.orderRepository.save(order);
 
+    // 获取课程信息
+    const course = await this.courseRepository.findOne({
+      where: { id: order.course_id },
+    });
+
+    if (course) {
+      // 计算过期时间
+      let expireTime: Date | null = null;
+      if (course.validity_days !== null && course.validity_days !== undefined) {
+        // 根据课程设置的有效期天数计算过期时间
+        expireTime = new Date();
+        expireTime.setDate(expireTime.getDate() + course.validity_days);
+      }
+      // 如果 validity_days 为 null，则 expireTime 保持为 null（永久有效）
+
+      // 检查是否已存在权限记录
+      const existingAuth = await this.userCourseAuthRepository.findOne({
+        where: {
+          user_id: order.user_id,
+          course_id: order.course_id,
+        },
+      });
+
+      if (!existingAuth) {
+        // 创建新的课程权限
+        await this.userCourseAuthRepository.save({
+          user_id: order.user_id,
+          course_id: order.course_id,
+          source: AuthSource.PURCHASE,
+          expire_time: expireTime,
+        });
+      } else {
+        // 如果已存在权限，更新过期时间（延长有效期）
+        // 如果新过期时间晚于当前过期时间，则更新
+        if (!existingAuth.expire_time || (expireTime && expireTime > existingAuth.expire_time)) {
+          existingAuth.expire_time = expireTime;
+          await this.userCourseAuthRepository.save(existingAuth);
+        }
+      }
+    }
+
     // 处理分销分成
     try {
       await this.distributorService.processOrderCommission(orderId);
@@ -95,7 +139,7 @@ export class OrderService {
    * 获取订单统计数量
    */
   async getOrderCounts(userId: number) {
-    const [pendingCount, paidCount, refundCount] = await Promise.all([
+    const [pendingCount, paidCount, afterSaleCount] = await Promise.all([
       this.orderRepository.count({
         where: {
           user_id: userId,
@@ -111,7 +155,7 @@ export class OrderService {
       this.orderRepository.count({
         where: {
           user_id: userId,
-          status: OrderStatus.REFUNDED,
+          status: OrderStatus.AFTER_SALE,
         },
       }),
     ]);
@@ -119,7 +163,7 @@ export class OrderService {
     return {
       pending: pendingCount,
       paid: paidCount,
-      refund: refundCount,
+      after_sale: afterSaleCount,
     };
   }
 }

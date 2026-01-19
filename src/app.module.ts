@@ -34,6 +34,8 @@ import { SystemAccountModule } from './modules/system-account/system-account.mod
 import { SystemRoleModule } from './modules/system-role/system-role.module';
 import { BannerModule } from './modules/banner/banner.module';
 import { PageRouteModule } from './modules/page-route/page-route.module';
+import { AfterSaleModule } from './modules/after-sale/after-sale.module';
+import { TrajectoryModule } from './modules/trajectory/trajectory.module';
 
 @Module({
   imports: [
@@ -138,6 +140,8 @@ import { PageRouteModule } from './modules/page-route/page-route.module';
     SystemRoleModule,
     BannerModule,
     PageRouteModule,
+    AfterSaleModule,
+    TrajectoryModule,
   ],
   controllers: [AppController],
   providers: [
