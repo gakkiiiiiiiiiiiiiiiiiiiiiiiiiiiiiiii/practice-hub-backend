@@ -33,8 +33,10 @@ export class CourseController {
   }
 
   @Get('recommendations')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: '获取课程相关推荐' })
-  async getRecommendations(@Query('courseId') courseId?: string | number) {
+  async getRecommendations(@Query('courseId') courseId?: string | number, @CurrentUser() user?: any) {
     // 处理 courseId：如果为空、undefined 或无效，则传递 undefined
     let parsedCourseId: number | undefined = undefined;
     
@@ -45,7 +47,8 @@ export class CourseController {
       }
     }
     
-    const result = await this.courseService.getRecommendations(parsedCourseId);
+    const userId = user?.userId;
+    const result = await this.courseService.getRecommendations(parsedCourseId, userId);
     return CommonResponseDto.success(result);
   }
 }

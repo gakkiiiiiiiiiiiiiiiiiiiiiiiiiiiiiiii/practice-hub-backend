@@ -57,6 +57,7 @@ export class CourseService {
 
     // 检查用户是否有权限
     let hasAuth = false;
+    let expireTime: Date | null = null;
     
     // 免费课程，直接有权限
     const price = Number(course.price) || 0;
@@ -71,13 +72,17 @@ export class CourseService {
           course_id: courseId,
         },
       });
-      hasAuth = !!auth && (!auth.expire_time || auth.expire_time > new Date());
+      if (auth) {
+        hasAuth = !auth.expire_time || auth.expire_time > new Date();
+        expireTime = auth.expire_time;
+      }
     }
 
     return {
       ...course,
       chapters,
       hasAuth,
+      expireTime,
     };
   }
 
@@ -85,8 +90,10 @@ export class CourseService {
    * 获取课程相关推荐
    * 优先使用课程级别的配置（course.recommended_course_ids），如果没有则使用公共配置（course_recommendation）
    * 如果都没有配置，返回默认推荐（排除当前课程的其他课程）
+   * @param courseId 当前课程ID（可选）
+   * @param userId 用户ID（可选，用于获取用户的课程权限和到期时间）
    */
-  async getRecommendations(courseId?: number) {
+  async getRecommendations(courseId?: number, userId?: number) {
     let recommendedCourseIds: number[] = [];
     
     if (courseId !== undefined && courseId !== null) {
@@ -120,31 +127,58 @@ export class CourseService {
     }
 
     // 如果有配置的推荐课程ID，返回这些课程
+    let recommendedCourses = [];
     if (recommendedCourseIds.length > 0) {
-      const recommendedCourses = await this.courseRepository.find({
+      recommendedCourses = await this.courseRepository.find({
         where: { id: In(recommendedCourseIds) },
         order: { sort: 'ASC' },
       });
-      return recommendedCourses;
+    } else {
+      // 如果没有配置或配置为空，返回默认推荐（排除当前课程的其他课程）
+      const queryBuilder = this.courseRepository.createQueryBuilder('course');
+      queryBuilder.orderBy('course.sort', 'ASC');
+      
+      // 如果有当前课程ID，排除它
+      if (courseId !== undefined && courseId !== null) {
+        const numValue = typeof courseId === 'number' ? courseId : Number(courseId);
+        if (Number.isFinite(numValue) && !isNaN(numValue) && numValue > 0) {
+          queryBuilder.where('course.id != :courseId', { courseId: numValue });
+        }
+      }
+      
+      // 限制返回数量，避免返回过多课程
+      queryBuilder.limit(10);
+      
+      recommendedCourses = await queryBuilder.getMany();
     }
 
-    // 如果没有配置或配置为空，返回默认推荐（排除当前课程的其他课程）
-    const queryBuilder = this.courseRepository.createQueryBuilder('course');
-    queryBuilder.orderBy('course.sort', 'ASC');
-    
-    // 如果有当前课程ID，排除它
-    if (courseId !== undefined && courseId !== null) {
-      const numValue = typeof courseId === 'number' ? courseId : Number(courseId);
-      if (Number.isFinite(numValue) && !isNaN(numValue) && numValue > 0) {
-        queryBuilder.where('course.id != :courseId', { courseId: numValue });
-      }
+    // 如果用户已登录，获取用户的课程权限和到期时间
+    if (userId && recommendedCourses.length > 0) {
+      const courseIds = recommendedCourses.map(c => c.id);
+      const userAuths = await this.userCourseAuthRepository.find({
+        where: {
+          user_id: userId,
+          course_id: In(courseIds),
+        },
+      });
+
+      // 创建权限映射
+      const authMap = new Map();
+      userAuths.forEach(auth => {
+        authMap.set(auth.course_id, auth);
+      });
+
+      // 为每个课程添加权限和到期时间信息
+      return recommendedCourses.map(course => {
+        const auth = authMap.get(course.id);
+        return {
+          ...course,
+          expireTime: auth?.expire_time || null,
+        };
+      });
     }
-    
-    // 限制返回数量，避免返回过多课程
-    queryBuilder.limit(10);
-    
-    const defaultCourses = await queryBuilder.getMany();
-    return defaultCourses;
+
+    return recommendedCourses;
   }
 }
 
