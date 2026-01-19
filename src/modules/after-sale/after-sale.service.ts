@@ -98,15 +98,17 @@ export class AfterSaleService {
   /**
    * 获取所有售后申请列表（管理后台）
    */
-  async getAfterSaleList(status?: number) {
-    const where: any = {};
+  async getAfterSaleList(status?: number, page = 1, pageSize = 10) {
+    const where: Record<string, unknown> = {};
     if (status !== undefined) {
       where.status = status;
     }
 
-    const afterSales = await this.afterSaleRepository.find({
+    const [afterSales, total] = await this.afterSaleRepository.findAndCount({
       where,
       order: { create_time: 'DESC' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
     });
 
     // 获取订单和用户信息
