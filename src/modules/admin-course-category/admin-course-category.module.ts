@@ -1,12 +1,10 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { CourseCategory } from '../../database/entities/course-category.entity';
-import { Course } from '../../database/entities/course.entity';
+import { DatabaseModule } from '../../database/database.module';
 import { AdminCourseCategoryController } from './admin-course-category.controller';
 import { AdminCourseCategoryService } from './admin-course-category.service';
 
 @Module({
-	imports: [TypeOrmModule.forFeature([CourseCategory, Course])],
+	imports: [DatabaseModule],
 	controllers: [AdminCourseCategoryController],
 	providers: [AdminCourseCategoryService],
 })
