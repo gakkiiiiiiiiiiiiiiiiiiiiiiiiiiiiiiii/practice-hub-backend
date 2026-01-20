@@ -29,6 +29,7 @@ import { PageRoute } from './entities/page-route.entity';
 import { SystemConfig } from './entities/system-config.entity';
 import { UserNote } from './entities/user-note.entity';
 import { OrderAfterSale } from './entities/order-after-sale.entity';
+import { CourseCategory } from './entities/course-category.entity';
 
 @Module({
 	imports: [
@@ -62,6 +63,7 @@ import { OrderAfterSale } from './entities/order-after-sale.entity';
 			PageRoute,
 			SystemConfig,
 			OrderAfterSale,
+			CourseCategory,
 		]),
 	],
 	exports: [TypeOrmModule],

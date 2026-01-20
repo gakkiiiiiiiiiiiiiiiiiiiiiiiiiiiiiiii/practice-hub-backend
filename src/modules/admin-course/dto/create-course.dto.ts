@@ -13,6 +13,16 @@ export class CreateCourseDto {
 	@IsString()
 	subject?: string;
 
+	@ApiProperty({ description: '一级分类', example: '考研政治', required: false })
+	@IsOptional()
+	@IsString()
+	category?: string;
+
+	@ApiProperty({ description: '二级分类', example: '真题', required: false })
+	@IsOptional()
+	@IsString()
+	sub_category?: string;
+
 	@ApiProperty({ description: '学校', example: '北京大学', required: false })
 	@IsOptional()
 	@IsString()

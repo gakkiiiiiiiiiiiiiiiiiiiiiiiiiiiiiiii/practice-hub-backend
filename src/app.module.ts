@@ -26,6 +26,7 @@ import { AdminCourseModule } from './modules/admin-course/admin-course.module';
 import { AdminQuestionModule } from './modules/admin-question/admin-question.module';
 import { AdminActivationCodeModule } from './modules/admin-activation-code/admin-activation-code.module';
 import { AdminChapterModule } from './modules/admin-chapter/admin-chapter.module';
+import { AdminCourseCategoryModule } from './modules/admin-course-category/admin-course-category.module';
 import { UploadModule } from './modules/upload/upload.module';
 import { FeedbackModule } from './modules/feedback/feedback.module';
 import { DistributorModule } from './modules/distributor/distributor.module';
@@ -132,6 +133,7 @@ import { TrajectoryModule } from './modules/trajectory/trajectory.module';
     AdminQuestionModule,
     AdminActivationCodeModule,
     AdminChapterModule,
+    AdminCourseCategoryModule,
     UploadModule,
     FeedbackModule,
     DistributorModule,

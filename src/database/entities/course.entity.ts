@@ -13,6 +13,12 @@ export class Course {
 	subject: string; // 科目（如：数学、英语、政治等）
 
 	@Column({ length: 100, nullable: true })
+	category: string; // 一级分类（如：考研政治、考研英语等）
+
+	@Column({ length: 100, nullable: true })
+	sub_category: string; // 二级分类（如：真题、模拟题等）
+
+	@Column({ length: 100, nullable: true })
 	school: string; // 学校（如：北京大学、清华大学等）
 
 	@Column({ length: 100, nullable: true })
