@@ -22,9 +22,10 @@ export class CourseService {
   /**
    * 获取所有课程列表
    */
-  async getAllCourses(keyword?: string) {
+  async getAllCourses(keyword?: string, category?: string, subCategory?: string, sortBy?: string) {
     const queryBuilder = this.courseRepository.createQueryBuilder('course');
 
+    // 关键词搜索
     if (keyword) {
       queryBuilder.where(
         '(course.name LIKE :keyword OR course.subject LIKE :keyword OR course.school LIKE :keyword OR course.major LIKE :keyword)',
@@ -32,7 +33,43 @@ export class CourseService {
       );
     }
 
-    return await queryBuilder.orderBy('course.sort', 'ASC').getMany();
+    // 分类筛选
+    if (category) {
+      if (keyword) {
+        queryBuilder.andWhere('course.category = :category', { category });
+      } else {
+        queryBuilder.where('course.category = :category', { category });
+      }
+    }
+
+    // 二级分类筛选
+    if (subCategory) {
+      if (keyword || category) {
+        queryBuilder.andWhere('course.sub_category = :subCategory', { subCategory });
+      } else {
+        queryBuilder.where('course.sub_category = :subCategory', { subCategory });
+      }
+    }
+
+    // 排序
+    if (sortBy === 'sales') {
+      // 按学习人数排序（销量优先）
+      queryBuilder.orderBy('course.student_count', 'DESC');
+    } else if (sortBy === 'latest') {
+      // 按创建时间排序（最新题库）
+      queryBuilder.orderBy('course.create_time', 'DESC');
+    } else if (sortBy === 'price_asc') {
+      // 按价格升序
+      queryBuilder.orderBy('course.price', 'ASC');
+    } else if (sortBy === 'price_desc') {
+      // 按价格降序
+      queryBuilder.orderBy('course.price', 'DESC');
+    } else {
+      // 默认按排序字段排序（综合排序）
+      queryBuilder.orderBy('course.sort', 'ASC');
+    }
+
+    return await queryBuilder.getMany();
   }
 
   /**

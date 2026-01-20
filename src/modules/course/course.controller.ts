@@ -12,8 +12,13 @@ export class CourseController {
 
   @Get()
   @ApiOperation({ summary: '所有课程列表' })
-  async getAllCourses(@Query('keyword') keyword?: string) {
-    const result = await this.courseService.getAllCourses(keyword);
+  async getAllCourses(
+    @Query('keyword') keyword?: string,
+    @Query('category') category?: string,
+    @Query('subCategory') subCategory?: string,
+    @Query('sortBy') sortBy?: string,
+  ) {
+    const result = await this.courseService.getAllCourses(keyword, category, subCategory, sortBy);
     return CommonResponseDto.success(result);
   }
 
