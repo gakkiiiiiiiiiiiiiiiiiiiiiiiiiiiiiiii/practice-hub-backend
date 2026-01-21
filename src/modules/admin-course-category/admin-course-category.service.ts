@@ -43,6 +43,20 @@ export class AdminCourseCategoryService {
 	}
 
 	async createCategory(dto: CreateCourseCategoryDto) {
+		// 如果指定了父级分类，验证父级分类必须是一级分类（不能是二级分类）
+		if (dto.parent_id !== null && dto.parent_id !== undefined) {
+			const parentCategory = await this.courseCategoryRepository.findOne({
+				where: { id: dto.parent_id },
+			});
+			if (!parentCategory) {
+				throw new BadRequestException('父级分类不存在');
+			}
+			// 如果父级分类本身也有父级（即它是二级分类），则不允许添加子分类
+			if (parentCategory.parent_id !== null && parentCategory.parent_id !== undefined) {
+				throw new BadRequestException('二级分类不允许新增子分类');
+			}
+		}
+
 		const category = this.courseCategoryRepository.create({
 			name: dto.name,
 			parent_id: dto.parent_id ?? null,
@@ -58,12 +72,27 @@ export class AdminCourseCategoryService {
 			throw new NotFoundException('分类不存在');
 		}
 
+		// 如果更新了父级分类，验证父级分类必须是一级分类（不能是二级分类）
+		const newParentId = dto.parent_id ?? category.parent_id ?? null;
+		if (newParentId !== null && newParentId !== undefined && newParentId !== category.parent_id) {
+			const parentCategory = await this.courseCategoryRepository.findOne({
+				where: { id: newParentId },
+			});
+			if (!parentCategory) {
+				throw new BadRequestException('父级分类不存在');
+			}
+			// 如果父级分类本身也有父级（即它是二级分类），则不允许设置为父级
+			if (parentCategory.parent_id !== null && parentCategory.parent_id !== undefined) {
+				throw new BadRequestException('二级分类不允许作为父级分类');
+			}
+		}
+
 		const oldName = category.name;
 		const nextName = dto.name ?? category.name;
 
 		Object.assign(category, {
 			...dto,
-			parent_id: dto.parent_id ?? category.parent_id ?? null,
+			parent_id: newParentId,
 		});
 		await this.courseCategoryRepository.save(category);
 
