@@ -63,7 +63,21 @@ export class HttpExceptionFilter implements ExceptionFilter {
         message: error.message,
         stack: error.stack,
       });
-      message = error.message || '服务器内部错误';
+      
+      // 处理数据库连接错误
+      if (error.message && (
+        error.message.includes('ECONNRESET') ||
+        error.message.includes('ECONNREFUSED') ||
+        error.message.includes('ETIMEDOUT') ||
+        error.message.includes('Connection lost') ||
+        error.name === 'QueryFailedError'
+      )) {
+        message = '数据库连接异常，请稍后重试';
+        code = HttpStatus.SERVICE_UNAVAILABLE;
+        this.logger.warn('数据库连接错误，建议检查连接池配置和网络状态');
+      } else {
+        message = error.message || '服务器内部错误';
+      }
     }
 
     this.logger.error('返回错误响应:', {
