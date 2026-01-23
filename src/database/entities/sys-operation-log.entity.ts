@@ -3,7 +3,10 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
+import { SysUser } from './sys-user.entity';
 
 @Entity('sys_operation_log')
 export class SysOperationLog {
@@ -30,5 +33,10 @@ export class SysOperationLog {
 
   @CreateDateColumn()
   create_time: Date;
+
+  // 关联管理员信息
+  @ManyToOne(() => SysUser, { nullable: true })
+  @JoinColumn({ name: 'admin_id' })
+  admin?: SysUser;
 }
 

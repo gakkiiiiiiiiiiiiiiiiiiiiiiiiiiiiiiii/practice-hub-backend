@@ -8,6 +8,7 @@ import { AdminRole } from '../../database/entities/sys-user.entity';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { SetCountdownDto } from './dto/set-countdown.dto';
 import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
+import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
 
 @ApiTags('系统管理')
 @Controller('admin')
@@ -27,8 +28,8 @@ export class SystemController {
   @Get('logs')
   @Roles(AdminRole.SUPER_ADMIN)
   @ApiOperation({ summary: '获取操作日志列表' })
-  async getOperationLogs(@Query('page') page?: number, @Query('pageSize') pageSize?: number) {
-    const result = await this.systemService.getOperationLogs(page, pageSize);
+  async getOperationLogs(@Query() dto: GetOperationLogsDto) {
+    const result = await this.systemService.getOperationLogs(dto);
     return CommonResponseDto.success(result);
   }
 

@@ -1,11 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, Like, Between } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { SysOperationLog } from '../../database/entities/sys-operation-log.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { SetCountdownDto } from './dto/set-countdown.dto';
 import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
+import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
 
 @Injectable()
 export class SystemService {
@@ -29,17 +30,109 @@ export class SystemService {
   }
 
   /**
-   * 获取操作日志列表
+   * 获取操作日志列表（支持搜索和筛选）
    */
-  async getOperationLogs(page = 1, pageSize = 20) {
-    const [logs, total] = await this.operationLogRepository.findAndCount({
-      order: { create_time: 'DESC' },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+  async getOperationLogs(dto: GetOperationLogsDto) {
+    const {
+      page = 1,
+      pageSize = 20,
+      keyword,
+      module,
+      action,
+      adminId,
+      adminUsername,
+      userType,
+      startTime,
+      endTime,
+    } = dto;
+
+    const queryBuilder = this.operationLogRepository
+      .createQueryBuilder('log')
+      .leftJoinAndSelect('log.admin', 'admin')
+      .leftJoinAndSelect('admin.roleEntity', 'role')
+      .orderBy('log.create_time', 'DESC');
+
+    // 搜索关键词（模块、操作、管理员用户名）
+    if (keyword) {
+      queryBuilder.andWhere(
+        '(log.module LIKE :keyword OR log.action LIKE :keyword OR admin.username LIKE :keyword)',
+        { keyword: `%${keyword}%` }
+      );
+    }
+
+    // 筛选模块
+    if (module) {
+      queryBuilder.andWhere('log.module = :module', { module });
+    }
+
+    // 筛选操作类型
+    if (action) {
+      queryBuilder.andWhere('log.action = :action', { action });
+    }
+
+    // 筛选管理员ID
+    if (adminId) {
+      queryBuilder.andWhere('log.admin_id = :adminId', { adminId });
+    }
+
+    // 筛选操作人用户名
+    if (adminUsername) {
+      queryBuilder.andWhere('admin.username LIKE :adminUsername', {
+        adminUsername: `%${adminUsername}%`,
+      });
+    }
+
+    // 筛选操作用户类型（角色名称）
+    if (userType) {
+      queryBuilder.andWhere('role.name = :userType', { userType });
+    }
+
+    // 筛选时间范围
+    if (startTime) {
+      queryBuilder.andWhere('log.create_time >= :startTime', { startTime });
+    }
+    if (endTime) {
+      queryBuilder.andWhere('log.create_time <= :endTime', { endTime });
+    }
+
+    // 分页
+    const skip = (page - 1) * pageSize;
+    queryBuilder.skip(skip).take(pageSize);
+
+    const [logs, total] = await queryBuilder.getManyAndCount();
+
+    // 格式化返回数据
+    const list = logs.map((log) => {
+      // 获取用户类型：优先使用角色实体名称，如果没有则使用枚举值
+      let userType = '未知';
+      if (log.admin?.roleEntity?.name) {
+        userType = log.admin.roleEntity.name;
+      } else if (log.admin?.role) {
+        // 映射枚举值到中文名称
+        const roleMap: Record<string, string> = {
+          super_admin: '系统管理员',
+          content_admin: '题库管理员',
+          agent: '代理商',
+        };
+        userType = roleMap[log.admin.role] || log.admin.role;
+      }
+
+      return {
+        id: log.id,
+        adminId: log.admin_id,
+        adminUsername: log.admin?.username || '未知',
+        userType: userType,
+        module: log.module,
+        action: log.action,
+        targetId: log.target_id,
+        content: log.content,
+        ip: log.ip,
+        createTime: log.create_time,
+      };
     });
 
     return {
-      list: logs,
+      list,
       total,
       page,
       pageSize,

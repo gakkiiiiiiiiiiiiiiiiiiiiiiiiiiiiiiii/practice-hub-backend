@@ -4,6 +4,9 @@ import { Repository, In } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { Question, QuestionType } from '../../database/entities/question.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
+import { UserWrongBook } from '../../database/entities/user-wrong-book.entity';
+import { UserCollection } from '../../database/entities/user-collection.entity';
+import { UserNote } from '../../database/entities/user-note.entity';
 import { CreateQuestionDto } from './dto/create-question.dto';
 import { UpdateQuestionDto } from './dto/update-question.dto';
 import { ImportQuestionDto } from './dto/import-question.dto';
@@ -16,7 +19,13 @@ export class AdminQuestionService {
 		@InjectRepository(Question)
 		private questionRepository: Repository<Question>,
 		@InjectRepository(Chapter)
-		private chapterRepository: Repository<Chapter>
+		private chapterRepository: Repository<Chapter>,
+		@InjectRepository(UserWrongBook)
+		private wrongBookRepository: Repository<UserWrongBook>,
+		@InjectRepository(UserCollection)
+		private collectionRepository: Repository<UserCollection>,
+		@InjectRepository(UserNote)
+		private noteRepository: Repository<UserNote>
 	) {}
 
 	/**
@@ -351,6 +360,22 @@ export class AdminQuestionService {
 			throw new NotFoundException('题目不存在');
 		}
 
+		// 级联删除：删除相关的错题集记录
+		await this.wrongBookRepository.delete({
+			question_id: id,
+		});
+
+		// 级联删除：删除相关的收藏记录
+		await this.collectionRepository.delete({
+			question_id: id,
+		});
+
+		// 级联删除：删除相关的笔记记录
+		await this.noteRepository.delete({
+			question_id: id,
+		});
+
+		// 最后删除题目
 		await this.questionRepository.remove(question);
 		return { success: true };
 	}
@@ -372,7 +397,22 @@ export class AdminQuestionService {
 			throw new NotFoundException('未找到要删除的题目');
 		}
 
-		// 批量删除
+		// 级联删除：批量删除相关的错题集记录
+		await this.wrongBookRepository.delete({
+			question_id: In(ids),
+		});
+
+		// 级联删除：批量删除相关的收藏记录
+		await this.collectionRepository.delete({
+			question_id: In(ids),
+		});
+
+		// 级联删除：批量删除相关的笔记记录
+		await this.noteRepository.delete({
+			question_id: In(ids),
+		});
+
+		// 最后批量删除题目
 		await this.questionRepository.remove(questions);
 
 		return {
