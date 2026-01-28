@@ -42,7 +42,8 @@
 		"insert-english": "node scripts/insert-english-questions.js",
 		"insert-english:remote": "node scripts/insert-english-questions.js --remote",
 		"fix:foreign-key": "node scripts/fix-chapter-foreign-key.js",
-		"fix:foreign-key:remote": "node scripts/fix-chapter-foreign-key.js --remote"
+		"fix:foreign-key:remote": "node scripts/fix-chapter-foreign-key.js --remote",
+		"parse:pdf": "ts-node -r tsconfig-paths/register scripts/parse-pdf-to-excel.ts"
 	},
 	"dependencies": {
 		"@nestjs/common": "^10.3.0",
@@ -62,11 +63,13 @@
 		"exceljs": "^4.4.0",
 		"mammoth": "^1.6.0",
 		"mysql2": "^3.6.5",
+		"pdfjs-dist": "^4.0.379",
 		"passport": "^0.7.0",
 		"passport-jwt": "^4.0.1",
 		"reflect-metadata": "^0.1.13",
 		"rxjs": "^7.8.1",
-		"typeorm": "^0.3.17"
+		"typeorm": "^0.3.17",
+		"pdf2pic": "^3.1.1"
 	},
 	"devDependencies": {
 		"@nestjs/cli": "^10.2.1",
