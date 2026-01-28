@@ -6,6 +6,8 @@ import { DistributionOrder } from '../../database/entities/distribution-order.en
 import { DistributionConfig } from '../../database/entities/distribution-config.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { Order } from '../../database/entities/order.entity';
+import { ActivationCode } from '../../database/entities/activation-code.entity';
+import { Course } from '../../database/entities/course.entity';
 import { DistributorService } from './distributor.service';
 import { DistributorController } from './distributor.controller';
 import { AdminDistributorController } from './admin-distributor.controller';
@@ -21,6 +23,8 @@ import { UploadModule } from '../upload/upload.module';
 			DistributionConfig,
 			AppUser,
 			Order,
+			ActivationCode,
+			Course,
 		]),
 		forwardRef(() => OrderModule),
 		forwardRef(() => UploadModule),
@@ -30,4 +34,3 @@ import { UploadModule } from '../upload/upload.module';
 	exports: [DistributorService],
 })
 export class DistributorModule {}
-

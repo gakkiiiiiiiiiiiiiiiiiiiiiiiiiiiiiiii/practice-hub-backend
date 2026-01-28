@@ -1,11 +1,4 @@
-import {
-	Injectable,
-	NotFoundException,
-	BadRequestException,
-	Logger,
-	Inject,
-	forwardRef,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -17,6 +10,8 @@ import { DistributionOrder } from '../../database/entities/distribution-order.en
 import { DistributionConfig } from '../../database/entities/distribution-config.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
+import { ActivationCode, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
+import { Course } from '../../database/entities/course.entity';
 import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
 import { UploadService } from '../upload/upload.service';
@@ -38,6 +33,10 @@ export class DistributorService {
 		private appUserRepository: Repository<AppUser>,
 		@InjectRepository(Order)
 		private orderRepository: Repository<Order>,
+		@InjectRepository(ActivationCode)
+		private activationCodeRepository: Repository<ActivationCode>,
+		@InjectRepository(Course)
+		private courseRepository: Repository<Course>,
 		private configService: ConfigService,
 		@Inject(forwardRef(() => UploadService))
 		private uploadService: UploadService,
@@ -124,10 +123,7 @@ export class DistributorService {
 
 			// 生成小程序码（永久有效，数量有限制）
 			// 使用 scene 参数传递分销商编号
-			const qrCodeUrl = await this.generateWeChatQRCode(
-				accessToken,
-				distributor.distributor_code,
-			);
+			const qrCodeUrl = await this.generateWeChatQRCode(accessToken, distributor.distributor_code);
 
 			// 保存二维码URL
 			distributor.qr_code_url = qrCodeUrl;
@@ -406,10 +402,7 @@ export class DistributorService {
 	/**
 	 * 生成微信小程序码
 	 */
-	private async generateWeChatQRCode(
-		accessToken: string,
-		distributorCode: string,
-	): Promise<string> {
+	private async generateWeChatQRCode(accessToken: string, distributorCode: string): Promise<string> {
 		const httpsAgent = new https.Agent({
 			rejectUnauthorized: false,
 		});
@@ -481,7 +474,9 @@ export class DistributorService {
 	 */
 	private generateDistributorCode(userId: number): string {
 		const timestamp = Date.now().toString().slice(-8); // 取后8位
-		const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+		const random = Math.floor(Math.random() * 1000)
+			.toString()
+			.padStart(3, '0');
 		return `D${userId}${timestamp}${random}`;
 	}
 
@@ -703,5 +698,84 @@ export class DistributorService {
 			total_commissions: Number(totalCommissions?.total || 0),
 		};
 	}
-}
 
+	/**
+	 * 购买激活码（分销商）
+	 */
+	async buyActivationCodes(userId: number, courseId: number, count: number) {
+		// 检查是否是分销商且状态为已通过
+		const distributor = await this.distributorRepository.findOne({
+			where: { user_id: userId },
+		});
+
+		if (!distributor) {
+			throw new BadRequestException('您还不是分销用户');
+		}
+
+		if (distributor.status !== 1) {
+			throw new BadRequestException('您的分销申请尚未通过审核');
+		}
+
+		// 检查课程是否存在
+		const course = await this.courseRepository.findOne({
+			where: { id: courseId },
+		});
+
+		if (!course) {
+			throw new NotFoundException('课程不存在');
+		}
+
+		// 获取代理商价格（如果有），否则使用原价
+		const agentPrice = course.agent_price || course.price || 0;
+		const totalPrice = agentPrice * count;
+
+		// 这里可以添加支付逻辑，暂时直接生成激活码
+		// 生成批次ID
+		const batchId = `D${distributor.distributor_code}${Date.now()}`;
+
+		// 生成激活码
+		const codes = [];
+		for (let i = 0; i < count; i++) {
+			const code = this.generateActivationCode();
+			codes.push(
+				this.activationCodeRepository.create({
+					code,
+					course_id: courseId,
+					batch_id: batchId,
+					agent_id: distributor.id, // 使用分销商ID作为代理商ID
+					status: ActivationCodeStatus.PENDING,
+				}),
+			);
+		}
+
+		await this.activationCodeRepository.save(codes);
+
+		// 这里可以创建订单记录（如果需要）
+		// 暂时直接返回结果
+
+		return {
+			batch_id: batchId,
+			batch_no: batchId, // 兼容前端
+			count: codes.length,
+			course_id: courseId,
+			course_name: course.name,
+			total_price: totalPrice,
+			codes: codes.map((c) => c.code), // 返回激活码列表
+		};
+	}
+
+	/**
+	 * 生成随机激活码
+	 */
+	private generateActivationCode(): string {
+		const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 排除容易混淆的字符
+		let code = '';
+		for (let i = 0; i < 12; i++) {
+			if (i > 0 && i % 4 === 0) {
+				code += '-';
+			}
+			code += chars.charAt(Math.floor(Math.random() * chars.length));
+		}
+		return code;
+	}
+}

@@ -1,13 +1,4 @@
-import {
-	Controller,
-	Post,
-	Get,
-	Body,
-	UseGuards,
-	Query,
-	Param,
-	Patch,
-} from '@nestjs/common';
+import { Controller, Post, Get, Body, UseGuards, Query, Param, Patch } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { DistributorService } from './distributor.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -26,10 +17,7 @@ export class DistributorController {
 	@UseGuards(JwtAuthGuard)
 	@ApiBearerAuth()
 	@ApiOperation({ summary: '申请成为分销用户' })
-	async applyDistributor(
-		@CurrentUser() user: any,
-		@Body() dto: ApplyDistributorDto,
-	) {
+	async applyDistributor(@CurrentUser() user: any, @Body() dto: ApplyDistributorDto) {
 		const result = await this.distributorService.applyDistributor(user.userId);
 		return CommonResponseDto.success(result);
 	}
@@ -65,15 +53,17 @@ export class DistributorController {
 	@UseGuards(JwtAuthGuard)
 	@ApiBearerAuth()
 	@ApiOperation({ summary: '绑定上级分销商（通过分销商编号）' })
-	async bindDistributionRelation(
-		@CurrentUser() user: any,
-		@Body('distributor_code') distributorCode: string,
-	) {
-		const result = await this.distributorService.bindDistributionRelation(
-			user.userId,
-			distributorCode,
-		);
+	async bindDistributionRelation(@CurrentUser() user: any, @Body('distributor_code') distributorCode: string) {
+		const result = await this.distributorService.bindDistributionRelation(user.userId, distributorCode);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('buy-codes')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '购买激活码（分销商）' })
+	async buyCodes(@CurrentUser() user: any, @Body() body: { course_id: number; count: number }) {
+		const result = await this.distributorService.buyActivationCodes(user.userId, body.course_id, body.count);
 		return CommonResponseDto.success(result);
 	}
 }
-
