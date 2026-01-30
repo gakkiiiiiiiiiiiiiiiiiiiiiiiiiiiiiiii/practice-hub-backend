@@ -768,6 +768,11 @@ export class DistributorService {
 	 * 获取分销商购买的激活码列表
 	 */
 	async getDistributorCodes(userId: number, page = 1, pageSize = 20, batchId?: string, status?: number) {
+		// 校验分页参数，避免 NaN 传入 TypeORM
+		const validPage = Number.isFinite(page) && Number.isInteger(page) && page > 0 ? page : 1;
+		const validPageSize =
+			Number.isFinite(pageSize) && Number.isInteger(pageSize) && pageSize > 0 ? Math.min(100, pageSize) : 20;
+
 		// 检查是否是分销商
 		const distributor = await this.distributorRepository.findOne({
 			where: { user_id: userId },
@@ -783,12 +788,12 @@ export class DistributorService {
 		queryBuilder.where('code.agent_id = :agentId', { agentId: distributor.id });
 
 		// 批次号筛选
-		if (batchId) {
-			queryBuilder.andWhere('code.batch_id = :batchId', { batchId });
+		if (batchId && batchId.trim() !== '') {
+			queryBuilder.andWhere('code.batch_id = :batchId', { batchId: batchId.trim() });
 		}
 
-		// 状态筛选
-		if (status !== undefined) {
+		// 状态筛选（仅当 status 为有效数字时添加）
+		if (status !== undefined && status !== null && Number.isInteger(status) && !Number.isNaN(status) && status >= 0) {
 			queryBuilder.andWhere('code.status = :status', { status });
 		}
 
@@ -796,8 +801,8 @@ export class DistributorService {
 		queryBuilder.leftJoinAndSelect('code.course', 'course').orderBy('code.create_time', 'DESC');
 
 		const [codes, total] = await queryBuilder
-			.skip((page - 1) * pageSize)
-			.take(pageSize)
+			.skip((validPage - 1) * validPageSize)
+			.take(validPageSize)
 			.getManyAndCount();
 
 		// 统计激活码数量（不限制分页，统计所有数据）
@@ -840,8 +845,8 @@ export class DistributorService {
 				create_time: code.create_time,
 			})),
 			total,
-			page,
-			pageSize,
+			page: validPage,
+			pageSize: validPageSize,
 			stats: {
 				total_count: totalCount,
 				used_count: usedCount,

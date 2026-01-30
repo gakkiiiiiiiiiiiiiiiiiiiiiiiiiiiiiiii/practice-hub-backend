@@ -73,17 +73,27 @@ export class DistributorController {
 	@ApiOperation({ summary: '获取分销商购买的激活码列表' })
 	async getDistributorCodes(
 		@CurrentUser() user: any,
-		@Query('page') page?: number,
-		@Query('pageSize') pageSize?: number,
+		@Query('page') page?: string,
+		@Query('pageSize') pageSize?: string,
 		@Query('batch_id') batchId?: string,
-		@Query('status') status?: number,
+		@Query('status') status?: string,
 	) {
+		// 解析并校验分页与状态，避免 NaN 传入查询
+		const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+		const pageSizeNum = Math.min(100, Math.max(1, parseInt(String(pageSize), 10) || 20));
+		let statusNum: number | undefined;
+		if (status !== undefined && status !== null && status !== '') {
+			const parsed = parseInt(String(status), 10);
+			if (!Number.isNaN(parsed) && parsed >= 0) {
+				statusNum = parsed;
+			}
+		}
 		const result = await this.distributorService.getDistributorCodes(
 			user.userId,
-			page || 1,
-			pageSize || 20,
+			pageNum,
+			pageSizeNum,
 			batchId,
-			status,
+			statusNum,
 		);
 		return CommonResponseDto.success(result);
 	}
