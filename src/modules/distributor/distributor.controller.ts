@@ -66,4 +66,25 @@ export class DistributorController {
 		const result = await this.distributorService.buyActivationCodes(user.userId, body.course_id, body.count);
 		return CommonResponseDto.success(result);
 	}
+
+	@Get('codes')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '获取分销商购买的激活码列表' })
+	async getDistributorCodes(
+		@CurrentUser() user: any,
+		@Query('page') page?: number,
+		@Query('pageSize') pageSize?: number,
+		@Query('batch_id') batchId?: string,
+		@Query('status') status?: number,
+	) {
+		const result = await this.distributorService.getDistributorCodes(
+			user.userId,
+			page || 1,
+			pageSize || 20,
+			batchId,
+			status,
+		);
+		return CommonResponseDto.success(result);
+	}
 }

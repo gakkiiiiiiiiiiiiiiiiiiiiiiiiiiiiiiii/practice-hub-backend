@@ -765,6 +765,92 @@ export class DistributorService {
 	}
 
 	/**
+	 * 获取分销商购买的激活码列表
+	 */
+	async getDistributorCodes(userId: number, page = 1, pageSize = 20, batchId?: string, status?: number) {
+		// 检查是否是分销商
+		const distributor = await this.distributorRepository.findOne({
+			where: { user_id: userId },
+		});
+
+		if (!distributor) {
+			throw new BadRequestException('您还不是分销用户');
+		}
+
+		const queryBuilder = this.activationCodeRepository.createQueryBuilder('code');
+
+		// 只查询该分销商购买的激活码（通过 agent_id 关联）
+		queryBuilder.where('code.agent_id = :agentId', { agentId: distributor.id });
+
+		// 批次号筛选
+		if (batchId) {
+			queryBuilder.andWhere('code.batch_id = :batchId', { batchId });
+		}
+
+		// 状态筛选
+		if (status !== undefined) {
+			queryBuilder.andWhere('code.status = :status', { status });
+		}
+
+		// 关联课程信息
+		queryBuilder.leftJoinAndSelect('code.course', 'course').orderBy('code.create_time', 'DESC');
+
+		const [codes, total] = await queryBuilder
+			.skip((page - 1) * pageSize)
+			.take(pageSize)
+			.getManyAndCount();
+
+		// 统计激活码数量（不限制分页，统计所有数据）
+		const statsQueryBuilder = this.activationCodeRepository.createQueryBuilder('code');
+		statsQueryBuilder.where('code.agent_id = :agentId', { agentId: distributor.id });
+
+		const allCodes = await statsQueryBuilder.getMany();
+		const totalCount = allCodes.length;
+		const usedCount = allCodes.filter((c) => c.status === ActivationCodeStatus.USED).length;
+		const pendingCount = allCodes.filter((c) => c.status === ActivationCodeStatus.PENDING).length;
+
+		// 获取使用激活码的用户信息
+		const usedUserIds = codes.filter((c) => c.used_by_uid).map((c) => c.used_by_uid);
+		const usedUsers =
+			usedUserIds.length > 0
+				? await this.appUserRepository.find({
+						where: { id: In(usedUserIds) },
+					})
+				: [];
+		const userMap = new Map(usedUsers.map((u) => [u.id, u]));
+
+		// 格式化返回数据
+		return {
+			list: codes.map((code) => ({
+				id: code.id,
+				code: code.code,
+				batch_id: code.batch_id,
+				course_id: code.course_id,
+				course_name: code.course?.name || '-',
+				status: code.status,
+				status_text:
+					code.status === ActivationCodeStatus.PENDING
+						? '待用'
+						: code.status === ActivationCodeStatus.USED
+							? '已用'
+							: '作废',
+				used_by_uid: code.used_by_uid,
+				used_by_name: code.used_by_uid ? userMap.get(code.used_by_uid)?.nickname || '未知用户' : null,
+				used_time: code.used_time,
+				create_time: code.create_time,
+			})),
+			total,
+			page,
+			pageSize,
+			stats: {
+				total_count: totalCount,
+				used_count: usedCount,
+				pending_count: pendingCount,
+			},
+		};
+	}
+
+	/**
 	 * 生成随机激活码
 	 */
 	private generateActivationCode(): string {
