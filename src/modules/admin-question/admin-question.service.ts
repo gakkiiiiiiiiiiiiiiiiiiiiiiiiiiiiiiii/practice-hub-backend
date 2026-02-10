@@ -10,6 +10,8 @@ import { UserNote } from '../../database/entities/user-note.entity';
 import { CreateQuestionDto } from './dto/create-question.dto';
 import { UpdateQuestionDto } from './dto/update-question.dto';
 import { ImportQuestionDto } from './dto/import-question.dto';
+import { ImportJsonQuestionDto } from './dto/import-json-question.dto';
+import { ImportJsonQuestionDto } from './dto/import-json-question.dto';
 
 @Injectable()
 export class AdminQuestionService {
@@ -25,7 +27,7 @@ export class AdminQuestionService {
 		@InjectRepository(UserCollection)
 		private collectionRepository: Repository<UserCollection>,
 		@InjectRepository(UserNote)
-		private noteRepository: Repository<UserNote>
+		private noteRepository: Repository<UserNote>,
 	) {}
 
 	/**
@@ -593,7 +595,7 @@ export class AdminQuestionService {
 					} else {
 						skippedCount++;
 						this.logger.warn(
-							`[导入] 跳过无效行: 第 ${rowNumber} 行, 题干: ${firstCellValue.substring(0, 50)}, 解析结果: ${JSON.stringify(parsedQuestion)}`
+							`[导入] 跳过无效行: 第 ${rowNumber} 行, 题干: ${firstCellValue.substring(0, 50)}, 解析结果: ${JSON.stringify(parsedQuestion)}`,
 						);
 					}
 				} catch (error: any) {
@@ -613,6 +615,84 @@ export class AdminQuestionService {
 		// 批量插入（异步处理，避免阻塞）
 		if (questions.length > 0) {
 			await this.questionRepository.save(questions);
+		}
+
+		return {
+			success: true,
+			count: questions.length,
+		};
+	}
+
+	/**
+	 * 从 JSON 导入题目
+	 */
+	async importQuestionsFromJson(dto: ImportJsonQuestionDto) {
+		// 验证章节是否存在
+		const chapter = await this.chapterRepository.findOne({
+			where: { id: dto.chapterId },
+		});
+
+		if (!chapter) {
+			throw new NotFoundException(`章节 ID ${dto.chapterId} 不存在`);
+		}
+
+		if (!dto.questions || dto.questions.length === 0) {
+			throw new BadRequestException('题目列表不能为空');
+		}
+
+		const questions: Question[] = [];
+
+		for (let i = 0; i < dto.questions.length; i++) {
+			const item = dto.questions[i];
+
+			// 验证必填字段
+			if (!item.stem || !item.stem.trim()) {
+				throw new BadRequestException(`第 ${i + 1} 道题目的题干不能为空`);
+			}
+
+			if (!item.answer || item.answer.length === 0) {
+				throw new BadRequestException(`第 ${i + 1} 道题目的答案不能为空`);
+			}
+
+			// 处理选项
+			let options: Array<{ label: string; text: string }> | null = null;
+			if (item.options && Array.isArray(item.options) && item.options.length > 0) {
+				options = item.options
+					.filter((opt) => opt && opt.label && opt.text)
+					.map((opt) => ({
+						label: String(opt.label).trim(),
+						text: String(opt.text).trim(),
+					}));
+				// 如果过滤后没有选项，设置为 null
+				if (options.length === 0) {
+					options = null;
+				}
+			}
+
+			// 简答题和填空题不需要选项
+			if (item.type === QuestionType.SHORT_ANSWER || item.type === QuestionType.FILL_BLANK) {
+				options = null;
+			}
+
+			// 创建题目实体
+			const question = this.questionRepository.create({
+				chapter_id: dto.chapterId,
+				parent_id: 0,
+				type: item.type,
+				stem: item.stem.trim(),
+				options,
+				answer: item.answer.map((a) => String(a).trim()),
+				analysis: item.analysis?.trim() || null,
+				difficulty: 2, // 默认中等难度
+			});
+
+			questions.push(question);
+		}
+
+		// 批量保存
+		if (questions.length > 0) {
+			await this.questionRepository.save(questions);
+			this.logger.log(`[JSON导入] 成功导入 ${questions.length} 道题目到章节 ${dto.chapterId}`);
 		}
 
 		return {
@@ -748,7 +828,7 @@ export class AdminQuestionService {
 	private parseAnswer(
 		answerStr: string,
 		isJudge: boolean = false,
-		options?: Array<{ label: string; text: string }>
+		options?: Array<{ label: string; text: string }>,
 	): string[] {
 		const trimmedAnswer = answerStr.trim();
 
@@ -784,7 +864,7 @@ export class AdminQuestionService {
 			const invalidAnswers = answers.filter((ans) => !availableLabels.includes(ans));
 			if (invalidAnswers.length > 0) {
 				throw new BadRequestException(
-					`答案中包含不存在的选项：${invalidAnswers.join(', ')}。当前可用选项：${availableLabels.join(', ')}`
+					`答案中包含不存在的选项：${invalidAnswers.join(', ')}。当前可用选项：${availableLabels.join(', ')}`,
 				);
 			}
 		}
