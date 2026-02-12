@@ -46,3 +46,8 @@ test-files/
 # Uploads
 /uploads
 
+# PDF 示例/输出（避免大文件入库）
+*.pdf
+**/process-pdf/fixtures/*.pdf
+**/process-pdf/output/*.json
+
