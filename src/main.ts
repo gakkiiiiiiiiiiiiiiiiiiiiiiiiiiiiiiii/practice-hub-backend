@@ -3,10 +3,17 @@ import { ValidationPipe, BadRequestException } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
+import * as express from 'express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-	const app = await NestFactory.create<NestExpressApplication>(AppModule);
+	const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+		bodyParser: false, // 自行配置以增大 JSON/urlencoded 限制
+	});
+	// 提高请求体大小限制，支持题目批量导入等大 JSON（如 import-json）
+	const bodyLimit = process.env.BODY_LIMIT || '50mb';
+	app.use(express.json({ limit: bodyLimit }));
+	app.use(express.urlencoded({ limit: bodyLimit, extended: true }));
 
 	// 配置静态文件服务，用于访问上传的文件
 	const uploadsPath = join(process.cwd(), 'uploads');
