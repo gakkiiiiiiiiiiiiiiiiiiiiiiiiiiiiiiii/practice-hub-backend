@@ -37,6 +37,7 @@ import { BannerModule } from './modules/banner/banner.module';
 import { PageRouteModule } from './modules/page-route/page-route.module';
 import { AfterSaleModule } from './modules/after-sale/after-sale.module';
 import { TrajectoryModule } from './modules/trajectory/trajectory.module';
+import { ProcessPdfModule } from './modules/process-pdf/process-pdf.module';
 
 @Module({
   imports: [
@@ -124,6 +125,7 @@ import { TrajectoryModule } from './modules/trajectory/trajectory.module';
     PageRouteModule,
     AfterSaleModule,
     TrajectoryModule,
+    ProcessPdfModule,
   ],
   controllers: [AppController],
   providers: [
