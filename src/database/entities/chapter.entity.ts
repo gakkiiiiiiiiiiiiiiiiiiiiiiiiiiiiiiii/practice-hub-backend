@@ -40,6 +40,9 @@ export class Chapter {
 	@Column({ type: 'int', default: 0 })
 	sort: number;
 
+	@Column({ type: 'tinyint', default: 1, comment: '状态：0-禁用，1-启用' })
+	status: number; // 状态：0-禁用，1-启用
+
 	@CreateDateColumn()
 	create_time: Date;
 

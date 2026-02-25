@@ -13,6 +13,8 @@ import { CourseRecommendation } from '../../database/entities/course-recommendat
 import { CreateCourseDto } from './dto/create-course.dto';
 import { UpdateCourseDto } from './dto/update-course.dto';
 import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.dto';
+import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
+import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 
 @Injectable()
 export class AdminCourseService {
@@ -255,6 +257,62 @@ export class AdminCourseService {
         recommendedCourseIds: dto.recommendedCourseIds,
       };
     }
+  }
+
+  /**
+   * 批量删除课程
+   */
+  async batchDeleteCourses(dto: BatchDeleteCoursesDto) {
+    if (!dto.ids || dto.ids.length === 0) {
+      throw new Error('课程ID列表不能为空');
+    }
+
+    const courses = await this.courseRepository.find({
+      where: { id: In(dto.ids) },
+    });
+
+    if (courses.length === 0) {
+      throw new NotFoundException('未找到要删除的课程');
+    }
+
+    // 批量删除每个课程的关联数据
+    for (const course of courses) {
+      await this.deleteCourse(course.id);
+    }
+
+    return {
+      success: true,
+      count: courses.length,
+    };
+  }
+
+  /**
+   * 批量更新课程状态
+   */
+  async batchUpdateStatus(dto: BatchUpdateStatusDto) {
+    if (!dto.ids || dto.ids.length === 0) {
+      throw new Error('课程ID列表不能为空');
+    }
+
+    const courses = await this.courseRepository.find({
+      where: { id: In(dto.ids) },
+    });
+
+    if (courses.length === 0) {
+      throw new NotFoundException('未找到要更新的课程');
+    }
+
+    // 批量更新状态
+    await this.courseRepository.update(
+      { id: In(dto.ids) },
+      { status: dto.status },
+    );
+
+    return {
+      success: true,
+      count: courses.length,
+      status: dto.status,
+    };
   }
 }
 

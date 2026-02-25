@@ -40,7 +40,7 @@ export class ProcessPdfController {
   })
   @UseInterceptors(
     FileInterceptor('pdf', {
-      limits: { fileSize: 30 * 1024 * 1024 },
+      limits: { fileSize: 50 * 1024 * 1024 }, // 50MB，与 BODY_LIMIT 一致；若仍 413 需在网关/云托管侧提高限制
       fileFilter: (_req, file, cb) => {
         if (!file.originalname?.toLowerCase().endsWith('.pdf')) {
           return cb(new BadRequestException('仅支持 PDF 文件'), false);

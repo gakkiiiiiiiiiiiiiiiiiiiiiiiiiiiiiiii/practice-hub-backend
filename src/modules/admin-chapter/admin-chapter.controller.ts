@@ -20,6 +20,8 @@ import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { OperationLogInterceptor } from '../../common/interceptors/operation-log.interceptor';
 import { CreateChapterDto } from './dto/create-chapter.dto';
 import { UpdateChapterDto } from './dto/update-chapter.dto';
+import { BatchDeleteChaptersDto } from './dto/batch-delete-chapters.dto';
+import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 
 @ApiTags('管理后台-章节管理')
 @Controller('admin/chapters')
@@ -60,6 +62,20 @@ export class AdminChapterController {
   async deleteChapter(@Param('id') id: number) {
     await this.adminChapterService.deleteChapter(+id);
     return CommonResponseDto.success(null, '删除成功');
+  }
+
+  @Post('batch-delete')
+  @ApiOperation({ summary: '批量删除章节' })
+  async batchDeleteChapters(@Body() dto: BatchDeleteChaptersDto) {
+    const result = await this.adminChapterService.batchDeleteChapters(dto);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('batch-update-status')
+  @ApiOperation({ summary: '批量更新章节状态（启用/禁用）' })
+  async batchUpdateStatus(@Body() dto: BatchUpdateStatusDto) {
+    const result = await this.adminChapterService.batchUpdateStatus(dto);
+    return CommonResponseDto.success(result);
   }
 }
 

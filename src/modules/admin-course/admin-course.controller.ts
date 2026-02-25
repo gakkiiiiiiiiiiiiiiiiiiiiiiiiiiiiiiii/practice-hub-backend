@@ -23,6 +23,8 @@ import { HttpExceptionFilter } from '../../common/filters/http-exception.filter'
 import { CreateCourseDto } from './dto/create-course.dto';
 import { UpdateCourseDto } from './dto/update-course.dto';
 import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.dto';
+import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
+import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 
 @ApiTags('管理后台-课程管理')
 @Controller('admin/courses')
@@ -104,6 +106,22 @@ export class AdminCourseController {
 	@ApiOperation({ summary: '删除课程' })
 	async deleteCourse(@Param('id') id: number) {
 		const result = await this.adminCourseService.deleteCourse(+id);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch-delete')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '批量删除课程' })
+	async batchDeleteCourses(@Body() dto: BatchDeleteCoursesDto) {
+		const result = await this.adminCourseService.batchDeleteCourses(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch-update-status')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '批量更新课程状态（启用/禁用）' })
+	async batchUpdateStatus(@Body() dto: BatchUpdateStatusDto) {
+		const result = await this.adminCourseService.batchUpdateStatus(dto);
 		return CommonResponseDto.success(result);
 	}
 }

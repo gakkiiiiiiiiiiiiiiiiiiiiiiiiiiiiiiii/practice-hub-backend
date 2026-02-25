@@ -10,7 +10,8 @@ async function bootstrap() {
 	const app = await NestFactory.create<NestExpressApplication>(AppModule, {
 		bodyParser: false, // 自行配置以增大 JSON/urlencoded 限制
 	});
-	// 提高请求体大小限制，支持题目批量导入等大 JSON（如 import-json）
+	// 提高请求体大小限制：JSON/表单 50mb；文件上传由各接口 Multer 限制（如 process-pdf 为 50mb）
+	// 若 /api/admin/process-pdf/extract 仍返回 413，需在网关/云托管侧提高限制（如 nginx client_max_body_size）
 	const bodyLimit = process.env.BODY_LIMIT || '50mb';
 	app.use(express.json({ limit: bodyLimit }));
 	app.use(express.urlencoded({ limit: bodyLimit, extended: true }));
