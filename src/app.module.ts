@@ -75,20 +75,15 @@ import { ProcessPdfModule } from './modules/process-pdf/process-pdf.module';
           autoLoadEntities: true,
           // 连接池配置，防止 ECONNRESET 错误
           extra: {
-            // mysql2 连接池配置
+            // mysql2 连接池配置（仅使用 mysql2 支持的选项，避免 invalid configuration 警告）
             connectionLimit: 10, // 连接池最大连接数
             connectTimeout: 60000, // 连接超时时间（毫秒）
-            acquireTimeout: 60000, // 获取连接超时时间（毫秒）
-            timeout: 60000, // 查询超时时间（毫秒）
             // 启用 keep-alive，保持连接活跃
             enableKeepAlive: true,
             keepAliveInitialDelay: 0,
             // 连接最大空闲时间（毫秒），超过此时间未使用的连接会被关闭
             idleTimeout: 300000, // 5分钟
-            // 连接最大存活时间（毫秒），超过此时间的连接会被关闭并重新创建
-            maxLifetime: 1800000, // 30分钟
-            // 连接验证查询（用于保持连接活跃，定期执行 SELECT 1）
-            // 注意：mysql2 不支持 reconnect 选项，需要在应用层处理
+            // 注意：acquireTimeout / timeout / maxLifetime 为 TypeORM 池级选项，mysql2 Connection 不支持，已移除
           },
         };
       },

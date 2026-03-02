@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index } from 'typeorm';
 
 @Entity('user_checkin')
-@Index(['user_id', 'checkin_date'], { unique: true }) // 每个用户每天只能打卡一次
+@Index(['userId', 'checkinDate'], { unique: true }) // 每个用户每天只能打卡一次
 export class UserCheckin {
 	@PrimaryGeneratedColumn()
 	id: number;
