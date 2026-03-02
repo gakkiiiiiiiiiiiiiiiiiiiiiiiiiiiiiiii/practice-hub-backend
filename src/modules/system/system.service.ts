@@ -198,5 +198,60 @@ export class SystemService {
       quotes: dto.quotes,
     };
   }
+
+  /**
+   * 获取打卡时间配置（分钟）
+   */
+  async getCheckinMinutes(): Promise<number> {
+    const config = await this.systemConfigRepository.findOne({
+      where: { configKey: 'checkin_minutes' },
+    });
+
+    if (config && config.configValue) {
+      try {
+        const minutes = parseInt(config.configValue, 10);
+        if (!isNaN(minutes) && minutes > 0) {
+          return minutes;
+        }
+      } catch (e) {
+        console.error('解析打卡时间配置失败:', e);
+      }
+    }
+
+    // 默认30分钟
+    return 30;
+  }
+
+  /**
+   * 设置打卡时间配置（分钟）
+   */
+  async setCheckinMinutes(minutes: number) {
+    if (!minutes || minutes <= 0) {
+      throw new Error('打卡时间必须大于0');
+    }
+
+    let config = await this.systemConfigRepository.findOne({
+      where: { configKey: 'checkin_minutes' },
+    });
+
+    if (!config) {
+      config = this.systemConfigRepository.create({
+        configKey: 'checkin_minutes',
+        configValue: minutes.toString(),
+        description: '刷题打卡所需时间（分钟）',
+      });
+    } else {
+      config.configValue = minutes.toString();
+      config.updateTime = new Date();
+    }
+
+    await this.systemConfigRepository.save(config);
+
+    return {
+      success: true,
+      message: '打卡时间配置已更新',
+      minutes,
+    };
+  }
 }
 

@@ -9,6 +9,7 @@ import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { SetCountdownDto } from './dto/set-countdown.dto';
 import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
 import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
+import { SetCheckinMinutesDto } from './dto/set-checkin-minutes.dto';
 
 @ApiTags('系统管理')
 @Controller('admin')
@@ -46,6 +47,22 @@ export class SystemController {
   @ApiOperation({ summary: '设置广播消息列表' })
   async setDailyQuotes(@Body() dto: SetDailyQuotesDto) {
     const result = await this.systemService.setDailyQuotes(dto);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('settings/checkin-minutes')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取打卡时间配置' })
+  async getCheckinMinutes() {
+    const result = await this.systemService.getCheckinMinutes();
+    return CommonResponseDto.success({ minutes: result });
+  }
+
+  @Put('settings/checkin-minutes')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '设置打卡时间配置' })
+  async setCheckinMinutes(@Body() dto: SetCheckinMinutesDto) {
+    const result = await this.systemService.setCheckinMinutes(dto.minutes);
     return CommonResponseDto.success(result);
   }
 }

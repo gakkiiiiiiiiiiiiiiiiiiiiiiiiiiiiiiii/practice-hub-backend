@@ -30,6 +30,7 @@ import { SystemConfig } from './entities/system-config.entity';
 import { UserNote } from './entities/user-note.entity';
 import { OrderAfterSale } from './entities/order-after-sale.entity';
 import { CourseCategory } from './entities/course-category.entity';
+import { UserCheckin } from './entities/user-checkin.entity';
 
 @Module({
 	imports: [
@@ -64,6 +65,7 @@ import { CourseCategory } from './entities/course-category.entity';
 			SystemConfig,
 			OrderAfterSale,
 			CourseCategory,
+			UserCheckin,
 		]),
 	],
 	exports: [TypeOrmModule],
