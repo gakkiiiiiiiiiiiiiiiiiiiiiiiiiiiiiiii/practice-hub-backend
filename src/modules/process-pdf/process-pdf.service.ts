@@ -2,6 +2,8 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import mammoth from 'mammoth';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { fromPath } = require('pdf2pic');
@@ -12,6 +14,8 @@ import {
   ExtractedQuestion,
 } from './core/extract-questions';
 import { SiliconFlowOcrService } from './silicon-flow-ocr.service';
+
+const execFileAsync = promisify(execFile);
 
 @Injectable()
 export class ProcessPdfService {
@@ -64,7 +68,40 @@ export class ProcessPdfService {
   }
 
   /**
+   * 用 Ghostscript 将 PDF 指定页转为 PNG base64（当 pdf2pic 无图时使用）
+   */
+  private async pdfPageToBase64WithGs(pdfPath: string, pageNum: number): Promise<string> {
+    const outDir = path.join(os.tmpdir(), `pdf-ocr-${Date.now()}`);
+    fs.mkdirSync(outDir, { recursive: true });
+    const outPrefix = path.join(outDir, 'page');
+    try {
+      await execFileAsync('gs', [
+        '-dNOPAUSE',
+        '-dBATCH',
+        '-sDEVICE=png16m',
+        '-r150',
+        `-dFirstPage=${pageNum}`,
+        `-dLastPage=${pageNum}`,
+        `-sOutputFile=${outPrefix}-%d.png`,
+        pdfPath,
+      ], { maxBuffer: 50 * 1024 * 1024 });
+      const outFile = path.join(outDir, `page-${pageNum}.png`);
+      if (fs.existsSync(outFile)) {
+        return fs.readFileSync(outFile).toString('base64');
+      }
+      return '';
+    } finally {
+      try {
+        const files = fs.readdirSync(outDir);
+        files.forEach((f) => fs.unlinkSync(path.join(outDir, f)));
+        fs.rmdirSync(outDir);
+      } catch (_) {}
+    }
+  }
+
+  /**
    * 图片型 PDF：按页转图片后调用硅基流动 PaddleOCR-VL-1.5 识别，再解析题目
+   * 优先 pdf2pic，无图时回退到 Ghostscript (gs)
    */
   private async extractQuestionsViaOcr(pdfPath: string): Promise<ExtractedQuestion[]> {
     const numPages = await getPdfPageCount(pdfPath);
@@ -77,8 +114,14 @@ export class ProcessPdfService {
     });
     const textParts: string[] = [];
     for (let p = 1; p <= numPages; p++) {
+      let base64 = '';
       const result = await convert(p, { responseType: 'base64' });
-      const base64 = result?.base64 ?? result?.base64Image ?? '';
+      base64 = (result?.base64 ?? result?.base64Image ?? '').trim();
+      if (!base64) {
+        try {
+          base64 = await this.pdfPageToBase64WithGs(pdfPath, p);
+        } catch (_) {}
+      }
       if (base64) {
         const pageText = await this.siliconFlowOcr.ocrImageBase64(base64);
         if (pageText) textParts.push(pageText);
