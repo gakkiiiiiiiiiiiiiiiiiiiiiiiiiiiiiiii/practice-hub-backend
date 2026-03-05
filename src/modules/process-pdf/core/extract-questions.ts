@@ -15,6 +15,13 @@ export interface ExtractedQuestion {
   explanation: string;
 }
 
+/** 获取 PDF 页数（供 OCR 等按页处理使用） */
+export async function getPdfPageCount(pdfPath: string): Promise<number> {
+  const dataBuffer = fs.readFileSync(pdfPath);
+  const data = await pdf(dataBuffer);
+  return data.numpages || 0;
+}
+
 export async function extractQuestions(pdfPath: string): Promise<ExtractedQuestion[]> {
   const dataBuffer = fs.readFileSync(pdfPath);
   const stats = fs.statSync(pdfPath);
@@ -93,6 +100,39 @@ export async function extractQuestions(pdfPath: string): Promise<ExtractedQuesti
       } else if (q.answer && oldQ.answer && q.answer.length > oldQ.answer.length) {
         uniqueQuestions[qKey] = q;
       }
+    }
+  }
+  return Object.values(uniqueQuestions);
+}
+
+/**
+ * 从纯文本解析题目（与 PDF 解析同一规则：题号、【答案】、【解析】、选项 A-D）
+ * 供 Word 解析或 OCR 后的文本使用
+ */
+export function parseQuestionsFromText(text: string): ExtractedQuestion[] {
+  const step = 1;
+  const windowSize = 3;
+  const lines = text.split(/\n/);
+  let allQuestions: ExtractedQuestion[] = [];
+  for (let start = 0; start < lines.length; start += step) {
+    const end = Math.min(start + windowSize * 80, lines.length); // 约 80 行一窗
+    const windowText = lines.slice(start, end).join('\n');
+    const questions = parseTextBlock(windowText);
+    allQuestions = allQuestions.concat(questions);
+    if (end >= lines.length) break;
+  }
+  const uniqueQuestions: Record<string, ExtractedQuestion> = {};
+  for (const q of allQuestions) {
+    const qBody = q.question.replace(/^\d+[.．、]\s*/, '').trim();
+    const qKey = qBody.replace(/\s+/g, '');
+    if (!qKey) continue;
+    if (!uniqueQuestions[qKey]) {
+      uniqueQuestions[qKey] = q;
+    } else {
+      const oldQ = uniqueQuestions[qKey];
+      if (!oldQ.explanation && q.explanation) uniqueQuestions[qKey] = q;
+      else if (!oldQ.answer && q.answer) uniqueQuestions[qKey] = q;
+      else if (q.answer && oldQ.answer && q.answer.length > oldQ.answer.length) uniqueQuestions[qKey] = q;
     }
   }
   return Object.values(uniqueQuestions);

@@ -59,4 +59,42 @@ export class ProcessPdfController {
       data: questions,
     });
   }
+
+  @Post('extract-doc')
+  @ApiOperation({ summary: '上传 Word 并提取题目（.docx/.doc，mammoth 解析）' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        doc: {
+          type: 'string',
+          format: 'binary',
+          description: 'Word 文件（.docx 或 .doc）',
+        },
+      },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('doc', {
+      limits: { fileSize: 20 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        const name = (file.originalname || '').toLowerCase();
+        if (!name.endsWith('.docx') && !name.endsWith('.doc')) {
+          return cb(new BadRequestException('仅支持 .docx 或 .doc 文件'), false);
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  async extractDoc(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('请上传 Word 文件（表单字段 doc）');
+    }
+    const questions = await this.processPdfService.extractQuestionsFromWord(file);
+    return CommonResponseDto.success({
+      count: questions.length,
+      data: questions,
+    });
+  }
 }
