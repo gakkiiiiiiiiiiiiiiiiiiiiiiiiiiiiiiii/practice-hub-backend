@@ -95,9 +95,11 @@ export class ProcessPdfService {
         `-sOutputFile=${outPrefix}-%d.png`,
         pdfPath,
       ], { maxBuffer: 50 * 1024 * 1024 });
-      const outFile = path.join(outDir, `page-${pageNum}.png`);
-      if (fs.existsSync(outFile)) {
-        return fs.readFileSync(outFile).toString('base64');
+      // gs 单页输出时 %d 为 1，得到的是 page-1.png，不是 page-N.png
+      const files = fs.readdirSync(outDir).filter((f) => f.endsWith('.png'));
+      const pngFile = files.length > 0 ? path.join(outDir, files[0]) : '';
+      if (pngFile && fs.existsSync(pngFile)) {
+        return fs.readFileSync(pngFile).toString('base64');
       }
       return '';
     } finally {

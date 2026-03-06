@@ -1,7 +1,8 @@
 /**
  * 测试 PDF 题目提取（文本解析 + 图片 PDF OCR）
- * 用法：npx ts-node -r tsconfig-paths/register scripts/test-pdf-ocr.ts [PDF路径] [OCR最多页数]
- * 示例：npx ts-node -r tsconfig-paths/register scripts/test-pdf-ocr.ts test-files/普通心理学.pdf 3
+ * 用法：npx ts-node -r tsconfig-paths/register scripts/test-pdf-ocr.ts [PDF路径] [OCR最多页数] [--force-ocr]
+ * 示例：npx ts-node -r tsconfig-paths/register scripts/test-pdf-ocr.ts test-files/simple.pdf 3
+ * 强制 OCR（跳过文本解析）：npx ts-node -r tsconfig-paths/register scripts/test-pdf-ocr.ts test-files/simple.pdf 3 --force-ocr
  * 需配置环境变量 SILICON_FLOW_API_KEY（走 OCR 时使用）
  */
 import * as path from 'path';
@@ -21,8 +22,10 @@ for (const p of envPaths) {
   }
 }
 
-const pdfPathArg = process.argv[2] || 'test-files/普通心理学.pdf';
-const maxOcrPagesArg = process.argv[3] ? parseInt(process.argv[3], 10) : undefined;
+const rawArgs = process.argv.slice(2).filter((a) => a !== '--force-ocr' && a !== '-f');
+const forceOcr = process.argv.includes('--force-ocr') || process.argv.includes('-f');
+const pdfPathArg = rawArgs[0] || 'test-files/普通心理学.pdf';
+const maxOcrPagesArg = rawArgs[1] ? parseInt(rawArgs[1], 10) : undefined;
 const pdfPath = path.isAbsolute(pdfPathArg) ? pdfPathArg : path.join(process.cwd(), pdfPathArg);
 
 const SILICON_FLOW_BASE = 'https://api.siliconflow.cn/v1';
@@ -50,9 +53,11 @@ async function pdfPageToBase64WithGs(pdfPath: string, pageNum: number): Promise<
       `-sOutputFile=${outPrefix}-%d.png`,
       pdfPath,
     ], { maxBuffer: 50 * 1024 * 1024 });
-    const outFile = path.join(outDir, `page-${pageNum}.png`);
-    if (fs.existsSync(outFile)) {
-      const buf = fs.readFileSync(outFile);
+    // gs 单页输出时 %d 为 1，得到的是 page-1.png，不是 page-N.png
+    const files = fs.readdirSync(outDir).filter((f) => f.endsWith('.png'));
+    const pngFile = files.length > 0 ? path.join(outDir, files[0]) : '';
+    if (pngFile && fs.existsSync(pngFile)) {
+      const buf = fs.readFileSync(pngFile);
       return buf.toString('base64');
     }
     return '';
@@ -100,6 +105,7 @@ async function main() {
   }
   console.log('PDF 路径:', pdfPath);
   console.log('OCR 最多页数:', maxOcrPagesArg ?? '全部');
+  console.log('强制 OCR:', forceOcr);
   console.log('---');
 
   const {
@@ -109,17 +115,20 @@ async function main() {
   } = require('../src/modules/process-pdf/core/extract-questions');
   const { fromPath } = require('pdf2pic');
 
-  // 1) 先文本解析
-  const textQuestions = await extractQuestions(pdfPath);
-  if (textQuestions.length > 0) {
-    console.log('[文本解析] 得到', textQuestions.length, '道题目');
-    const outPath = pdfPath.replace(/\.pdf$/i, '-extract.json');
-    fs.writeFileSync(outPath, JSON.stringify(textQuestions, null, 2), 'utf-8');
-    console.log('已写入:', outPath);
-    return;
+  // 未强制 OCR 时先尝试文本解析
+  if (!forceOcr) {
+    const textQuestions = await extractQuestions(pdfPath);
+    if (textQuestions.length > 0) {
+      console.log('[文本解析] 得到', textQuestions.length, '道题目');
+      const outPath = pdfPath.replace(/\.pdf$/i, '-extract.json');
+      fs.writeFileSync(outPath, JSON.stringify(textQuestions, null, 2), 'utf-8');
+      console.log('已写入:', outPath);
+      return;
+    }
+    console.log('[文本解析] 无结果，走 OCR...');
+  } else {
+    console.log('[强制 OCR] 跳过文本解析，直接转图识别...');
   }
-
-  console.log('[文本解析] 无结果，走 OCR...');
   const apiKey = process.env.SILICON_FLOW_API_KEY;
   if (!apiKey) {
     console.error('请设置环境变量 SILICON_FLOW_API_KEY 后重试');

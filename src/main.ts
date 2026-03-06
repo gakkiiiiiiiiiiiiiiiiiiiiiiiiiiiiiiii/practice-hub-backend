@@ -12,7 +12,7 @@ async function bootstrap() {
 	});
 	// 提高请求体大小限制：JSON/表单 50mb；文件上传由各接口 Multer 限制（如 process-pdf 为 50mb）
 	// 若 /api/admin/process-pdf/extract 仍返回 413，需在网关/云托管侧提高限制（如 nginx client_max_body_size）
-	const bodyLimit = process.env.BODY_LIMIT || '50mb';
+	const bodyLimit = process.env.BODY_LIMIT || '200mb';
 	app.use(express.json({ limit: bodyLimit }));
 	app.use(express.urlencoded({ limit: bodyLimit, extended: true }));
 
@@ -44,7 +44,7 @@ async function bootstrap() {
 					details: errors,
 				});
 			},
-		})
+		}),
 	);
 
 	// 跨域配置 - 允许所有来源
