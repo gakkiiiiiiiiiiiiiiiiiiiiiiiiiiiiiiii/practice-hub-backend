@@ -40,102 +40,99 @@ import { TrajectoryModule } from './modules/trajectory/trajectory.module';
 import { ProcessPdfModule } from './modules/process-pdf/process-pdf.module';
 
 @Module({
-  imports: [
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: ['.env.local', '.env'],
-    }),
-    TypeOrmModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => {
-        const dbHost = configService.get('DB_HOST', 'localhost');
-        const dbPort = configService.get<number>('DB_PORT', 3306);
-        const dbUsername = configService.get('DB_USERNAME', 'root');
-        const dbPassword = configService.get('DB_PASSWORD', '');
-        const dbDatabase = configService.get('DB_DATABASE', 'practice_hub');
-        const nodeEnv = configService.get('NODE_ENV', 'development');
+	imports: [
+		ConfigModule.forRoot({
+			isGlobal: true,
+			envFilePath: ['.env.local', '.env'],
+		}),
+		TypeOrmModule.forRootAsync({
+			imports: [ConfigModule],
+			useFactory: (configService: ConfigService) => {
+				const dbHost = configService.get('DB_HOST', 'localhost');
+				const dbPort = configService.get<number>('DB_PORT', 3306);
+				const dbUsername = configService.get('DB_USERNAME', 'root');
+				const dbPassword = configService.get('DB_PASSWORD', '');
+				const dbDatabase = configService.get('DB_DATABASE', 'practice_hub');
+				const nodeEnv = configService.get('NODE_ENV', 'development');
 
-		// 安全：不在日志中打印敏感信息（如密码）
-		console.log(`[数据库配置] 连接地址: ${dbHost}:${dbPort}, 数据库: ${dbDatabase}`);
+				// 安全：不在日志中打印敏感信息（如密码）
+				console.log(`[数据库配置] 连接地址: ${dbHost}:${dbPort}, 数据库: ${dbDatabase}`);
 
-        return {
-          type: 'mysql',
-          host: dbHost,
-          port: dbPort,
-          username: dbUsername,
-          password: dbPassword,
-          database: dbDatabase,
-          entities: [__dirname + '/**/*.entity{.ts,.js}'],
-          synchronize: nodeEnv === 'development',
-          logging: nodeEnv === 'development',
-          timezone: '+08:00',
-          charset: 'utf8mb4',
-          retryAttempts: 10,
-          retryDelay: 3000,
-          autoLoadEntities: true,
-          // 连接池配置，防止 ECONNRESET 错误
-          extra: {
-            // mysql2 连接池配置（仅使用 mysql2 支持的选项，避免 invalid configuration 警告）
-            connectionLimit: 10, // 连接池最大连接数
-            connectTimeout: 60000, // 连接超时时间（毫秒）
-            // 启用 keep-alive，保持连接活跃
-            enableKeepAlive: true,
-            keepAliveInitialDelay: 0,
-            // 连接最大空闲时间（毫秒），超过此时间未使用的连接会被关闭
-            idleTimeout: 300000, // 5分钟
-            // 注意：acquireTimeout / timeout / maxLifetime 为 TypeORM 池级选项，mysql2 Connection 不支持，已移除
-          },
-        };
-      },
-      inject: [ConfigService],
-    }),
-    ScheduleModule.forRoot(),
-    DatabaseModule,
-    AuthModule,
-    UserModule,
-    CourseModule,
-    QuestionModule,
-    OrderModule,
-    ActivationCodeModule,
-    WrongBookModule,
-    CollectionModule,
-    NoteModule,
-    HomeModule,
-    AdminModule, // 必须在 SystemModule 之前，避免路由冲突
-    DashboardModule,
-    SystemModule, // SystemController 使用 @Controller('admin')，可能拦截其他 admin 路由
-    RecommendModule,
-    AdminCourseModule,
-    AdminQuestionModule,
-    AdminActivationCodeModule,
-    AdminChapterModule,
-    AdminCourseCategoryModule,
-    UploadModule,
-    FeedbackModule,
-    DistributorModule,
-    ExamModule,
-    SystemAccountModule,
-    SystemRoleModule,
-    BannerModule,
-    PageRouteModule,
-    AfterSaleModule,
-    TrajectoryModule,
-    ProcessPdfModule,
-  ],
-  controllers: [AppController],
-  providers: [
-    AppService,
-    {
-      provide: APP_FILTER,
-      useClass: HttpExceptionFilter,
-    },
-  ],
+				return {
+					type: 'mysql',
+					host: dbHost,
+					port: dbPort,
+					username: dbUsername,
+					password: dbPassword,
+					database: dbDatabase,
+					entities: [__dirname + '/**/*.entity{.ts,.js}'],
+					synchronize: nodeEnv === 'development',
+					logging: nodeEnv === 'development',
+					timezone: '+08:00',
+					charset: 'utf8mb4',
+					retryAttempts: 10,
+					retryDelay: 3000,
+					autoLoadEntities: true,
+					// 连接池配置，防止 ECONNRESET 错误
+					extra: {
+						// mysql2 连接池配置（仅使用 mysql2 支持的选项，避免 invalid configuration 警告）
+						connectionLimit: 10, // 连接池最大连接数
+						connectTimeout: 60000, // 连接超时时间（毫秒）
+						// 启用 keep-alive，保持连接活跃
+						enableKeepAlive: true,
+						keepAliveInitialDelay: 0,
+						// 连接最大空闲时间（毫秒），超过此时间未使用的连接会被关闭
+						idleTimeout: 300000, // 5分钟
+						// 注意：acquireTimeout / timeout / maxLifetime 为 TypeORM 池级选项，mysql2 Connection 不支持，已移除
+					},
+				};
+			},
+			inject: [ConfigService],
+		}),
+		ScheduleModule.forRoot(),
+		DatabaseModule,
+		AuthModule,
+		UserModule,
+		CourseModule,
+		QuestionModule,
+		OrderModule,
+		ActivationCodeModule,
+		WrongBookModule,
+		CollectionModule,
+		NoteModule,
+		HomeModule,
+		AdminModule, // 必须在 SystemModule 之前，避免路由冲突
+		DashboardModule,
+		SystemModule, // SystemController 使用 @Controller('admin')，可能拦截其他 admin 路由
+		RecommendModule,
+		AdminCourseModule,
+		AdminQuestionModule,
+		AdminActivationCodeModule,
+		AdminChapterModule,
+		AdminCourseCategoryModule,
+		UploadModule,
+		FeedbackModule,
+		DistributorModule,
+		ExamModule,
+		SystemAccountModule,
+		SystemRoleModule,
+		BannerModule,
+		PageRouteModule,
+		AfterSaleModule,
+		TrajectoryModule,
+		ProcessPdfModule,
+	],
+	controllers: [AppController],
+	providers: [
+		AppService,
+		{
+			provide: APP_FILTER,
+			useClass: HttpExceptionFilter,
+		},
+	],
 })
 export class AppModule implements NestModule {
-  configure(consumer: MiddlewareConsumer) {
-    consumer
-      .apply(LoggingMiddleware)
-      .forRoutes('*'); // 应用到所有路由
-  }
+	configure(consumer: MiddlewareConsumer) {
+		consumer.apply(LoggingMiddleware).forRoutes('*'); // 应用到所有路由
+	}
 }
-
