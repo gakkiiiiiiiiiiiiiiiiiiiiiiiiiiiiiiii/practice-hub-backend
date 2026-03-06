@@ -22,13 +22,19 @@ export class ProcessPdfService {
   constructor(private readonly siliconFlowOcr: SiliconFlowOcrService) {}
 
   /**
-   * 从上传的 PDF 文件中提取题目：先文本解析，若无结果则走图片 PDF OCR（硅基流动 PaddleOCR-VL-1.5）
+   * 从上传的 PDF 文件中提取题目。
+   * 默认：先文本解析，若无结果则走图片 PDF OCR。
+   * forceOcr=true 时：跳过文本解析，直接转为图片后 OCR（适用于文本无法正确提取的 PDF）。
    */
-  async extractQuestions(file: Express.Multer.File): Promise<ExtractedQuestion[]> {
+  async extractQuestions(
+    file: Express.Multer.File,
+    options?: { forceOcr?: boolean },
+  ): Promise<ExtractedQuestion[]> {
     if (!file?.path && !file?.buffer) {
       throw new BadRequestException('未收到 PDF 文件');
     }
 
+    const forceOcr = options?.forceOcr === true;
     let pdfPath: string | null = null;
     try {
       if (file.path && fs.existsSync(file.path)) {
@@ -41,6 +47,10 @@ export class ProcessPdfService {
       }
       if (!pdfPath || !pdfPath.toLowerCase().endsWith('.pdf')) {
         throw new BadRequestException('请上传 PDF 文件');
+      }
+
+      if (forceOcr) {
+        return await this.extractQuestionsViaOcr(pdfPath);
       }
 
       let questions = await extractQuestions(pdfPath);

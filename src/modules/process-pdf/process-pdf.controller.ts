@@ -5,6 +5,7 @@ import {
   UploadedFile,
   BadRequestException,
   UseGuards,
+  Body,
 } from '@nestjs/common';
 import { readFile } from 'fs/promises';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
@@ -40,6 +41,10 @@ export class ProcessPdfController {
           format: 'binary',
           description: 'PDF 文件（建议单次不超过数十页，避免超时）',
         },
+        forceOcr: {
+          type: 'string',
+          description: '传 "1" 或 "true" 时强制转为图片后 OCR，不先做文本解析（适用于文本无法正确提取的 PDF）',
+        },
       },
     },
   })
@@ -54,11 +59,15 @@ export class ProcessPdfController {
       },
     }),
   )
-  async extract(@UploadedFile() file: Express.Multer.File) {
+  async extract(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('forceOcr') forceOcr?: string,
+  ) {
     if (!file) {
       throw new BadRequestException('请上传 PDF 文件（表单字段 pdf）');
     }
-    const questions = await this.processPdfService.extractQuestions(file);
+    const useForceOcr = forceOcr === '1' || forceOcr === 'true' || forceOcr === 'yes';
+    const questions = await this.processPdfService.extractQuestions(file, { forceOcr: useForceOcr });
     return CommonResponseDto.success({
       count: questions.length,
       data: questions,
