@@ -2,10 +2,11 @@ import { Module } from '@nestjs/common';
 import { ProcessPdfController } from './process-pdf.controller';
 import { ProcessPdfService } from './process-pdf.service';
 import { SiliconFlowOcrService } from './silicon-flow-ocr.service';
+import { PdfExtractQueueService } from './pdf-extract-queue.service';
 
 @Module({
   controllers: [ProcessPdfController],
-  providers: [ProcessPdfService, SiliconFlowOcrService],
+  providers: [ProcessPdfService, SiliconFlowOcrService, PdfExtractQueueService],
   exports: [ProcessPdfService],
 })
 export class ProcessPdfModule {}

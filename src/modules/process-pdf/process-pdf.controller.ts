@@ -1,11 +1,14 @@
 import {
   Controller,
   Post,
+  Get,
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  NotFoundException,
   UseGuards,
   Body,
+  Param,
 } from '@nestjs/common';
 import { readFile } from 'fs/promises';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
@@ -17,6 +20,7 @@ import { AdminRole } from '../../database/entities/sys-user.entity';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { ProcessPdfService } from './process-pdf.service';
 import { SiliconFlowOcrService } from './silicon-flow-ocr.service';
+import { PdfExtractQueueService } from './pdf-extract-queue.service';
 
 @ApiTags('管理后台-PDF题目提取')
 @Controller('admin/process-pdf')
@@ -27,10 +31,11 @@ export class ProcessPdfController {
   constructor(
     private readonly processPdfService: ProcessPdfService,
     private readonly siliconFlowOcr: SiliconFlowOcrService,
+    private readonly pdfExtractQueue: PdfExtractQueueService,
   ) {}
 
   @Post('extract')
-  @ApiOperation({ summary: '上传 PDF 并提取题目（pdf-parse 本地解析）' })
+  @ApiOperation({ summary: '提交 PDF 提取任务（异步队列），立即返回 taskId，通过 GET /extract/task/:taskId 轮询结果' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -39,18 +44,18 @@ export class ProcessPdfController {
         pdf: {
           type: 'string',
           format: 'binary',
-          description: 'PDF 文件（建议单次不超过数十页，避免超时）',
+          description: 'PDF 文件',
         },
         forceOcr: {
           type: 'string',
-          description: '传 "1" 或 "true" 时强制转为图片后 OCR，不先做文本解析（适用于文本无法正确提取的 PDF）',
+          description: '传 "1" 或 "true" 时强制转为图片后 OCR',
         },
       },
     },
   })
   @UseInterceptors(
     FileInterceptor('pdf', {
-      limits: { fileSize: 50 * 1024 * 1024 }, // 50MB，与 BODY_LIMIT 一致；若仍 413 需在网关/云托管侧提高限制
+      limits: { fileSize: 50 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         if (!file.originalname?.toLowerCase().endsWith('.pdf')) {
           return cb(new BadRequestException('仅支持 PDF 文件'), false);
@@ -67,10 +72,23 @@ export class ProcessPdfController {
       throw new BadRequestException('请上传 PDF 文件（表单字段 pdf）');
     }
     const useForceOcr = forceOcr === '1' || forceOcr === 'true' || forceOcr === 'yes';
-    const questions = await this.processPdfService.extractQuestions(file, { forceOcr: useForceOcr });
+    const { taskId } = await this.pdfExtractQueue.submit(file, useForceOcr);
+    return CommonResponseDto.success({ taskId });
+  }
+
+  @Get('extract/task/:taskId')
+  @ApiOperation({ summary: '查询 PDF 提取任务状态与结果' })
+  async getExtractTask(@Param('taskId') taskId: string) {
+    const task = this.pdfExtractQueue.getTask(taskId);
+    if (!task) {
+      throw new NotFoundException('任务不存在或已过期');
+    }
     return CommonResponseDto.success({
-      count: questions.length,
-      data: questions,
+      taskId: task.taskId,
+      status: task.status,
+      result: task.result,
+      error: task.error,
+      createdAt: task.createdAt,
     });
   }
 
