@@ -27,6 +27,9 @@ RUN npm run build
 # 生产阶段
 FROM node:20-alpine AS production
 
+# 安装 Ghostscript（PDF 转图用于 OCR，/admin/process-pdf/extract 图片型或强制 OCR 依赖）
+RUN apk add --no-cache ghostscript
+
 # 设置工作目录
 WORKDIR /app
 

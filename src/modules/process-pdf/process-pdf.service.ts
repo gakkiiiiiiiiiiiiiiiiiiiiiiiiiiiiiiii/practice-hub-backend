@@ -58,8 +58,12 @@ export class ProcessPdfService {
         try {
           questions = await this.extractQuestionsViaOcr(pdfPath);
         } catch (ocrErr: any) {
+          const msg = ocrErr?.message || '';
+          const hint = msg.includes('ENOENT') || msg.includes('not found')
+            ? '服务器未安装 Ghostscript(gs)，无法将 PDF 转图进行 OCR。请安装 gs 或使用含 gs 的镜像。'
+            : '请确认已配置 SILICON_FLOW_API_KEY，且服务器已安装 Ghostscript(gs)。';
           throw new BadRequestException(
-            ocrErr?.message || 'PDF 文本提取无结果，且图片 OCR 失败，请确认已配置 SILICON_FLOW_API_KEY 或上传含可选中文字的 PDF',
+            `PDF 文本提取无结果，且图片 OCR 失败。${hint}`,
           );
         }
       }
