@@ -1,4 +1,21 @@
-# 快速导入数据库到外网服务器
+# 数据库导入导出
+
+## 将远程数据库导入到本地
+
+若已配置远程库（如 `.env.remote`），可直接执行：
+
+```bash
+cd back-end
+npm run import:from-remote
+```
+
+- **数据源**：远程数据库（`REMOTE_DB_HOST`, `REMOTE_DB_PORT`, `REMOTE_DB_USERNAME`, `REMOTE_DB_PASSWORD`, `REMOTE_DB_DATABASE`）
+- **目标**：本地数据库（`DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`，来自 `.env` / `.env.local`）
+- 脚本会从远程导出 SQL 到 `exports/remote_to_local.sql`，再在本地执行，覆盖本地表数据。
+
+---
+
+## 快速导入数据库到外网服务器
 
 本文档提供多种方式将数据库表和数据快速导入到外网数据库。
 

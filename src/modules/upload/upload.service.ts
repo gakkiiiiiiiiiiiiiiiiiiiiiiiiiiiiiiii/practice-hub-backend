@@ -444,6 +444,75 @@ export class UploadService {
 	}
 
 	/**
+	 * 上传 PDF 到对象存储（用于「先上传再解析」流程）
+	 * 本地环境存到 uploads/pdf/，微信云托管存到 COS pdf/
+	 */
+	async uploadPdf(file: Express.Multer.File): Promise<string> {
+		if (!file) {
+			throw new BadRequestException('文件不能为空');
+		}
+		const ext = this.getFileExtension(file.originalname);
+		if (ext.toLowerCase() !== '.pdf') {
+			throw new BadRequestException('仅支持 PDF 文件');
+		}
+		const maxSize = 100 * 1024 * 1024; // 100MB
+		if (file.size > maxSize) {
+			throw new BadRequestException('PDF 大小不能超过 100MB');
+		}
+		const buffer = await this.getPdfBuffer(file);
+		if (this.isWeChatCloudBase()) {
+			return this.uploadPdfToCOS(buffer, file.size);
+		}
+		return this.uploadPdfToLocal(buffer);
+	}
+
+	private getPdfBuffer(file: Express.Multer.File): Promise<Buffer> {
+		const f = file as Express.Multer.File & { buffer?: Buffer };
+		if (f.buffer && f.buffer.length > 0) {
+			return Promise.resolve(Buffer.isBuffer(f.buffer) ? f.buffer : Buffer.from(f.buffer));
+		}
+		if (file.path && fs.existsSync(file.path)) {
+			return fs.promises.readFile(file.path);
+		}
+		return Promise.reject(new BadRequestException('无法读取 PDF 内容'));
+	}
+
+	private async uploadPdfToLocal(buffer: Buffer): Promise<string> {
+		const timestamp = Date.now();
+		const randomStr = Math.random().toString(36).substring(2, 15);
+		const fileName = `pdf/${timestamp}-${randomStr}.pdf`;
+		const folderPath = path.join(this.uploadDir, 'pdf');
+		if (!fs.existsSync(folderPath)) {
+			fs.mkdirSync(folderPath, { recursive: true });
+		}
+		const filePath = path.join(this.uploadDir, fileName);
+		fs.writeFileSync(filePath, buffer);
+		return `${this.baseUrl}/uploads/${fileName}`;
+	}
+
+	private async uploadPdfToCOS(buffer: Buffer, size: number): Promise<string> {
+		const timestamp = Date.now();
+		const randomStr = Math.random().toString(36).substring(2, 15);
+		const fileName = `pdf/${timestamp}-${randomStr}.pdf`;
+		const cloudPath = `/${fileName}`;
+		const metaFileId = await this.getFileMetaData(cloudPath, '');
+		const uploadOptions: any = {
+			Bucket: this.bucket,
+			Region: this.region,
+			Key: fileName,
+			Body: buffer,
+			ContentType: 'application/pdf',
+			ContentLength: size,
+			StorageClass: 'STANDARD',
+		};
+		if (metaFileId) {
+			uploadOptions.Headers = { 'x-cos-meta-fileid': metaFileId };
+		}
+		await this.cos.putObject(uploadOptions);
+		return `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
+	}
+
+	/**
 	 * 获取文件扩展名
 	 */
 	private getFileExtension(filename: string): string {

@@ -9,6 +9,7 @@ import {
   UseGuards,
   Body,
   Param,
+  Query,
 } from '@nestjs/common';
 import { readFile } from 'fs/promises';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
@@ -21,6 +22,7 @@ import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { ProcessPdfService } from './process-pdf.service';
 import { SiliconFlowOcrService } from './silicon-flow-ocr.service';
 import { PdfExtractQueueService } from './pdf-extract-queue.service';
+import { UploadService } from '../upload/upload.service';
 
 @ApiTags('管理后台-PDF题目提取')
 @Controller('admin/process-pdf')
@@ -32,6 +34,7 @@ export class ProcessPdfController {
     private readonly processPdfService: ProcessPdfService,
     private readonly siliconFlowOcr: SiliconFlowOcrService,
     private readonly pdfExtractQueue: PdfExtractQueueService,
+    private readonly uploadService: UploadService,
   ) {}
 
   @Post('extract')
@@ -72,8 +75,18 @@ export class ProcessPdfController {
       throw new BadRequestException('请上传 PDF 文件（表单字段 pdf）');
     }
     const useForceOcr = forceOcr === '1' || forceOcr === 'true' || forceOcr === 'yes';
-    const { taskId } = await this.pdfExtractQueue.submit(file, useForceOcr);
-    return CommonResponseDto.success({ taskId });
+    const url = await this.uploadService.uploadPdf(file);
+    const fileName = file.originalname || 'upload.pdf';
+    const { taskId } = await this.pdfExtractQueue.submitByUrl(url, fileName, useForceOcr);
+    return CommonResponseDto.success({ taskId, fileName });
+  }
+
+  @Get('extract/tasks')
+  @ApiOperation({ summary: '获取近期 PDF 提取任务列表（用于弹窗表格）' })
+  async getExtractTasks(@Query('limit') limit?: string) {
+    const n = Math.min(parseInt(limit || '50', 10) || 50, 100);
+    const tasks = this.pdfExtractQueue.getRecentTasks(n);
+    return CommonResponseDto.success(tasks);
   }
 
   @Get('extract/task/:taskId')
@@ -86,6 +99,8 @@ export class ProcessPdfController {
     return CommonResponseDto.success({
       taskId: task.taskId,
       status: task.status,
+      fileName: task.fileName,
+      progress: task.progress,
       result: task.result,
       error: task.error,
       createdAt: task.createdAt,
