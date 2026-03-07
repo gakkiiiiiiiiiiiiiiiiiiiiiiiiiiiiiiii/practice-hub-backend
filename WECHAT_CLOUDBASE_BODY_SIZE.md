@@ -4,7 +4,18 @@
 
 调用 `POST /api/admin/process-pdf/extract` 或其它上传/大 JSON 接口时返回 **413 Request Entity Too Large**。
 
-## 原因
+## 413 排查清单（按请求经过顺序）
+
+| 层级 | 配置项 | 本项目当前值 | 说明 |
+|------|--------|--------------|------|
+| **1. 管理端 Nginx**（若前端通过 Nginx 代理 `/api` 到后端） | `client_max_body_size` | 默认 **1MB**，未设置时大文件必 413 | 在 `admin-web/nginx.conf` 的 server 或 `location /api` 中已设为 `100m` |
+| **2. 云网关**（微信云托管/腾讯云接入层） | 请求体/上传大小 | 约 **20MB**（以控制台为准） | 请求先经网关，超过即 413，需在控制台调大或走「先传存储再传 URL」 |
+| **3. 后端 Nest** | `main.ts` 的 `BODY_LIMIT` | `200mb`（仅对 JSON/urlencoded 有效） | 对 multipart 无效，multipart 由 Multer 限制 |
+| **4. 后端 Multer** | `process-pdf.controller` 的 `fileSize` | **100MB** | 仅对已进入容器的请求生效 |
+
+结论：**多数 413 来自 1（Nginx 未设）或 2（云网关）**。先确认管理端 Nginx 已设 `client_max_body_size 100m` 并重载；若仍 413 且文件 &lt; 20MB，再查后端与 Multer。
+
+## 原因（云托管场景）
 
 请求在到达你的 Node 应用之前，会先经过**微信云托管/腾讯云的接入层（网关）**。该层对单次请求体有默认大小限制（腾讯云托管文档中曾写为约 **20MB**），超过即直接返回 413，请求不会进入容器。
 
@@ -43,10 +54,8 @@ client_max_body_size 50m;
 
 以下仅对**已进入容器的请求**有效，无法解决网关 413：
 
-- **main.ts**：`express.json` / `express.urlencoded` 的 `limit` 使用环境变量 `BODY_LIMIT`，默认 `50mb`。
-- **process-pdf.controller**：PDF 上传 Multer `fileSize` 为 **50MB**。
-
-若网关限制大于 50MB，可把上述两处改为更大（如 `100mb`），否则无需改。
+- **main.ts**：`express.json` / `express.urlencoded` 的 `limit` 使用环境变量 `BODY_LIMIT`，默认 `200mb`。
+- **process-pdf.controller**：PDF 上传 Multer `fileSize` 为 **100MB**（与 Nginx `client_max_body_size 100m` 对齐）。
 
 ## 备选方案：大文件走对象存储
 

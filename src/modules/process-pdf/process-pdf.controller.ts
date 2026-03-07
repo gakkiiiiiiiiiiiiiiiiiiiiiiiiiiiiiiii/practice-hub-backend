@@ -55,7 +55,7 @@ export class ProcessPdfController {
   })
   @UseInterceptors(
     FileInterceptor('pdf', {
-      limits: { fileSize: 50 * 1024 * 1024 },
+      limits: { fileSize: 100 * 1024 * 1024 }, // 100MB，与 Nginx client_max_body_size 对齐
       fileFilter: (_req, file, cb) => {
         if (!file.originalname?.toLowerCase().endsWith('.pdf')) {
           return cb(new BadRequestException('仅支持 PDF 文件'), false);
