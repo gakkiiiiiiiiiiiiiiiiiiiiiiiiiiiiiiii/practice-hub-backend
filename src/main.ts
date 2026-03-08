@@ -16,6 +16,12 @@ async function bootstrap() {
 	app.use(express.json({ limit: bodyLimit }));
 	app.use(express.urlencoded({ limit: bodyLimit, extended: true }));
 
+	// 为 /uploads 静态资源添加 CORS 头，避免前端跨域 fetch 图片（如题干图片 OCR）被拦截
+	app.use('/uploads', (req, res, next) => {
+		const origin = req.headers.origin;
+		res.setHeader('Access-Control-Allow-Origin', origin || '*');
+		next();
+	});
 	// 配置静态文件服务，用于访问上传的文件
 	const uploadsPath = join(process.cwd(), 'uploads');
 	app.useStaticAssets(uploadsPath, {

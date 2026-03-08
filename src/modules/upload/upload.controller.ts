@@ -1,12 +1,17 @@
 import {
   Controller,
   Post,
+  Get,
+  Query,
   UseInterceptors,
   UploadedFile,
   BadRequestException,
   UseGuards,
   Req,
+  Res,
+  Header,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
@@ -99,6 +104,29 @@ export class AppUploadController {
       url: imageUrl,
       imageUrl, // 兼容前端可能使用的字段名
     });
+  }
+}
+
+/**
+ * 图片代理：解决管理端跨域无法直接显示 TCB 图片的问题（无需登录）
+ */
+@ApiTags('文件上传')
+@Controller('admin/upload')
+export class ProxyImageController {
+  constructor(private readonly uploadService: UploadService) {}
+
+  @Get('proxy-image')
+  @ApiOperation({ summary: '代理 TCB 图片（避免 CORS）' })
+  @Header('Access-Control-Allow-Origin', '*')
+  async proxyImage(@Query('url') url: string, @Res() res: Response) {
+    if (!url) {
+      throw new BadRequestException('缺少参数 url');
+    }
+    const decoded = decodeURIComponent(url);
+    const { data, contentType } = await this.uploadService.proxyImage(decoded);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(data);
   }
 }
 

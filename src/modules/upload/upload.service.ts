@@ -539,4 +539,40 @@ export class UploadService {
 			return null;
 		}
 	}
+
+	/**
+	 * 判断 URL 是否为本项目 TCB 域名（仅允许代理自家存储，防止滥用）
+	 */
+	isAllowedProxyUrl(url: string): boolean {
+		if (!url || typeof url !== 'string') return false;
+		const normalized = url.trim();
+		if (!normalized.startsWith('https://')) return false;
+		// 只允许当前配置的 bucket 对应的 tcb 域名
+		const allowedHost = `${this.bucket}.tcb.qcloud.la`;
+		try {
+			const u = new URL(normalized);
+			return u.hostname === allowedHost;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * 代理拉取 TCB 图片并返回 buffer 与 contentType（用于解决管理端跨域无法直接显示 TCB 图片）
+	 */
+	async proxyImage(url: string): Promise<{ data: Buffer; contentType: string }> {
+		if (!this.isAllowedProxyUrl(url)) {
+			throw new BadRequestException('仅允许代理本项目的 TCB 图片地址');
+		}
+		const res = await axios.get(url, {
+			responseType: 'arraybuffer',
+			timeout: 15000,
+			validateStatus: () => true,
+		});
+		if (res.status !== 200) {
+			throw new BadRequestException(`拉取图片失败: ${res.status}`);
+		}
+		const contentType = res.headers['content-type'] || 'image/png';
+		return { data: Buffer.from(res.data), contentType };
+	}
 }

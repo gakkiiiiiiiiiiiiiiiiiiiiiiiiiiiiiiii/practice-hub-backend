@@ -172,42 +172,36 @@ export class ProcessPdfController {
   }
 
   @Post('ocr-image')
-  @ApiOperation({ summary: '单张图片 OCR 识别（题干图片转文字）' })
-  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: '单张图片 OCR 识别（题干图片转文字），请求体为 base64' })
   @ApiBody({
     schema: {
       type: 'object',
+      required: ['image'],
       properties: {
         image: {
           type: 'string',
-          format: 'binary',
-          description: '图片文件（支持 jpg、png、gif、webp）',
+          description: '图片 base64 字符串（可为纯 base64 或 data:image/xxx;base64,xxx 格式）',
         },
       },
     },
   })
-  @UseInterceptors(
-    FileInterceptor('image', {
-      limits: { fileSize: 5 * 1024 * 1024 },
-      fileFilter: (_req, file, cb) => {
-        const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-        if (!file.mimetype || !allowed.includes(file.mimetype)) {
-          return cb(new BadRequestException('仅支持 jpg、png、gif、webp 图片'), false);
-        }
-        cb(null, true);
-      },
-    }),
-  )
-  async ocrImage(@UploadedFile() file: Express.Multer.File) {
-    if (!file) {
-      throw new BadRequestException('请上传图片文件（表单字段 image）');
+  async ocrImage(@Body() body: { image: string }) {
+    const raw = body?.image;
+    if (!raw || typeof raw !== 'string') {
+      throw new BadRequestException('请传入 image 字段（图片 base64 数据）');
     }
-    const fileWithBuffer = file as Express.Multer.File & { buffer?: Buffer };
-    const buffer = fileWithBuffer.buffer ?? (file.path ? await readFile(file.path) : null);
-    if (!buffer) {
-      throw new BadRequestException('无法读取文件内容');
+    let base64 = raw.trim();
+    if (base64.startsWith('data:')) {
+      const comma = base64.indexOf(',');
+      if (comma !== -1) base64 = base64.slice(comma + 1);
     }
-    const base64 = buffer.toString('base64');
+    if (!base64) {
+      throw new BadRequestException('图片 base64 数据为空');
+    }
+    const maxLen = 10 * 1024 * 1024; // 约 10MB base64
+    if (base64.length > maxLen) {
+      throw new BadRequestException('图片 base64 过长，请压缩后重试');
+    }
     const text = await this.siliconFlowOcr.ocrImageBase64(base64);
     return CommonResponseDto.success({ text });
   }

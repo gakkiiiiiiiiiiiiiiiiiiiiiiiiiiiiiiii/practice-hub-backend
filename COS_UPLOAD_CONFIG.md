@@ -85,6 +85,18 @@ URL 格式：
 https://{bucket}.cos.{region}.myqcloud.com/{key}
 ```
 
+## 管理端图片跨域（CORS）与代理
+
+当管理端前端与 TCB 域名不同源（例如前端 `practice-hub-admin.gakki.wiki`，图片 `xxx.tcb.qcloud.la`）时，浏览器会因 CORS 限制无法直接加载图片。
+
+**方案一（推荐）**：使用后端代理。项目已提供接口：
+
+- **GET** `/api/admin/upload/proxy-image?url=编码后的图片URL`
+- 仅允许代理本环境配置的 TCB 域名，无需登录即可访问。
+- 管理端前端已自动将 TCB 图片地址改写为该代理地址后再展示，无需额外配置。
+
+**方案二**：在腾讯云开发控制台为对应存储/静态托管配置 CORS，允许来源为管理端域名（如 `https://practice-hub-admin.gakki.wiki`）。配置后前端可直接使用原始 TCB URL。
+
 ## 限制说明
 
 1. **文件类型**: 仅支持 jpg、png、gif、webp
