@@ -30,6 +30,7 @@ import { UpdateQuestionDto } from './dto/update-question.dto';
 import { ImportQuestionDto } from './dto/import-question.dto';
 import { ImportJsonQuestionDto } from './dto/import-json-question.dto';
 import { BatchDeleteQuestionsDto } from './dto/batch-delete-questions.dto';
+import { BatchUpdateOrderDto } from './dto/batch-update-order.dto';
 import { QuestionType } from '../../database/entities/question.entity';
 
 @ApiTags('管理后台-题目管理')
@@ -128,6 +129,13 @@ export class AdminQuestionController {
 	@ApiOperation({ summary: '批量删除题目' })
 	async batchDeleteQuestions(@Body() dto: BatchDeleteQuestionsDto) {
 		const result = await this.adminQuestionService.batchDeleteQuestions(dto.ids);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch-update-order')
+	@ApiOperation({ summary: '批量更新题目序号（拖拽排序）' })
+	async batchUpdateOrder(@Body() dto: BatchUpdateOrderDto) {
+		const result = await this.adminQuestionService.batchUpdateOrder(dto.orders);
 		return CommonResponseDto.success(result);
 	}
 }

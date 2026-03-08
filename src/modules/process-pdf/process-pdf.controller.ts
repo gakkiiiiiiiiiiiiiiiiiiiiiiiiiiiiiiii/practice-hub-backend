@@ -10,6 +10,7 @@ import {
   Body,
   Param,
   Query,
+  Logger,
 } from '@nestjs/common';
 import { readFile } from 'fs/promises';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
@@ -30,6 +31,8 @@ import { UploadService } from '../upload/upload.service';
 @ApiBearerAuth()
 @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 export class ProcessPdfController {
+  private readonly logger = new Logger(ProcessPdfController.name);
+
   constructor(
     private readonly processPdfService: ProcessPdfService,
     private readonly siliconFlowOcr: SiliconFlowOcrService,
@@ -53,6 +56,10 @@ export class ProcessPdfController {
           type: 'string',
           description: '传 "1" 或 "true" 时强制转为图片后 OCR',
         },
+        direct: {
+          type: 'string',
+          description: '传 "1" 或 "true" 时直接上传 PDF 进行解析，不先写入对象存储',
+        },
       },
     },
   })
@@ -70,14 +77,32 @@ export class ProcessPdfController {
   async extract(
     @UploadedFile() file: Express.Multer.File,
     @Body('forceOcr') forceOcr?: string,
+    @Body('direct') direct?: string,
   ) {
     if (!file) {
       throw new BadRequestException('请上传 PDF 文件（表单字段 pdf）');
     }
-    const useForceOcr = forceOcr === '1' || forceOcr === 'true' || forceOcr === 'yes';
-    const url = await this.uploadService.uploadPdf(file);
     const fileName = file.originalname || 'upload.pdf';
+    const useForceOcr = forceOcr === '1' || forceOcr === 'true' || forceOcr === 'yes';
+    // 未传 direct 时默认直接上传解析（不先写对象存储）；识别不到文本时自动走 OCR
+    const useDirect =
+      direct === undefined ||
+      direct === '' ||
+      direct === '1' ||
+      direct === 'true' ||
+      direct === 'yes';
+    this.logger.log(
+      `[PDF提取] 收到上传: fileName=${fileName}, size=${file.size}, forceOcr=${useForceOcr}, direct=${useDirect}`,
+    );
+    if (useDirect) {
+      const { taskId } = await this.pdfExtractQueue.submit(file, useForceOcr);
+      this.logger.log(`[PDF提取] 直接解析任务已提交: taskId=${taskId}, fileName=${fileName}`);
+      return CommonResponseDto.success({ taskId, fileName });
+    }
+    const url = await this.uploadService.uploadPdf(file);
+    this.logger.log(`[PDF提取] 已上传到存储: fileName=${fileName}, url=${url}`);
     const { taskId } = await this.pdfExtractQueue.submitByUrl(url, fileName, useForceOcr);
+    this.logger.log(`[PDF提取] 任务已提交: taskId=${taskId}, fileName=${fileName}`);
     return CommonResponseDto.success({ taskId, fileName });
   }
 
@@ -94,6 +119,7 @@ export class ProcessPdfController {
   async getExtractTask(@Param('taskId') taskId: string) {
     const task = this.pdfExtractQueue.getTask(taskId);
     if (!task) {
+      this.logger.warn(`[PDF提取] 查询任务不存在: taskId=${taskId}`);
       throw new NotFoundException('任务不存在或已过期');
     }
     return CommonResponseDto.success({

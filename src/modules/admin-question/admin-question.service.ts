@@ -74,6 +74,17 @@ export class AdminQuestionService {
 			Object.assign(question, processedDto);
 			return await this.questionRepository.save(question);
 		} else {
+			// 新增题目：序号取当前章节下最大 sort_order + 1
+			const chapterId = processedDto.chapter_id;
+			if (chapterId != null) {
+				const raw = await this.questionRepository
+					.createQueryBuilder('q')
+					.select('MAX(q.sort_order)', 'maxOrder')
+					.where('q.chapter_id = :chapterId', { chapterId })
+					.getRawOne();
+				const maxOrder = raw?.maxOrder ?? 0;
+				processedDto.sort_order = Number(maxOrder) + 1;
+			}
 			const question = this.questionRepository.create(processedDto);
 			return await this.questionRepository.save(question);
 		}
@@ -104,7 +115,10 @@ export class AdminQuestionService {
 					queryBuilder.andWhere('question.type = :type', { type });
 				}
 
-				const questions = await queryBuilder.orderBy('question.id', 'ASC').getMany();
+				const questions = await queryBuilder
+					.orderBy('question.sort_order', 'ASC')
+					.addOrderBy('question.id', 'ASC')
+					.getMany();
 
 				// 格式化返回数据，添加课程和章节名称
 				return questions.map((q: any) => ({
@@ -135,6 +149,16 @@ export class AdminQuestionService {
 
 		// 如果所有重试都失败，抛出最后一个错误
 		throw lastError;
+	}
+
+	/**
+	 * 批量更新题目序号（拖拽排序）
+	 */
+	async batchUpdateOrder(orders: { id: number; sort_order: number }[]) {
+		for (const item of orders) {
+			await this.questionRepository.update({ id: item.id }, { sort_order: item.sort_order });
+		}
+		return { updated: orders.length };
 	}
 
 	/**
@@ -436,6 +460,14 @@ export class AdminQuestionService {
 			throw new BadRequestException('文件不能为空');
 		}
 
+		// 导入题目序号：从该章节当前最大 sort_order 之后递增
+		const rawMax = await this.questionRepository
+			.createQueryBuilder('q')
+			.select('MAX(q.sort_order)', 'maxOrder')
+			.where('q.chapter_id = :chapterId', { chapterId: dto.chapterId })
+			.getRawOne();
+		let baseOrder = Number(rawMax?.maxOrder ?? 0);
+
 		// 解析 Excel 文件
 		const workbook = new ExcelJS.Workbook();
 		// 确保 buffer 是正确的类型 - Multer 返回的 buffer 需要转换为标准 Buffer
@@ -588,6 +620,7 @@ export class AdminQuestionService {
 					const parsedQuestion = this.parseQuestionByType(row, questionType, dto.chapterId);
 
 					if (parsedQuestion && parsedQuestion.stem && parsedQuestion.stem.trim() !== '') {
+						parsedQuestion.sort_order = baseOrder + questions.length;
 						questions.push(parsedQuestion);
 						parsedCount++;
 						this.logger.log(`[导入] 解析成功: 第 ${rowNumber} 行, 题干: ${parsedQuestion.stem.substring(0, 50)}`);
@@ -639,6 +672,14 @@ export class AdminQuestionService {
 			throw new BadRequestException('题目列表不能为空');
 		}
 
+		// 导入题目序号：从该章节当前最大 sort_order 之后递增
+		const rawMax = await this.questionRepository
+			.createQueryBuilder('q')
+			.select('MAX(q.sort_order)', 'maxOrder')
+			.where('q.chapter_id = :chapterId', { chapterId: dto.chapterId })
+			.getRawOne();
+		const baseOrder = Number(rawMax?.maxOrder ?? 0);
+
 		const questions: Question[] = [];
 
 		for (let i = 0; i < dto.questions.length; i++) {
@@ -673,7 +714,7 @@ export class AdminQuestionService {
 				options = null;
 			}
 
-			// 创建题目实体
+			// 创建题目实体（序号在该章节下递增）
 			const question = this.questionRepository.create({
 				chapter_id: dto.chapterId,
 				parent_id: 0,
@@ -683,6 +724,7 @@ export class AdminQuestionService {
 				answer: item.answer.map((a) => String(a).trim()),
 				analysis: item.analysis?.trim() || null,
 				difficulty: 2, // 默认中等难度
+				sort_order: baseOrder + i,
 			});
 
 			questions.push(question);

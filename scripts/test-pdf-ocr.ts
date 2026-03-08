@@ -91,7 +91,7 @@ async function ocrImageBase64(imageBase64: string): Promise<string> {
     },
     {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      timeout: 60000,
+      timeout: 180000, // 3 分钟，大图/代理时单页 OCR 可能较慢
     },
   );
   const content = res.data?.choices?.[0]?.message?.content;

@@ -151,13 +151,19 @@ function parseTextBlock(text: string): ExtractedQuestion[] {
   return parsed;
 }
 
+/** 去除 OCR 模型可能输出的定位 token，避免出现在题干/选项/答案中 */
+function stripLocTokens(s: string): string {
+  return s.replace(/<\|LOC_\d+\|>/g, '').trim();
+}
+
 function extractComponents(block: string): ExtractedQuestion | null {
+  block = stripLocTokens(block);
   const answerMatch = block.match(/【答案】([\s\S]*?)(?=【解析】|$)/);
   if (!answerMatch) return null;
 
-  let answer = answerMatch[1].trim();
+  let answer = stripLocTokens(answerMatch[1]);
   const explanationMatch = block.match(/【解析】([\s\S]*?)$/);
-  const explanation = explanationMatch ? explanationMatch[1].trim() : '';
+  const explanation = explanationMatch ? stripLocTokens(explanationMatch[1]) : '';
 
   let endIdx = block.length;
   if (answerMatch.index !== undefined) endIdx = Math.min(endIdx, answerMatch.index);
@@ -178,16 +184,16 @@ function extractComponents(block: string): ExtractedQuestion | null {
 
   let questionText = '';
   if (optMatches.length > 0) {
-    questionText = questionAndOptions.substring(0, optMatches[0].index).trim();
+    questionText = stripLocTokens(questionAndOptions.substring(0, optMatches[0].index));
     for (let j = 0; j < optMatches.length; j++) {
       const current = optMatches[j];
       const next = optMatches[j + 1];
       const start = current.endIndex;
       const end = next ? next.index : questionAndOptions.length;
-      options[current.key] = questionAndOptions.substring(start, end).trim();
+      options[current.key] = stripLocTokens(questionAndOptions.substring(start, end));
     }
   } else {
-    questionText = questionAndOptions.trim();
+    questionText = stripLocTokens(questionAndOptions);
   }
 
   if (!questionText || !answer) return null;
@@ -197,16 +203,16 @@ function extractComponents(block: string): ExtractedQuestion | null {
 
   if (hasOptions) {
     const ansClean = answer.toUpperCase().replace(/[^A-D]/g, '');
-    if (ansClean.length === 1) {
+    const ansUnique = [...new Set(ansClean.split(''))].filter(Boolean).join(',');
+    if (ansUnique.length === 1) {
       qType = Object.keys(options).length === 2 ? '判断' : '单选';
-    } else if (ansClean.length > 1) {
+    } else if (ansUnique.length > 1) {
       qType = '多选';
-      answer = ansClean.split('').join(',');
     } else {
       qType = '单选';
     }
-    if (['单选', '多选', '判断'].includes(qType) && ansClean) {
-      answer = ansClean.split('').join(',');
+    if (['单选', '多选', '判断'].includes(qType) && ansUnique) {
+      answer = ansUnique;
     }
   } else {
     if (/____|（）|\(\)/.test(questionText)) qType = '填空';

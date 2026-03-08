@@ -58,6 +58,9 @@ export class Question {
   })
   difficulty: Difficulty;
 
+  @Column({ name: 'sort_order', type: 'int', default: 0 })
+  sort_order: number; // 序号，用于拖拽排序
+
   @CreateDateColumn()
   create_time: Date;
 

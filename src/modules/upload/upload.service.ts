@@ -408,10 +408,11 @@ export class UploadService {
 	}
 
 	/**
-	 * 删除文件（根据 URL 判断是本地还是 COS）
+	 * 根据 URL 删除文件（本地或 COS），供图片、PDF 等统一使用
 	 * @param fileUrl 文件 URL
 	 */
-	async deleteImage(fileUrl: string): Promise<void> {
+	async deleteByUrl(fileUrl: string): Promise<void> {
+		if (!fileUrl || typeof fileUrl !== 'string') return;
 		try {
 			// 判断是本地文件还是 COS 文件
 			if (fileUrl.includes('/uploads/')) {
@@ -441,6 +442,11 @@ export class UploadService {
 			console.error('[删除文件] 失败:', error);
 			// 删除失败不抛出异常，避免影响主流程
 		}
+	}
+
+	/** @deprecated 请使用 deleteByUrl，保留兼容 */
+	async deleteImage(fileUrl: string): Promise<void> {
+		return this.deleteByUrl(fileUrl);
 	}
 
 	/**
