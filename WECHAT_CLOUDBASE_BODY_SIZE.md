@@ -69,6 +69,8 @@ client_max_body_size 50m;
 **环境**：云托管一般会自动注入 `CBR_ENV_ID`；若未注入，可在环境变量中配置 `TCB_ENV_ID`（如 `prod-6g7tpqs40c5a758b`，与 COS_BUCKET 中间段一致）。  
 **CORS**：若浏览器直传 COS 时报跨域，请在 [对象存储-配置](https://cloud.weixin.qq.com/cloudrun/storage) 中将管理端所在域名加入安全域名 / CORS 允许来源。
 
+**错误 85107（URL 不在白名单）**：若调用 `course-file-upload-url` 时返回「URL不在白名单内」，需在 **微信云托管控制台 → 服务管理 → 云调用 → 微信令牌** 的权限配置中新增：`/tcb/uploadfile`。保存后重新发布或等待生效，再重试上传。
+
 ## 备选方案：其他大文件走对象存储
 
 若网关无法调大或仍频繁 413，可改为「先传存储，再让后端读」：

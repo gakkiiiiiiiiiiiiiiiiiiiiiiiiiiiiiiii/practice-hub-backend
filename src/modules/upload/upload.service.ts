@@ -490,8 +490,17 @@ export class UploadService {
 				finalFileUrl,
 			};
 		} catch (error: any) {
-			console.error('[直传凭证] 获取失败:', error?.response?.data || error.message);
-			throw new BadRequestException(error?.response?.data?.errmsg || error.message || '获取上传凭证失败');
+			const body = error?.response?.data;
+			const code = body?.error_code ?? body?.errcode;
+			const msg = body?.error_message ?? body?.errmsg ?? error.message;
+			console.error('[直传凭证] 获取失败:', body || error.message);
+			// 85107: URL 未加入微信令牌白名单，需在控制台添加 /tcb/uploadfile
+			if (code === '85107' || code === 85107) {
+				throw new BadRequestException(
+					'URL 未加入白名单。请前往「微信云托管控制台 → 服务管理 → 云调用 → 微信令牌」在权限配置中添加：/tcb/uploadfile',
+				);
+			}
+			throw new BadRequestException(msg || '获取上传凭证失败');
 		}
 	}
 
