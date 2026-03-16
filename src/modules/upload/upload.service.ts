@@ -444,8 +444,66 @@ export class UploadService {
 	}
 
 	/**
+	 * 获取课程文件直传 COS 的上传凭证（用于前端直传，绕过云托管 413 限制）
+	 * 参考：https://developers.weixin.qq.com/miniprogram/dev/wxcloudservice/wxcloudrun/src/development/storage/service/upload.html
+	 * @param path 云端路径，不要以 / 开头，如 course-files/xxx.pdf
+	 */
+	async getCourseFileUploadUrl(cloudPath: string): Promise<{
+		url: string;
+		token: string;
+		authorization: string;
+		cos_file_id: string;
+		file_id: string;
+		path: string;
+		finalFileUrl: string;
+	}> {
+		const envId = this.configService.get<string>('CBR_ENV_ID') || this.configService.get<string>('TCB_ENV_ID') || this.getEnvIdFromBucket();
+		if (!envId) {
+			throw new BadRequestException('未配置 CBR_ENV_ID 或 TCB_ENV_ID，无法获取直传凭证');
+		}
+		const pathNorm = cloudPath.replace(/^\//, '');
+		try {
+			// 微信云托管内网调用，使用 _/tcb/uploadfile；开放接口服务无需 access_token
+			const apiUrl = process.env.WX_CLOUD_RUN_ENV === 'true' || this.isWeChatCloudBase()
+				? 'http://api.weixin.qq.com/_/tcb/uploadfile'
+				: `https://api.weixin.qq.com/tcb/uploadfile`;
+			const res = await axios.post(
+				apiUrl,
+				{ env: envId, path: pathNorm },
+				{ timeout: 10000 },
+			);
+			const data = res.data;
+			if (data.errcode && data.errcode !== 0) {
+				throw new Error(data.errmsg || `获取上传链接失败: ${data.errcode}`);
+			}
+			if (!data.url || !data.authorization || !data.token || !data.cos_file_id) {
+				throw new Error('获取上传链接返回数据不完整');
+			}
+			const finalFileUrl = `https://${this.bucket}.tcb.qcloud.la/${pathNorm}`;
+			return {
+				url: data.url,
+				token: data.token,
+				authorization: data.authorization,
+				cos_file_id: data.cos_file_id,
+				file_id: data.file_id || '',
+				path: pathNorm,
+				finalFileUrl,
+			};
+		} catch (error: any) {
+			console.error('[直传凭证] 获取失败:', error?.response?.data || error.message);
+			throw new BadRequestException(error?.response?.data?.errmsg || error.message || '获取上传凭证失败');
+		}
+	}
+
+	private getEnvIdFromBucket(): string {
+		// 从 bucket 名 7072-prod-6g7tpqs40c5a758b-1392943725 推断 env 多为中间段
+		const m = this.bucket.match(/^[^-]+-(.+)-[^-]+$/);
+		return m ? m[1] : '';
+	}
+
+	/**
 	 * 上传课程文件（PDF/Word），用于「文件类型」课程内容
-	 * 支持：.pdf, .doc, .docx，最大 50MB
+	 * 支持：.pdf, .doc, .docx（直传方案可绕过 413，建议管理端使用 getCourseFileUploadUrl + 前端直传）
 	 */
 	async uploadCourseFile(file: Express.Multer.File, openid: string = ''): Promise<string> {
 		if (!file) {

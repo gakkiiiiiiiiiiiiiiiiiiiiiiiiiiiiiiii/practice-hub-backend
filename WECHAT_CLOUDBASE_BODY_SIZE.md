@@ -57,14 +57,26 @@ client_max_body_size 50m;
 - **main.ts**：`express.json` / `express.urlencoded` 的 `limit` 使用环境变量 `BODY_LIMIT`，默认 `200mb`。
 - **process-pdf.controller**：PDF 上传 Multer `fileSize` 为 **100MB**（与 Nginx `client_max_body_size 100m` 对齐）。
 
-## 备选方案：大文件走对象存储
+## 已实现：课程文件直传对象存储（绕过 413）
+
+**课程文件**（PDF/Word）已改为「先取凭证、再直传 COS」：
+
+1. 管理端选择文件后，先请求后端 `POST /admin/upload/course-file-upload-url`（仅传 `fileName`，请求体极小，不会 413）。
+2. 后端在云托管内调用 [tcb/uploadfile](https://developers.weixin.qq.com/miniprogram/dev/wxcloudservice/wxcloudrun/src/development/storage/service/upload.html) 获取上传链接与凭证，返回给前端。
+3. 前端将文件 **直接 POST 到凭证中的 COS URL**，不经过云托管网关，故无 body 限制。
+4. 上传成功后使用返回的 `finalFileUrl` 作为课程文件地址保存。
+
+**环境**：云托管一般会自动注入 `CBR_ENV_ID`；若未注入，可在环境变量中配置 `TCB_ENV_ID`（如 `prod-6g7tpqs40c5a758b`，与 COS_BUCKET 中间段一致）。  
+**CORS**：若浏览器直传 COS 时报跨域，请在 [对象存储-配置](https://cloud.weixin.qq.com/cloudrun/storage) 中将管理端所在域名加入安全域名 / CORS 允许来源。
+
+## 备选方案：其他大文件走对象存储
 
 若网关无法调大或仍频繁 413，可改为「先传存储，再让后端读」：
 
-1. **前端/管理端**：先把 PDF 上传到 **微信云托管对象存储 / 腾讯云 COS**（走存储的上传接口，一般有更大单文件限制）。
+1. **前端/管理端**：先把文件上传到 **微信云托管对象存储 / 腾讯云 COS**（走存储的上传接口，一般有更大单文件限制）。
 2. 上传成功后拿到 **文件 URL 或 fileID**。
 3. 调用你的后端接口时只传 **URL 或 fileID**（请求体很小，不会 413）。
-4. **后端**：根据 URL/fileID 从存储下载 PDF 到临时目录，再调用现有的 `process-pdf` 提取逻辑；处理完删临时文件。
+4. **后端**：根据 URL/fileID 从存储下载到临时目录，再执行业务逻辑；处理完删临时文件。
 
 这样大文件不经过网关请求体，仅一次小请求 + 后端从存储拉取，可规避 413。
 

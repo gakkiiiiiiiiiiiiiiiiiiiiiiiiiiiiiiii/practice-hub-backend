@@ -3,6 +3,7 @@ import {
   Post,
   Get,
   Query,
+  Body,
   UseInterceptors,
   UploadedFile,
   BadRequestException,
@@ -67,8 +68,37 @@ export class UploadController {
     });
   }
 
+  @Post('course-file-upload-url')
+  @ApiOperation({ summary: '获取课程文件直传 COS 凭证（前端直传，绕过 413）' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['fileName'],
+      properties: {
+        fileName: { type: 'string', description: '原始文件名，如 xxx.pdf' },
+      },
+    },
+  })
+  async getCourseFileUploadUrl(@Body() body: { fileName: string }) {
+    const fileName = body?.fileName?.trim();
+    if (!fileName) {
+      throw new BadRequestException('请传入 fileName');
+    }
+    const ext = fileName.toLowerCase().endsWith('.pdf') ? '.pdf' : fileName.toLowerCase().endsWith('.docx') ? '.docx' : fileName.toLowerCase().endsWith('.doc') ? '.doc' : '';
+    if (!['.pdf', '.doc', '.docx'].includes(ext)) {
+      throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
+    }
+    const path = `course-files/${Date.now()}-${Math.random().toString(36).slice(2, 12)}${ext}`;
+    const credentials = await this.uploadService.getCourseFileUploadUrl(path);
+    return CommonResponseDto.success({
+      ...credentials,
+      fileName,
+      fileType: ext.slice(1),
+    });
+  }
+
   @Post('course-file')
-  @ApiOperation({ summary: '上传课程文件（PDF/Word），用于文件类型课程' })
+  @ApiOperation({ summary: '上传课程文件（PDF/Word），经后端转发；大文件建议用 course-file-upload-url 直传' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
