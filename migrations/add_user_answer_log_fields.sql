@@ -3,13 +3,13 @@
 
 -- 检查并添加 text_answer 字段
 ALTER TABLE `user_answer_log`
-  ADD COLUMN IF NOT EXISTS `text_answer` TEXT NULL COMMENT '文本答案（简答题）' AFTER `user_option`;
+  ADD COLUMN `text_answer` TEXT NULL COMMENT '文本答案（简答题）' AFTER `user_option`;
 
 -- 检查并添加 image_answer 字段
 ALTER TABLE `user_answer_log`
-  ADD COLUMN IF NOT EXISTS `image_answer` TEXT NULL COMMENT '图片答案URL（简答题）' AFTER `text_answer`;
+  ADD COLUMN `image_answer` TEXT NULL COMMENT '图片答案URL（简答题）' AFTER `text_answer`;
 
 -- 检查并添加 is_correct 字段（如果不存在）
 ALTER TABLE `user_answer_log`
-  ADD COLUMN IF NOT EXISTS `is_correct` TINYINT NULL COMMENT '0-错误, 1-正确, null-待批改（简答题）' AFTER `image_answer`;
+  ADD COLUMN `is_correct` TINYINT NULL COMMENT '0-错误, 1-正确, null-待批改（简答题）' AFTER `image_answer`;
 

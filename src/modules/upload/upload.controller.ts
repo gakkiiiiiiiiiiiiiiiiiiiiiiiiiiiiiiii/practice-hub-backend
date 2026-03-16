@@ -41,7 +41,7 @@ export class UploadController {
         file: {
           type: 'string',
           format: 'binary',
-          description: '图片文件（支持 jpg、png、gif、webp，最大 5MB）',
+          description: '图片文件（支持 jpg、png、gif、webp）',
         },
         openid: {
           type: 'string',
@@ -66,6 +66,55 @@ export class UploadController {
       imageUrl, // 兼容前端可能使用的字段名
     });
   }
+
+  @Post('course-file')
+  @ApiOperation({ summary: '上传课程文件（PDF/Word），用于文件类型课程' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'PDF 或 Word 文件（.pdf/.doc/.docx）',
+        },
+      },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      fileFilter: (_req, file, cb) => {
+        const allowed = [
+          'application/pdf',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ];
+        const name = (file.originalname || '').toLowerCase();
+        const ok =
+          allowed.includes(file.mimetype) ||
+          name.endsWith('.pdf') ||
+          name.endsWith('.doc') ||
+          name.endsWith('.docx');
+        if (!ok) {
+          return cb(new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件'), false);
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  async uploadCourseFile(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('请选择 PDF 或 Word 文件');
+    }
+    const fileUrl = await this.uploadService.uploadCourseFile(file, '');
+    return CommonResponseDto.success({
+      url: fileUrl,
+      fileUrl,
+      fileName: file.originalname,
+      fileType: file.originalname.toLowerCase().endsWith('.pdf') ? 'pdf' : file.originalname.toLowerCase().endsWith('.docx') ? 'docx' : 'doc',
+    });
+  }
 }
 
 // 小程序端图片上传控制器
@@ -86,7 +135,7 @@ export class AppUploadController {
         file: {
           type: 'string',
           format: 'binary',
-          description: '图片文件（支持 jpg、png、gif、webp，最大 5MB）',
+          description: '图片文件（支持 jpg、png、gif、webp）',
         },
       },
     },

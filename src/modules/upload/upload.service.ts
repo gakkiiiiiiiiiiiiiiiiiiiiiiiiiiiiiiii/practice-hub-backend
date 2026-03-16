@@ -292,12 +292,6 @@ export class UploadService {
 			throw new BadRequestException('不支持的文件类型，仅支持 jpg、png、gif、webp');
 		}
 
-		// 验证文件大小（限制 5MB）
-		const maxSize = 5 * 1024 * 1024; // 5MB
-		if (file.size > maxSize) {
-			throw new BadRequestException('文件大小不能超过 5MB');
-		}
-
 		// 根据环境选择存储方式
 		if (this.isWeChatCloudBase()) {
 			return this.uploadToCOS(file, folder, openid);
@@ -450,6 +444,115 @@ export class UploadService {
 	}
 
 	/**
+	 * 上传课程文件（PDF/Word），用于「文件类型」课程内容
+	 * 支持：.pdf, .doc, .docx，最大 50MB
+	 */
+	async uploadCourseFile(file: Express.Multer.File, openid: string = ''): Promise<string> {
+		if (!file) {
+			throw new BadRequestException('文件不能为空');
+		}
+		const allowedMimeTypes = [
+			'application/pdf',
+			'application/msword', // .doc
+			'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+		];
+		if (!allowedMimeTypes.includes(file.mimetype)) {
+			throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
+		}
+		const ext = this.getFileExtension(file.originalname).toLowerCase();
+		const allowedExts = ['.pdf', '.doc', '.docx'];
+		if (!allowedExts.includes(ext)) {
+			throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
+		}
+		const folder = 'course-files';
+		if (this.isWeChatCloudBase()) {
+			return this.uploadCourseFileToCOS(file, folder, openid);
+		}
+		return this.uploadCourseFileToLocal(file, folder);
+	}
+
+	private async uploadCourseFileToLocal(file: Express.Multer.File, folder: string): Promise<string> {
+		const allowedExts = ['.pdf', '.doc', '.docx'];
+		const relativePath = await this.saveFileToLocalWithExts(file, folder, allowedExts);
+		const fileUrl = `${this.baseUrl}/uploads/${relativePath}`;
+		console.log(`[本地存储] 课程文件上传成功: ${fileUrl}`);
+		return fileUrl;
+	}
+
+	private async saveFileToLocalWithExts(
+		file: Express.Multer.File,
+		folder: string,
+		allowedExts: string[],
+	): Promise<string> {
+		if (!this.isValidFilename(file.originalname)) {
+			throw new BadRequestException('文件名包含不安全字符');
+		}
+		if (!this.isValidFilename(folder)) {
+			throw new BadRequestException('文件夹名称包含不安全字符');
+		}
+		const timestamp = Date.now();
+		const randomStr = Math.random().toString(36).substring(2, 15);
+		const ext = this.getFileExtension(file.originalname).toLowerCase();
+		if (!allowedExts.includes(ext)) {
+			throw new BadRequestException(`不支持的文件类型: ${ext}`);
+		}
+		const fileName = `${timestamp}-${randomStr}${ext}`;
+		const folderPath = path.join(this.uploadDir, folder);
+		if (!fs.existsSync(folderPath)) {
+			fs.mkdirSync(folderPath, { recursive: true });
+		}
+		const filePath = path.join(folderPath, fileName);
+		const resolvedPath = path.resolve(filePath);
+		const resolvedUploadDir = path.resolve(this.uploadDir);
+		if (!resolvedPath.startsWith(resolvedUploadDir)) {
+			throw new BadRequestException('文件路径不安全');
+		}
+		const buffer = (file as any).buffer ?? (file.path ? await fs.promises.readFile(file.path) : null);
+		if (!buffer) {
+			throw new BadRequestException('无法读取文件内容');
+		}
+		fs.writeFileSync(filePath, buffer);
+		return `${folder}/${fileName}`;
+	}
+
+	private async uploadCourseFileToCOS(
+		file: Express.Multer.File,
+		folder: string,
+		openid: string,
+	): Promise<string> {
+		const allowedExts = ['.pdf', '.doc', '.docx'];
+		const ext = this.getFileExtension(file.originalname).toLowerCase();
+		if (!allowedExts.includes(ext)) {
+			throw new BadRequestException('仅支持 PDF、Word 文件');
+		}
+		const timestamp = Date.now();
+		const randomStr = Math.random().toString(36).substring(2, 15);
+		const fileName = `${folder}/${timestamp}-${randomStr}${ext}`;
+		const cloudPath = `/${fileName}`;
+		const metaFileId = await this.getFileMetaData(cloudPath, openid);
+		const buffer = (file as any).buffer ?? (file.path ? await fs.promises.readFile(file.path) : null);
+		if (!buffer) {
+			throw new BadRequestException('无法读取文件内容');
+		}
+		const uploadOptions: any = {
+			Bucket: this.bucket,
+			Region: this.region,
+			Key: fileName,
+			Body: buffer,
+			ContentType: file.mimetype,
+			ContentLength: buffer.length,
+			StorageClass: 'STANDARD',
+		};
+		if (metaFileId) {
+			uploadOptions.Headers = { 'x-cos-meta-fileid': metaFileId };
+		}
+		await this.cos.putObject(uploadOptions);
+		const fileUrl = `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
+		console.log(`[COS上传] 课程文件成功: ${fileUrl}`);
+		return fileUrl;
+	}
+
+	/**
 	 * 上传 PDF 到对象存储（用于「先上传再解析」流程）
 	 * 本地环境存到 uploads/pdf/，微信云托管存到 COS pdf/
 	 */
@@ -460,10 +563,6 @@ export class UploadService {
 		const ext = this.getFileExtension(file.originalname);
 		if (ext.toLowerCase() !== '.pdf') {
 			throw new BadRequestException('仅支持 PDF 文件');
-		}
-		const maxSize = 100 * 1024 * 1024; // 100MB
-		if (file.size > maxSize) {
-			throw new BadRequestException('PDF 大小不能超过 100MB');
 		}
 		const buffer = await this.getPdfBuffer(file);
 		if (this.isWeChatCloudBase()) {

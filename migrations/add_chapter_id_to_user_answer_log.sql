@@ -3,7 +3,7 @@
 
 -- 检查并添加 chapter_id 字段
 ALTER TABLE `user_answer_log`
-  ADD COLUMN IF NOT EXISTS `chapter_id` INT NOT NULL COMMENT '章节ID（冗余字段，便于查询）' AFTER `question_id`;
+  ADD COLUMN `chapter_id` INT NOT NULL COMMENT '章节ID（冗余字段，便于查询）' AFTER `question_id`;
 
 -- 如果表中已有数据，需要更新现有记录的 chapter_id
 -- 通过 question_id 关联 question 表获取 chapter_id

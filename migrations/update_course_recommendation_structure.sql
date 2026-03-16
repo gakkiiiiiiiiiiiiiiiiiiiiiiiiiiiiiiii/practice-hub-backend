@@ -5,7 +5,7 @@
 
 -- 1. 在 course 表中添加 recommended_course_ids 字段
 ALTER TABLE `course` 
-ADD COLUMN IF NOT EXISTS `recommended_course_ids` json DEFAULT NULL COMMENT '推荐课程ID列表（JSON数组）' AFTER `introduction`;
+ADD COLUMN `recommended_course_ids` json DEFAULT NULL COMMENT '推荐课程ID列表（JSON数组）' AFTER `introduction`;
 
 -- 2. 删除 course_recommendation 表中的 course_id 字段和相关的唯一索引
 -- 注意：如果表中有数据，需要先备份或删除数据

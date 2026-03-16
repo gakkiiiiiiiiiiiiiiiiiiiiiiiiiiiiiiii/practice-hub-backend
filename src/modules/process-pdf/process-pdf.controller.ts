@@ -65,7 +65,6 @@ export class ProcessPdfController {
   })
   @UseInterceptors(
     FileInterceptor('pdf', {
-      limits: { fileSize: 100 * 1024 * 1024 }, // 100MB，与 Nginx client_max_body_size 对齐
       fileFilter: (_req, file, cb) => {
         if (!file.originalname?.toLowerCase().endsWith('.pdf')) {
           return cb(new BadRequestException('仅支持 PDF 文件'), false);
@@ -150,7 +149,6 @@ export class ProcessPdfController {
   })
   @UseInterceptors(
     FileInterceptor('doc', {
-      limits: { fileSize: 20 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         const name = (file.originalname || '').toLowerCase();
         if (!name.endsWith('.docx') && !name.endsWith('.doc')) {
@@ -197,10 +195,6 @@ export class ProcessPdfController {
     }
     if (!base64) {
       throw new BadRequestException('图片 base64 数据为空');
-    }
-    const maxLen = 10 * 1024 * 1024; // 约 10MB base64
-    if (base64.length > maxLen) {
-      throw new BadRequestException('图片 base64 过长，请压缩后重试');
     }
     const text = await this.siliconFlowOcr.ocrImageBase64(base64);
     return CommonResponseDto.success({ text });

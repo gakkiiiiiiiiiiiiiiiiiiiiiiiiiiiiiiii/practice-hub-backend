@@ -82,4 +82,24 @@ export class CreateCourseDto {
 	@IsOptional()
 	@IsString()
 	introduction?: string;
+
+	@ApiProperty({ description: '课程内容类型：normal=普通题库，file=文件课程', example: 'normal', required: false })
+	@IsOptional()
+	@IsString()
+	content_type?: string;
+
+	@ApiProperty({ description: '文件课程：文件 URL', required: false })
+	@IsOptional()
+	@IsString()
+	file_url?: string;
+
+	@ApiProperty({ description: '文件课程：文件名称', required: false })
+	@IsOptional()
+	@IsString()
+	file_name?: string;
+
+	@ApiProperty({ description: '文件课程：文件类型 pdf/doc/docx', required: false })
+	@IsOptional()
+	@IsString()
+	file_type?: string;
 }
