@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
+import axios from 'axios';
+import { PDFDocument } from 'pdf-lib';
 import { Course } from '../../database/entities/course.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
@@ -115,12 +117,50 @@ export class CourseService {
       }
     }
 
+    const fileType = (course.file_type || '').toLowerCase();
+    const isFileCourse = course.content_type === 'file' && course.file_url;
+    const needPreviewUrl =
+      isFileCourse && !hasAuth && price > 0 && (fileType === 'pdf' || fileType === 'doc' || fileType === 'docx');
+
     return {
       ...course,
       chapters,
       hasAuth,
       expireTime,
+      /** 付费未购买时，试读用：PDF 为前 2 页地址，Word 暂不提供试读 */
+      file_preview_url: needPreviewUrl && fileType === 'pdf' ? `/api/app/courses/${courseId}/file-preview` : undefined,
     };
+  }
+
+  /**
+   * 获取课程文件预览 PDF（前 maxPages 页），仅支持 PDF 类型
+   */
+  async getCourseFilePreviewPdf(courseId: number, maxPages: number = 2): Promise<Buffer> {
+    const course = await this.courseRepository.findOne({
+      where: { id: courseId },
+      select: ['id', 'content_type', 'file_url', 'file_type'],
+    });
+    if (!course || course.content_type !== 'file' || !course.file_url) {
+      throw new NotFoundException('课程无文件或非文件课程');
+    }
+    const fileType = (course.file_type || '').toLowerCase();
+    if (fileType !== 'pdf') {
+      throw new NotFoundException('仅支持 PDF 试读');
+    }
+    const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
+    const bytes = res.data as ArrayBuffer;
+    const donorDoc = await PDFDocument.load(bytes);
+    const pageCount = donorDoc.getPageCount();
+    const pagesToCopy = Math.min(maxPages, Math.max(1, pageCount));
+    if (pagesToCopy < 1) {
+      throw new NotFoundException('PDF 无有效页');
+    }
+    const indices = Array.from({ length: pagesToCopy }, (_, i) => i);
+    const newDoc = await PDFDocument.create();
+    const copied = await newDoc.copyPages(donorDoc, indices);
+    copied.forEach((p) => newDoc.addPage(p));
+    const pdfBytes = await newDoc.save();
+    return Buffer.from(pdfBytes);
   }
 
   /**

@@ -1,5 +1,6 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Response } from 'express';
 import { CourseService } from './course.service';
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -32,6 +33,35 @@ export class CourseController {
     return CommonResponseDto.success(result);
   }
 
+  @Get(':id/file-preview')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '课程文件试读（付费未购买时返回前 2 页 PDF）' })
+  async getCourseFilePreview(
+    @Param('id') id: string,
+    @Query('maxPages') maxPagesStr: string | undefined,
+    @CurrentUser() user: any,
+    @Res({ passthrough: false }) res: Response,
+  ) {
+    const courseId = +id;
+    const detail = await this.courseService.getCourseDetail(courseId, user?.userId);
+    const course = detail as any;
+    if (course.content_type !== 'file' || !course.file_url) {
+      return res.status(404).send('课程无文件');
+    }
+    const maxPages = Math.min(10, Math.max(1, parseInt(maxPagesStr || '2', 10) || 2));
+    if (course.hasAuth || Number(course.price) === 0 || course.is_free === 1) {
+      return res.redirect(302, course.file_url);
+    }
+    if ((course.file_type || '').toLowerCase() !== 'pdf') {
+      return res.status(403).send('仅支持 PDF 试读');
+    }
+    const buffer = await this.courseService.getCourseFilePreviewPdf(courseId, maxPages);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"');
+    res.send(buffer);
+  }
+
   @Get(':id/detail')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
@@ -40,8 +70,6 @@ export class CourseController {
     @Param('id') id: number,
     @CurrentUser() user?: any,
   ) {
-    // 注意：这里不强制要求登录，因为需要支持未登录用户查看课程信息
-    // 但如果用户已登录，会检查权限
     const userId = user?.userId;
     const result = await this.courseService.getCourseDetail(+id, userId);
     return CommonResponseDto.success(result);
