@@ -80,6 +80,56 @@ export class CourseController {
     res.send(buffer);
   }
 
+  @Get(':id/preview-pages-info')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '课程文件预览页数（图片预览用）' })
+  async getPreviewPagesInfo(
+    @Param('id') id: string,
+    @Query('ticket') ticket: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    const courseId = +id;
+    let userId = user?.userId;
+    if (ticket && !userId) {
+      const verified = this.courseService.verifyPreviewTicket(ticket);
+      if (verified && verified.courseId === courseId) userId = verified.userId ?? undefined;
+    }
+    const info = await this.courseService.getCourseFilePreviewPageInfo(courseId, userId);
+    return CommonResponseDto.success(info);
+  }
+
+  @Get(':id/preview-page/:pageNum')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '课程文件指定页图片（PDF 转 PNG，用于图片预览）' })
+  async getPreviewPageImage(
+    @Param('id') id: string,
+    @Param('pageNum') pageNumStr: string,
+    @Query('ticket') ticket: string | undefined,
+    @CurrentUser() user: any,
+    @Res({ passthrough: false }) res: Response,
+  ) {
+    const courseId = +id;
+    const pageNum = parseInt(pageNumStr, 10);
+    if (!Number.isInteger(pageNum) || pageNum < 1) {
+      return res.status(400).send('页码无效');
+    }
+    let userId = user?.userId;
+    if (ticket && !userId) {
+      const verified = this.courseService.verifyPreviewTicket(ticket);
+      if (verified && verified.courseId === courseId) userId = verified.userId ?? undefined;
+    }
+    const { buffer, contentType } = await this.courseService.getCourseFilePreviewPageImage(
+      courseId,
+      pageNum,
+      userId,
+    );
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.send(buffer);
+  }
+
   @Get(':id/detail')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()

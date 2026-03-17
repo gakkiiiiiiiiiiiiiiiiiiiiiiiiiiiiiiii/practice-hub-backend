@@ -5,6 +5,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import axios from 'axios';
 import { PDFDocument } from 'pdf-lib';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { Course } from '../../database/entities/course.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
@@ -165,6 +168,77 @@ export class CourseService {
     copied.forEach((p) => newDoc.addPage(p));
     const pdfBytes = await newDoc.save();
     return Buffer.from(pdfBytes);
+  }
+
+  /**
+   * 获取课程文件预览页数（用于图片预览：已购/免费为全部，未购付费为 2）
+   */
+  async getCourseFilePreviewPageInfo(courseId: number, userId?: number): Promise<{ totalPages: number }> {
+    const detail = await this.getCourseDetail(courseId, userId);
+    const course = detail as any;
+    if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
+      throw new NotFoundException('课程无 PDF 文件');
+    }
+    const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
+    const bytes = res.data as ArrayBuffer;
+    const doc = await PDFDocument.load(bytes);
+    const fullCount = doc.getPageCount();
+    const totalPages =
+      course.hasAuth || Number(course.price) === 0 || course.is_free === 1 ? fullCount : Math.min(2, fullCount);
+    return { totalPages: Math.max(1, totalPages) };
+  }
+
+  /**
+   * 将课程 PDF 指定页转为 PNG 图片（用于小程序内图片预览）
+   * 依赖 pdf2pic（需系统安装 poppler），失败时抛出
+   */
+  async getCourseFilePreviewPageImage(
+    courseId: number,
+    pageNum: number,
+    userId?: number,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    const detail = await this.getCourseDetail(courseId, userId);
+    const course = detail as any;
+    if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
+      throw new NotFoundException('课程无 PDF 文件');
+    }
+    const maxPages =
+      course.hasAuth || Number(course.price) === 0 || course.is_free === 1
+        ? 999
+        : 2;
+    if (pageNum < 1 || pageNum > maxPages) {
+      throw new NotFoundException('页码超出范围');
+    }
+    let pdfBuffer: Buffer;
+    if (course.hasAuth || Number(course.price) === 0 || course.is_free === 1) {
+      const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
+      pdfBuffer = Buffer.from(res.data as ArrayBuffer);
+    } else {
+      pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 2);
+    }
+    const tmpDir = path.join(os.tmpdir(), `course-preview-${courseId}-${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const pdfPath = path.join(tmpDir, 'doc.pdf');
+    try {
+      fs.writeFileSync(pdfPath, pdfBuffer);
+      const { fromPath } = await import('pdf2pic');
+      const convert = fromPath(pdfPath, {
+        format: 'png',
+        width: 1200,
+        density: 150,
+      });
+      const result = await convert(pageNum, { responseType: 'buffer' });
+      const buffer = result?.buffer ?? result?.data;
+      if (!buffer || !Buffer.isBuffer(buffer)) {
+        throw new Error('pdf2pic 未返回图片 buffer，请确认已安装 poppler');
+      }
+      return { buffer, contentType: 'image/png' };
+    } finally {
+      try {
+        if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
+        if (fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir);
+      } catch (_) {}
+    }
   }
 
   /**
