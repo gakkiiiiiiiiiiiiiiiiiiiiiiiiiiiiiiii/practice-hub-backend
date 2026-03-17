@@ -5,7 +5,7 @@
  */
 
 import { DataSource } from 'typeorm';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { SysUser, AdminRole } from '../src/database/entities/sys-user.entity';
 
 async function createAdmin() {

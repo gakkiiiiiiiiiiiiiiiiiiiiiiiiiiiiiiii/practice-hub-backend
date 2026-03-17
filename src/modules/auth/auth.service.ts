@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException, BadRequestException, Inject, forward
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import axios from 'axios';
 import * as https from 'https';
 import { AppUser } from '../../database/entities/app-user.entity';

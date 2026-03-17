@@ -63,12 +63,35 @@ tcb init
 tcb deploy
 ```
 
+## 构建耗时优化
+
+若部署/构建时间过长，可参考以下已做优化与建议：
+
+1. **启用 BuildKit**（推荐）  
+   Dockerfile 已使用 `RUN --mount=type=cache,target=/root/.npm` 缓存 npm 目录，**需开启 BuildKit 才能生效**：
+   ```bash
+   export DOCKER_BUILDKIT=1
+   docker build -t practice-hub-backend:latest .
+   ```
+   微信云托管若使用 Docker 构建，请在构建环境中启用 BuildKit，以便复用 npm 缓存，二次构建会明显加快。
+
+2. **已做修改**  
+   - **bcrypt → bcryptjs**：去掉原生 C++ 编译，Alpine 下不再安装 build-base、拖慢构建。  
+   - **npm 缓存挂载**：builder 与 production 阶段均使用缓存，未改 `package*.json` 时依赖安装会命中缓存。  
+   - **`--prefer-offline --no-audit`**：减少网络与审计耗时。
+
+3. **若仍很慢**  
+   - 确认构建环境已开启 BuildKit。  
+   - 检查网络：拉取 node:20-alpine 与 npm 包可能较慢，可配置镜像源。  
+   - 首次构建会较慢，后续只改业务代码时主要重跑 `COPY . .` 和 `npm run build`，会快很多。
+
 ## 本地构建测试
 
 在推送到微信云托管之前，可以在本地测试 Docker 镜像：
 
 ```bash
-# 构建镜像
+# 使用 BuildKit 构建（推荐，利用缓存）
+export DOCKER_BUILDKIT=1
 docker build -t practice-hub-backend:latest .
 
 # 运行容器（需要配置环境变量）

@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like } from 'typeorm';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { SysUser } from '../../database/entities/sys-user.entity';
 import { Role } from '../../database/entities/role.entity';
 import { GetAccountListDto } from './dto/get-account-list.dto';

@@ -1,47 +1,45 @@
 # ============================================
 # 微信云托管 - 后端服务 Dockerfile
 # ============================================
-# 多阶段构建，优化镜像大小和构建速度
+# 使用 BuildKit 加速：DOCKER_BUILDKIT=1 docker build ...
+# 多阶段构建，利用缓存层减少部署时长
 
+# syntax=docker/dockerfile:1
 # 构建阶段
 FROM node:20-alpine AS builder
 
-# 设置工作目录
 WORKDIR /app
 
-# 安装构建依赖（git 用于某些 npm 包）
+# 仅安装 git（部分 npm 包可选依赖需要）
 RUN apk add --no-cache git
 
-# 复制 package 文件（利用 Docker 缓存层）
+# 先复制依赖描述，利用缓存：未改 package 时跳过整层
 COPY package*.json ./
 
-# 安装依赖（包括 devDependencies，用于构建）
-RUN npm ci --legacy-peer-deps
+# 使用 BuildKit 缓存 npm 目录，二次构建时大幅加速
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --legacy-peer-deps --prefer-offline --no-audit
 
-# 复制源代码
 COPY . .
 
-# 构建应用
 RUN npm run build
 
 # 生产阶段
 FROM node:20-alpine AS production
 
-# 安装 Ghostscript（PDF 转图用于 OCR，/admin/process-pdf/extract 图片型或强制 OCR 依赖）
+# Ghostscript：PDF 转图 / OCR 依赖
 RUN apk add --no-cache ghostscript
 
-# 设置工作目录
 WORKDIR /app
 
-# 创建非 root 用户（安全最佳实践）
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nestjs -u 1001
 
-# 复制 package 文件
 COPY package*.json ./
 
-# 只安装生产依赖
-RUN npm ci --only=production --legacy-peer-deps && \
+# 生产依赖也使用缓存；bcrypt 已换 bcryptjs，无原生编译
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --only=production --legacy-peer-deps --prefer-offline --no-audit && \
     npm cache clean --force
 
 # 从构建阶段复制构建产物
