@@ -190,7 +190,7 @@ export class CourseService {
 
   /**
    * 将课程 PDF 指定页转为 PNG 图片（用于小程序内图片预览）
-   * 依赖 pdf2pic（需系统安装 poppler），失败时抛出
+   * 依赖 pdf2pic（需系统安装 GraphicsMagick + Ghostscript），失败时抛出
    */
   async getCourseFilePreviewPageImage(
     courseId: number,
@@ -230,9 +230,12 @@ export class CourseService {
       const result = await convert(pageNum, { responseType: 'buffer' }) as { buffer?: Buffer; data?: Buffer };
       const buffer = result?.buffer ?? result?.data;
       if (!buffer || !Buffer.isBuffer(buffer)) {
-        throw new Error('pdf2pic 未返回图片 buffer，请确认已安装 poppler');
+        throw new Error('pdf2pic 未返回图片 buffer，请确认容器已安装 GraphicsMagick 和 Ghostscript');
       }
       return { buffer, contentType: 'image/png' };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`课程预览页转图失败: ${message}`);
     } finally {
       try {
         if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
@@ -365,4 +368,3 @@ export class CourseService {
     }
   }
 }
-

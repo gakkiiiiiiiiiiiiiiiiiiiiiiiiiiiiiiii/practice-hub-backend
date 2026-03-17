@@ -27,8 +27,10 @@ RUN npm run build
 # 生产阶段
 FROM node:20-alpine AS production
 
-# Ghostscript：PDF 转图 / OCR 依赖
-RUN apk add --no-cache ghostscript
+# PDF 转图 / OCR 依赖：
+# - pdf2pic@3.x 依赖 GraphicsMagick + Ghostscript
+# - 缺少 gm 时，课程文件单页预览接口会在云托管中转图失败
+RUN apk add --no-cache graphicsmagick ghostscript
 
 WORKDIR /app
 
@@ -68,4 +70,3 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
 
 # 启动应用
 CMD ["node", "dist/main.js"]
-

@@ -13,7 +13,7 @@ PDF/Word 题目提取，供管理端「试题管理 - JSON 导入」使用。
 
 ## 部署依赖（图片 PDF / 强制 OCR）
 
-- **Ghostscript (gs)**：PDF 转图依赖。Docker 镜像已在 Dockerfile 中通过 `apk add ghostscript` 安装；本地或其它环境需自行安装 `gs`，否则 OCR 路径会报错。
+- **GraphicsMagick (gm) + Ghostscript (gs)**：`pdf2pic` 的系统依赖。Docker 镜像需安装这两者；本地或其它环境缺失时，PDF 转图片能力会失败。
 
 ## 结构
 
