@@ -57,9 +57,13 @@ client_max_body_size 50m;
 - **main.ts**：`express.json` / `express.urlencoded` 的 `limit` 使用环境变量 `BODY_LIMIT`，默认 `200mb`。
 - **process-pdf.controller**：PDF 上传 Multer `fileSize` 为 **100MB**（与 Nginx `client_max_body_size 100m` 对齐）。
 
-## 已实现：课程文件直传对象存储（绕过 413）
+## 已实现：课程文件上传（大文件分片 + 小文件直传）
 
-**课程文件**（PDF/Word）已改为「先取凭证、再直传 COS」：
+**大文件（>5MB）**：前端按 5MB 分片，依次请求 `POST /admin/upload/course-file-chunk` 上传分片，再请求 `POST /admin/upload/course-file-merge` 由服务端合并并落盘/COS，返回 fileUrl。单次请求体小，可规避网关 413。
+
+**小文件**：仍可采用「先取凭证、再直传 COS」或单次 POST `/admin/upload/course-file`。
+
+**直传 COS 流程**（小文件或未启用分片时）：
 
 1. 管理端选择文件后，先请求后端 `POST /admin/upload/course-file-upload-url`（仅传 `fileName`，请求体极小，不会 413）。
 2. 后端在云托管内调用 [tcb/uploadfile](https://developers.weixin.qq.com/miniprogram/dev/wxcloudservice/wxcloudrun/src/development/storage/service/upload.html) 获取上传链接与凭证，返回给前端。

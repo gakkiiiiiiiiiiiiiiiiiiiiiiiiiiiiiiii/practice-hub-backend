@@ -741,6 +741,102 @@ export class UploadService {
 		return `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
 	}
 
+	/** 分片临时目录：uploads/temp/{uploadId}/ */
+	private getChunkTempDir(uploadId: string): string {
+		const safe = (uploadId || '').replace(/[^a-zA-Z0-9-_]/g, '');
+		if (!safe || safe.length > 64) {
+			throw new BadRequestException('uploadId 格式无效');
+		}
+		return path.join(this.uploadDir, 'temp', safe);
+	}
+
+	/**
+	 * 保存课程文件的一个分片（大文件分片上传）
+	 */
+	async saveCourseFileChunk(
+		uploadId: string,
+		chunkIndex: number,
+		totalChunks: number,
+		buffer: Buffer,
+	): Promise<void> {
+		if (totalChunks < 1 || totalChunks > 500) {
+			throw new BadRequestException('totalChunks 需在 1～500 之间');
+		}
+		if (chunkIndex < 0 || chunkIndex >= totalChunks) {
+			throw new BadRequestException('chunkIndex 超出范围');
+		}
+		const dir = this.getChunkTempDir(uploadId);
+		const resolvedDir = path.resolve(dir);
+		const resolvedUploadDir = path.resolve(this.uploadDir);
+		if (!resolvedDir.startsWith(resolvedUploadDir) || resolvedDir === resolvedUploadDir) {
+			throw new BadRequestException('路径不安全');
+		}
+		if (!fs.existsSync(dir)) {
+			fs.mkdirSync(dir, { recursive: true });
+		}
+		const chunkPath = path.join(dir, String(chunkIndex));
+		fs.writeFileSync(chunkPath, buffer);
+	}
+
+	/**
+	 * 合并课程文件分片并保存（本地或 COS），返回最终 fileUrl
+	 */
+	async mergeCourseFileChunks(
+		uploadId: string,
+		totalChunks: number,
+		fileName: string,
+	): Promise<string> {
+		const ext = this.getFileExtension(fileName || '').toLowerCase();
+		if (!['.pdf', '.doc', '.docx'].includes(ext)) {
+			throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
+		}
+		const dir = this.getChunkTempDir(uploadId);
+		if (!fs.existsSync(dir)) {
+			throw new BadRequestException('未找到该上传任务的分片，请先上传全部分片');
+		}
+		const chunks: Buffer[] = [];
+		for (let i = 0; i < totalChunks; i++) {
+			const chunkPath = path.join(dir, String(i));
+			if (!fs.existsSync(chunkPath)) {
+				throw new BadRequestException(`缺少分片 ${i}，请补传`);
+			}
+			chunks.push(fs.readFileSync(chunkPath));
+		}
+		const merged = Buffer.concat(chunks);
+		const mimeMap: Record<string, string> = {
+			'.pdf': 'application/pdf',
+			'.doc': 'application/msword',
+			'.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+		};
+		const mimetype = mimeMap[ext] || 'application/octet-stream';
+		const fakeFile: Express.Multer.File = {
+			fieldname: 'file',
+			originalname: fileName || `merged${ext}`,
+			encoding: '7bit',
+			mimetype,
+			size: merged.length,
+			buffer: merged,
+			stream: null as any,
+			destination: '',
+			filename: '',
+			path: '',
+		};
+		try {
+			const fileUrl = await this.uploadCourseFile(fakeFile, '');
+			return fileUrl;
+		} finally {
+			try {
+				for (let i = 0; i < totalChunks; i++) {
+					const chunkPath = path.join(dir, String(i));
+					if (fs.existsSync(chunkPath)) fs.unlinkSync(chunkPath);
+				}
+				if (fs.existsSync(dir)) fs.rmdirSync(dir);
+			} catch (e) {
+				console.warn('[分片合并] 清理临时目录失败:', e);
+			}
+		}
+	}
+
 	/**
 	 * 获取文件扩展名
 	 */

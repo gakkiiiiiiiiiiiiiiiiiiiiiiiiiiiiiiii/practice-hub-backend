@@ -16,6 +16,7 @@ import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
+import * as fs from 'fs';
 import { UploadService } from './upload.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -97,8 +98,84 @@ export class UploadController {
     });
   }
 
+  @Post('course-file-chunk')
+  @ApiOperation({ summary: '上传课程文件的一个分片（大文件分片上传）' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['uploadId', 'chunkIndex', 'totalChunks', 'fileName'],
+      properties: {
+        chunk: { type: 'string', format: 'binary', description: '分片二进制' },
+        uploadId: { type: 'string', description: '本次上传任务 ID（前端生成 UUID）' },
+        chunkIndex: { type: 'number', description: '当前分片下标，从 0 开始' },
+        totalChunks: { type: 'number', description: '总分片数' },
+        fileName: { type: 'string', description: '原始文件名，如 xxx.pdf' },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('chunk'))
+  async uploadCourseFileChunk(
+    @UploadedFile() chunk: Express.Multer.File,
+    @Req() req: Request,
+  ) {
+    if (!chunk?.buffer && !chunk?.path) {
+      throw new BadRequestException('分片不能为空');
+    }
+    const uploadId = (req.body?.uploadId as string)?.trim();
+    const chunkIndex = parseInt(req.body?.chunkIndex as string, 10);
+    const totalChunks = parseInt(req.body?.totalChunks as string, 10);
+    const fileName = (req.body?.fileName as string)?.trim();
+    if (!uploadId || !fileName) {
+      throw new BadRequestException('缺少 uploadId 或 fileName');
+    }
+    if (Number.isNaN(chunkIndex) || Number.isNaN(totalChunks)) {
+      throw new BadRequestException('chunkIndex、totalChunks 必须为数字');
+    }
+    const buffer = (chunk as any).buffer ?? (chunk.path ? await fs.promises.readFile(chunk.path) : null);
+    if (!buffer?.length) {
+      throw new BadRequestException('无法读取分片内容');
+    }
+    await this.uploadService.saveCourseFileChunk(uploadId, chunkIndex, totalChunks, buffer);
+    return CommonResponseDto.success({ chunkIndex, totalChunks });
+  }
+
+  @Post('course-file-merge')
+  @ApiOperation({ summary: '合并课程文件分片并返回最终 fileUrl' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['uploadId', 'totalChunks', 'fileName'],
+      properties: {
+        uploadId: { type: 'string' },
+        totalChunks: { type: 'number' },
+        fileName: { type: 'string' },
+      },
+    },
+  })
+  async mergeCourseFileChunks(
+    @Body() body: { uploadId: string; totalChunks: number; fileName: string },
+  ) {
+    const { uploadId, totalChunks, fileName } = body || {};
+    if (!uploadId?.trim() || !(fileName?.trim())) {
+      throw new BadRequestException('缺少 uploadId 或 fileName');
+    }
+    const total = Number(totalChunks);
+    if (!Number.isInteger(total) || total < 1 || total > 500) {
+      throw new BadRequestException('totalChunks 需为 1～500 的整数');
+    }
+    const fileUrl = await this.uploadService.mergeCourseFileChunks(uploadId, total, fileName.trim());
+    const ext = (fileName.trim().toLowerCase().match(/\.(pdf|doc|docx)$/)?.[1]) || 'pdf';
+    return CommonResponseDto.success({
+      url: fileUrl,
+      fileUrl,
+      fileName: fileName.trim(),
+      fileType: ext,
+    });
+  }
+
   @Post('course-file')
-  @ApiOperation({ summary: '上传课程文件（PDF/Word），经后端转发；大文件建议用 course-file-upload-url 直传' })
+  @ApiOperation({ summary: '上传课程文件（PDF/Word），经后端转发；大文件建议用分片上传' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
