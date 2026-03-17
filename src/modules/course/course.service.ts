@@ -227,7 +227,7 @@ export class CourseService {
         width: 1200,
         density: 150,
       });
-      const result = await convert(pageNum, { responseType: 'buffer' });
+      const result = await convert(pageNum, { responseType: 'buffer' }) as { buffer?: Buffer; data?: Buffer };
       const buffer = result?.buffer ?? result?.data;
       if (!buffer || !Buffer.isBuffer(buffer)) {
         throw new Error('pdf2pic 未返回图片 buffer，请确认已安装 poppler');
