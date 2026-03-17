@@ -225,6 +225,7 @@ export class CourseService {
       const convert = fromPath(pdfPath, {
         format: 'png',
         width: 1200,
+        preserveAspectRatio: true,
         density: 150,
       });
       const result = await convert(pageNum, { responseType: 'buffer' }) as { buffer?: Buffer; data?: Buffer };
