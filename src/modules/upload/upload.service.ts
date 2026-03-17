@@ -494,11 +494,12 @@ export class UploadService {
 		} catch (error: any) {
 			const body = error?.response?.data;
 			const code = body?.error_code ?? body?.errcode;
+			const status = error?.response?.status;
 			const msg = body?.error_message ?? body?.errmsg ?? error.message;
-			console.error('[直传凭证] 获取失败:', body || error.message);
+			console.error('[直传凭证] 获取失败:', status || '', body || error.message);
 
-			// 85107：云托管内网 URL 未在白名单，改用公网 API + access_token（需配置 WECHAT_APPID / WECHAT_SECRET）
-			if ((code === '85107' || code === 85107) && inCloudRun) {
+			// 云托管内：内网 404/85107 等失败时，统一尝试公网 tcb/uploadfile + access_token
+			if (inCloudRun) {
 				try {
 					const token = await this.getWeChatAccessToken();
 					const publicRes = await axios.post(
@@ -528,7 +529,7 @@ export class UploadService {
 					const fbMsg = fallbackErr?.response?.data?.errmsg || fallbackErr.message;
 					console.error('[直传凭证] 公网 fallback 失败:', fbMsg);
 					throw new BadRequestException(
-						'获取上传凭证失败（云调用白名单 85107，且公网接口不可用）。请配置 WECHAT_APPID、WECHAT_SECRET，或在控制台微信令牌中添加 /tcb/uploadfile：' +
+						'获取上传凭证失败（内网接口不可用且公网回退失败）。请确认已配置 WECHAT_APPID、WECHAT_SECRET：' +
 							(fbMsg || ''),
 					);
 				}
