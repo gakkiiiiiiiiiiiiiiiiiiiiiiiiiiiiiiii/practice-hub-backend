@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query, UseGuards, Res } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, UseGuards, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Response } from 'express';
 import { CourseService } from './course.service';
@@ -33,6 +33,16 @@ export class CourseController {
     return CommonResponseDto.success(result);
   }
 
+  @Post(':id/preview-ticket')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取小程序内嵌 PDF 预览用短期凭证与 viewer 地址' })
+  async getPreviewTicket(@Param('id') id: string, @CurrentUser() user: any) {
+    const courseId = +id;
+    const { ticket, viewerUrl } = await this.courseService.createPreviewTicket(courseId, user?.userId);
+    return CommonResponseDto.success({ ticket, viewerUrl });
+  }
+
   @Get(':id/file-preview')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
@@ -40,11 +50,19 @@ export class CourseController {
   async getCourseFilePreview(
     @Param('id') id: string,
     @Query('maxPages') maxPagesStr: string | undefined,
+    @Query('ticket') ticket: string | undefined,
     @CurrentUser() user: any,
     @Res({ passthrough: false }) res: Response,
   ) {
     const courseId = +id;
-    const detail = await this.courseService.getCourseDetail(courseId, user?.userId);
+    let userId = user?.userId;
+    if (ticket && !userId) {
+      const verified = this.courseService.verifyPreviewTicket(ticket);
+      if (verified && verified.courseId === courseId) {
+        userId = verified.userId ?? undefined;
+      }
+    }
+    const detail = await this.courseService.getCourseDetail(courseId, userId);
     const course = detail as any;
     if (course.content_type !== 'file' || !course.file_url) {
       return res.status(404).send('课程无文件');

@@ -1,4 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import axios from 'axios';
@@ -19,6 +21,8 @@ export class CourseService {
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     @InjectRepository(CourseRecommendation)
     private courseRecommendationRepository: Repository<CourseRecommendation>,
+    private configService: ConfigService,
+    private jwtService: JwtService,
   ) {}
 
   /**
@@ -256,6 +260,35 @@ export class CourseService {
     }
 
     return recommendedCourses;
+  }
+
+  /**
+   * 生成小程序内嵌 PDF 预览用短期凭证（5 分钟有效）
+   */
+  async createPreviewTicket(courseId: number, userId?: number): Promise<{ ticket: string; viewerUrl: string }> {
+    const course = await this.courseRepository.findOne({ where: { id: courseId }, select: ['id', 'content_type', 'file_type'] });
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+    const payload = { courseId, userId: userId ?? null, purpose: 'pdf-viewer' };
+    const ticket = this.jwtService.sign(payload, { expiresIn: '5m' });
+    const baseUrl = (this.configService.get('BASE_URL') || '').replace(/\/$/, '');
+    const apiPrefix = baseUrl ? `${baseUrl}/api` : '/api';
+    const viewerUrl = `${apiPrefix}/app/pdf-viewer?courseId=${courseId}&ticket=${encodeURIComponent(ticket)}`;
+    return { ticket, viewerUrl };
+  }
+
+  /**
+   * 校验预览凭证并返回 userId（用于 file-preview 接口）
+   */
+  verifyPreviewTicket(ticket: string): { courseId: number; userId: number | null } | null {
+    try {
+      const payload = this.jwtService.verify(ticket) as { courseId?: number; userId?: number; purpose?: string };
+      if (payload.purpose !== 'pdf-viewer' || payload.courseId == null) return null;
+      return { courseId: payload.courseId, userId: payload.userId ?? null };
+    } catch {
+      return null;
+    }
   }
 }
 
