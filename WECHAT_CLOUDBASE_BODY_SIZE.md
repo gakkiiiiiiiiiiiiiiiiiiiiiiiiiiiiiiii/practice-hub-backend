@@ -69,7 +69,9 @@ client_max_body_size 50m;
 **环境**：云托管一般会自动注入 `CBR_ENV_ID`；若未注入，可在环境变量中配置 `TCB_ENV_ID`（如 `prod-6g7tpqs40c5a758b`，与 COS_BUCKET 中间段一致）。  
 **CORS**：若浏览器直传 COS 时报跨域，请在 [对象存储-配置](https://cloud.weixin.qq.com/cloudrun/storage) 中将管理端所在域名加入安全域名 / CORS 允许来源。
 
-**错误 85107（URL 不在白名单）**：若调用 `course-file-upload-url` 时返回「URL不在白名单内」，需在 **微信云托管控制台 → 服务管理 → 云调用 → 微信令牌** 的权限配置中新增：`/tcb/uploadfile`。保存后重新发布或等待生效，再重试上传。
+**错误 85107（URL 不在白名单）**：  
+- 方案 A：在 **微信云托管控制台 → 服务管理 → 云调用 → 微信令牌** 的权限配置中新增：`/tcb/uploadfile`；若仍报错，可再试 `/_/tcb/uploadfile`（云托管内网实际路径）。保存后重新发布。  
+- 方案 B（已实现）：后端在收到 85107 时会自动改用**公网 API**（`https://api.weixin.qq.com/tcb/uploadfile?access_token=xxx`）。只需在环境变量中配置 **WECHAT_APPID**、**WECHAT_SECRET**（与小程序登录共用），无需改白名单即可获取直传凭证。
 
 ## 备选方案：其他大文件走对象存储
 

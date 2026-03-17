@@ -462,9 +462,11 @@ export class UploadService {
 			throw new BadRequestException('未配置 CBR_ENV_ID 或 TCB_ENV_ID，无法获取直传凭证');
 		}
 		const pathNorm = cloudPath.replace(/^\//, '');
+		const inCloudRun = process.env.WX_CLOUD_RUN_ENV === 'true' || this.isWeChatCloudBase();
+
+		// 先尝试云托管内网 _/tcb/uploadfile（无需 access_token）；若返回 85107 再走公网 + access_token
 		try {
-			// 微信云托管内网调用，使用 _/tcb/uploadfile；开放接口服务无需 access_token
-			const apiUrl = process.env.WX_CLOUD_RUN_ENV === 'true' || this.isWeChatCloudBase()
+			const apiUrl = inCloudRun
 				? 'http://api.weixin.qq.com/_/tcb/uploadfile'
 				: `https://api.weixin.qq.com/tcb/uploadfile`;
 			const res = await axios.post(
@@ -494,14 +496,68 @@ export class UploadService {
 			const code = body?.error_code ?? body?.errcode;
 			const msg = body?.error_message ?? body?.errmsg ?? error.message;
 			console.error('[直传凭证] 获取失败:', body || error.message);
-			// 85107: URL 未加入微信令牌白名单，需在控制台添加 /tcb/uploadfile
+
+			// 85107：云托管内网 URL 未在白名单，改用公网 API + access_token（需配置 WECHAT_APPID / WECHAT_SECRET）
+			if ((code === '85107' || code === 85107) && inCloudRun) {
+				try {
+					const token = await this.getWeChatAccessToken();
+					const publicRes = await axios.post(
+						`https://api.weixin.qq.com/tcb/uploadfile?access_token=${token}`,
+						{ env: envId, path: pathNorm },
+						{ timeout: 10000 },
+					);
+					const data = publicRes.data;
+					if (data.errcode && data.errcode !== 0) {
+						throw new Error(data.errmsg || `公网接口失败: ${data.errcode}`);
+					}
+					if (!data.url || !data.authorization || !data.token || !data.cos_file_id) {
+						throw new Error('获取上传链接返回数据不完整');
+					}
+					const finalFileUrl = `https://${this.bucket}.tcb.qcloud.la/${pathNorm}`;
+					console.log('[直传凭证] 已通过公网 tcb/uploadfile + access_token 获取成功');
+					return {
+						url: data.url,
+						token: data.token,
+						authorization: data.authorization,
+						cos_file_id: data.cos_file_id,
+						file_id: data.file_id || '',
+						path: pathNorm,
+						finalFileUrl,
+					};
+				} catch (fallbackErr: any) {
+					const fbMsg = fallbackErr?.response?.data?.errmsg || fallbackErr.message;
+					console.error('[直传凭证] 公网 fallback 失败:', fbMsg);
+					throw new BadRequestException(
+						'获取上传凭证失败（云调用白名单 85107，且公网接口不可用）。请配置 WECHAT_APPID、WECHAT_SECRET，或在控制台微信令牌中添加 /tcb/uploadfile：' +
+							(fbMsg || ''),
+					);
+				}
+			}
+
 			if (code === '85107' || code === 85107) {
 				throw new BadRequestException(
-					'URL 未加入白名单。请前往「微信云托管控制台 → 服务管理 → 云调用 → 微信令牌」在权限配置中添加：/tcb/uploadfile',
+					'URL 未加入白名单。请前往「微信云托管控制台 → 服务管理 → 云调用 → 微信令牌」在权限配置中添加：/tcb/uploadfile 或 /_/tcb/uploadfile',
 				);
 			}
 			throw new BadRequestException(msg || '获取上传凭证失败');
 		}
+	}
+
+	/** 使用小程序 appid/secret 获取 access_token，用于公网 tcb/uploadfile 等接口 */
+	private async getWeChatAccessToken(): Promise<string> {
+		const appid = this.configService.get<string>('WECHAT_APPID');
+		const secret = this.configService.get<string>('WECHAT_SECRET');
+		if (!appid || !secret) {
+			throw new Error('未配置 WECHAT_APPID 或 WECHAT_SECRET，无法使用公网 tcb/uploadfile');
+		}
+		const res = await axios.get('https://api.weixin.qq.com/cgi-bin/token', {
+			params: { grant_type: 'client_credential', appid, secret },
+			timeout: 10000,
+		});
+		if (res.data.errcode) {
+			throw new Error(res.data.errmsg || `获取 access_token 失败: ${res.data.errcode}`);
+		}
+		return res.data.access_token;
 	}
 
 	private getEnvIdFromBucket(): string {
