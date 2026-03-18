@@ -7,6 +7,7 @@ import { SystemConfig } from '../../database/entities/system-config.entity';
 import { SetCountdownDto } from './dto/set-countdown.dto';
 import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
 import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
+import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
 
 @Injectable()
 export class SystemService {
@@ -27,6 +28,186 @@ export class SystemService {
     // 实际生产环境应该存储到数据库的系统配置表中
     // 这里返回成功，实际日期从环境变量或数据库读取
     return { success: true, message: '倒计时日期已更新（请通过环境变量或数据库配置）' };
+  }
+
+  private async getJsonConfig<T>(configKey: string, fallback: T): Promise<T> {
+    const config = await this.systemConfigRepository.findOne({ where: { configKey } });
+    if (config?.configValue) {
+      try {
+        return JSON.parse(config.configValue) as T;
+      } catch (error) {
+        console.error(`解析系统配置失败: ${configKey}`, error);
+      }
+    }
+    return fallback;
+  }
+
+  private async setJsonConfig(configKey: string, description: string, value: unknown) {
+    let config = await this.systemConfigRepository.findOne({ where: { configKey } });
+    if (!config) {
+      config = this.systemConfigRepository.create({
+        configKey,
+        configValue: JSON.stringify(value),
+        description,
+      });
+    } else {
+      config.configValue = JSON.stringify(value);
+      config.description = description;
+      config.updateTime = new Date();
+    }
+    await this.systemConfigRepository.save(config);
+  }
+
+  private getDefaultCourseCoverConfig() {
+    return {
+      width: 1200,
+      height: 1200,
+      backgroundImage: '',
+      backgroundColor: '#5d9ef0',
+      fields: [
+        {
+          id: 'top_title',
+          label: '顶部标题',
+          type: 'staticText',
+          text: '赠送公共课数学英语政治历年真题及资料',
+          x: 600,
+          y: 96,
+          fontSize: 56,
+          color: '#F9F4DF',
+          fontWeight: '700',
+          fontFamily: 'serif',
+          maxWidth: 1140,
+          align: 'center',
+          maxLines: 1,
+          lineHeight: 56,
+        },
+        {
+          id: 'school',
+          label: '学校',
+          type: 'courseField',
+          sourceKey: 'school',
+          x: 600,
+          y: 325,
+          fontSize: 108,
+          color: '#58A7F7',
+          fontWeight: '700',
+          fontFamily: 'serif',
+          maxWidth: 940,
+          align: 'center',
+          maxLines: 1,
+          lineHeight: 108,
+        },
+        {
+          id: 'major',
+          label: '专业',
+          type: 'courseField',
+          sourceKey: 'major',
+          x: 600,
+          y: 515,
+          fontSize: 62,
+          color: '#FDF8ED',
+          fontWeight: '700',
+          fontFamily: 'serif',
+          maxWidth: 1080,
+          align: 'center',
+          maxLines: 1,
+          lineHeight: 62,
+        },
+        {
+          id: 'store_text',
+          label: '店铺文案',
+          type: 'staticText',
+          text: '下一站上岸书店',
+          x: 600,
+          y: 745,
+          fontSize: 58,
+          color: '#f3ea53',
+          fontWeight: '700',
+          fontFamily: 'serif',
+          maxWidth: 900,
+          align: 'center',
+          maxLines: 1,
+          lineHeight: 58,
+        },
+        {
+          id: 'exam_year',
+          label: '真题年份',
+          type: 'courseField',
+          sourceKey: 'exam_year',
+          x: 360,
+          y: 840,
+          fontSize: 42,
+          color: '#FFFFFF',
+          fontWeight: '700',
+          fontFamily: 'serif',
+          maxWidth: 460,
+          align: 'left',
+          maxLines: 1,
+          lineHeight: 42,
+        },
+        {
+          id: 'answer_year',
+          label: '答案年份',
+          type: 'courseField',
+          sourceKey: 'answer_year',
+          x: 360,
+          y: 915,
+          fontSize: 42,
+          color: '#FFFFFF',
+          fontWeight: '700',
+          fontFamily: 'serif',
+          maxWidth: 460,
+          align: 'left',
+          maxLines: 1,
+          lineHeight: 42,
+        },
+        {
+          id: 'delivery_text',
+          label: '底部主文案',
+          type: 'staticText',
+          text: '网盘电子版  速发',
+          x: 600,
+          y: 1075,
+          fontSize: 76,
+          color: '#58A7F7',
+          fontWeight: '700',
+          fontFamily: 'serif',
+          maxWidth: 980,
+          align: 'center',
+          maxLines: 1,
+          lineHeight: 76,
+        },
+        {
+          id: 'bottom_caption',
+          label: '底部说明',
+          type: 'staticText',
+          text: '全网最新考研(学长学姐自用资料)',
+          x: 600,
+          y: 1180,
+          fontSize: 52,
+          color: '#FDF9EE',
+          fontWeight: '700',
+          fontFamily: 'serif',
+          maxWidth: 1140,
+          align: 'center',
+          maxLines: 1,
+          lineHeight: 52,
+        },
+      ],
+    };
+  }
+
+  async getCourseCoverConfig() {
+    return this.getJsonConfig('course_cover_config', this.getDefaultCourseCoverConfig());
+  }
+
+  async setCourseCoverConfig(dto: SetCourseCoverConfigDto) {
+    await this.setJsonConfig('course_cover_config', '课程自动生成封面配置', dto);
+    return {
+      success: true,
+      message: '课程封面配置已更新',
+      config: dto,
+    };
   }
 
   /**
@@ -254,4 +435,3 @@ export class SystemService {
     };
   }
 }
-

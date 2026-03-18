@@ -10,6 +10,7 @@ import { SetCountdownDto } from './dto/set-countdown.dto';
 import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
 import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
 import { SetCheckinMinutesDto } from './dto/set-checkin-minutes.dto';
+import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
 
 @ApiTags('系统管理')
 @Controller('admin')
@@ -65,5 +66,20 @@ export class SystemController {
     const result = await this.systemService.setCheckinMinutes(dto.minutes);
     return CommonResponseDto.success(result);
   }
-}
 
+  @Get('settings/course-cover')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取课程自动生成封面配置' })
+  async getCourseCoverConfig() {
+    const result = await this.systemService.getCourseCoverConfig();
+    return CommonResponseDto.success(result);
+  }
+
+  @Put('settings/course-cover')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '设置课程自动生成封面配置' })
+  async setCourseCoverConfig(@Body() dto: SetCourseCoverConfigDto) {
+    const result = await this.systemService.setCourseCoverConfig(dto);
+    return CommonResponseDto.success(result);
+  }
+}
