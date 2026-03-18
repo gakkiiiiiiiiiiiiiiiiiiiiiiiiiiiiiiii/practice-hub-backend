@@ -8,6 +8,7 @@ import { PDFDocument } from 'pdf-lib';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createHash } from 'crypto';
 import { Course } from '../../database/entities/course.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
@@ -189,7 +190,8 @@ export class CourseService {
   }
 
   /**
-   * 将课程 PDF 指定页转为 PNG 图片（用于小程序内图片预览）
+   * 将课程 PDF 指定页转为预览图（用于小程序内图片预览）
+   * 使用 JPEG 以在尽量保持清晰度的前提下降低传输体积。
    * 依赖 pdf2pic（需系统安装 GraphicsMagick + Ghostscript），失败时抛出
    */
   async getCourseFilePreviewPageImage(
@@ -209,6 +211,13 @@ export class CourseService {
     if (pageNum < 1 || pageNum > maxPages) {
       throw new NotFoundException('页码超出范围');
     }
+    const previewScope =
+      course.hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
+    const cachePath = this.getPreviewImageCachePath(courseId, pageNum, course.file_url, previewScope);
+    if (fs.existsSync(cachePath)) {
+      return { buffer: fs.readFileSync(cachePath), contentType: 'image/jpeg' };
+    }
+
     let pdfBuffer: Buffer;
     if (course.hasAuth || Number(course.price) === 0 || course.is_free === 1) {
       const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
@@ -223,17 +232,20 @@ export class CourseService {
       fs.writeFileSync(pdfPath, pdfBuffer);
       const { fromPath } = await import('pdf2pic');
       const convert = fromPath(pdfPath, {
-        format: 'png',
-        width: 1200,
+        format: 'jpeg',
+        quality: 82,
+        width: 1000,
         preserveAspectRatio: true,
-        density: 150,
+        density: 120,
       });
       const result = await convert(pageNum, { responseType: 'buffer' }) as { buffer?: Buffer; data?: Buffer };
       const buffer = result?.buffer ?? result?.data;
       if (!buffer || !Buffer.isBuffer(buffer)) {
         throw new Error('pdf2pic 未返回图片 buffer，请确认容器已安装 GraphicsMagick 和 Ghostscript');
       }
-      return { buffer, contentType: 'image/png' };
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(cachePath, buffer);
+      return { buffer, contentType: 'image/jpeg' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`课程预览页转图失败: ${message}`);
@@ -243,6 +255,16 @@ export class CourseService {
         if (fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir);
       } catch (_) {}
     }
+  }
+
+  private getPreviewImageCachePath(
+    courseId: number,
+    pageNum: number,
+    fileUrl: string,
+    scope: 'full' | 'trial',
+  ): string {
+    const version = createHash('md5').update(`${fileUrl}|${scope}|jpeg|1000|120|82`).digest('hex').slice(0, 12);
+    return path.join(os.tmpdir(), 'course-preview-cache', String(courseId), version, `${pageNum}.jpg`);
   }
 
   /**
