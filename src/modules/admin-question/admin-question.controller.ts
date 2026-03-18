@@ -31,6 +31,7 @@ import { ImportQuestionDto } from './dto/import-question.dto';
 import { ImportJsonQuestionDto } from './dto/import-json-question.dto';
 import { BatchDeleteQuestionsDto } from './dto/batch-delete-questions.dto';
 import { BatchUpdateOrderDto } from './dto/batch-update-order.dto';
+import { BatchUpdateStatusQuestionsDto } from './dto/batch-update-status.dto';
 import { QuestionType } from '../../database/entities/question.entity';
 
 @ApiTags('管理后台-题目管理')
@@ -63,11 +64,13 @@ export class AdminQuestionController {
 		@Query('course_id') courseId?: number,
 		@Query('chapter_id') chapterId?: number,
 		@Query('type') type?: QuestionType,
+		@Query('status') status?: number,
 	) {
 		const result = await this.adminQuestionService.getQuestionList(
 			courseId ? +courseId : undefined,
 			chapterId ? +chapterId : undefined,
 			type,
+			status != null ? +status : undefined,
 		);
 		return CommonResponseDto.success(result);
 	}
@@ -136,6 +139,13 @@ export class AdminQuestionController {
 	@ApiOperation({ summary: '批量更新题目序号（拖拽排序）' })
 	async batchUpdateOrder(@Body() dto: BatchUpdateOrderDto) {
 		const result = await this.adminQuestionService.batchUpdateOrder(dto.orders);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch-update-status')
+	@ApiOperation({ summary: '批量启用/禁用题目' })
+	async batchUpdateStatus(@Body() dto: BatchUpdateStatusQuestionsDto) {
+		const result = await this.adminQuestionService.batchUpdateStatus(dto.ids, dto.status);
 		return CommonResponseDto.success(result);
 	}
 }

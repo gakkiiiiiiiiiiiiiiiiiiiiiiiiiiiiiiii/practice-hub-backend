@@ -42,5 +42,10 @@ export class UpdateQuestionDto {
   @IsOptional()
   @IsEnum(Difficulty)
   difficulty?: Difficulty;
+
+  @ApiProperty({ description: '状态：1=启用，0=禁用', required: false, enum: [0, 1] })
+  @IsOptional()
+  @IsNumber()
+  status?: number;
 }
 

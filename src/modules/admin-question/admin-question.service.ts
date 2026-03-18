@@ -92,8 +92,9 @@ export class AdminQuestionService {
 
 	/**
 	 * 获取题目列表
+	 * @param status 1=仅启用，0=仅禁用，不传=全部
 	 */
-	async getQuestionList(courseId?: number, chapterId?: number, type?: QuestionType) {
+	async getQuestionList(courseId?: number, chapterId?: number, type?: QuestionType, status?: number) {
 		// 添加重试机制，防止数据库连接错误
 		const maxRetries = 3;
 		let lastError: any;
@@ -113,6 +114,10 @@ export class AdminQuestionService {
 
 				if (type) {
 					queryBuilder.andWhere('question.type = :type', { type });
+				}
+
+				if (status !== undefined && status !== null) {
+					queryBuilder.andWhere('question.status = :status', { status });
 				}
 
 				const questions = await queryBuilder
@@ -159,6 +164,20 @@ export class AdminQuestionService {
 			await this.questionRepository.update({ id: item.id }, { sort_order: item.sort_order });
 		}
 		return { updated: orders.length };
+	}
+
+	/**
+	 * 批量更新题目启用/禁用状态
+	 */
+	async batchUpdateStatus(ids: number[], status: number) {
+		if (!ids?.length) {
+			throw new BadRequestException('请选择题目');
+		}
+		if (status !== 0 && status !== 1) {
+			throw new BadRequestException('status 必须为 0 或 1');
+		}
+		await this.questionRepository.update({ id: In(ids) }, { status });
+		return { updated: ids.length };
 	}
 
 	/**

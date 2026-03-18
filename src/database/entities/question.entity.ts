@@ -61,6 +61,10 @@ export class Question {
   @Column({ name: 'sort_order', type: 'int', default: 0 })
   sort_order: number; // 序号，用于拖拽排序
 
+  /** 启用状态：1=启用，0=禁用；禁用后前端不展示 */
+  @Column({ type: 'tinyint', default: 1 })
+  status: number;
+
   @CreateDateColumn()
   create_time: Date;
 
