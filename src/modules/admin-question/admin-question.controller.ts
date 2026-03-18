@@ -44,6 +44,20 @@ import { QuestionType } from '../../database/entities/question.entity';
 export class AdminQuestionController {
 	constructor(private readonly adminQuestionService: AdminQuestionService) {}
 
+	private parseOptionalInteger(value?: string | number, options?: { min?: number }) {
+		if (value === undefined || value === null || value === '') {
+			return undefined;
+		}
+		const num = typeof value === 'number' ? value : Number(value);
+		if (!Number.isFinite(num) || !Number.isInteger(num)) {
+			return undefined;
+		}
+		if (options?.min !== undefined && num < options.min) {
+			return undefined;
+		}
+		return num;
+	}
+
 	@Post()
 	@ApiOperation({ summary: '新增/编辑题目' })
 	async saveQuestion(@Body() dto: CreateQuestionDto) {
@@ -61,16 +75,21 @@ export class AdminQuestionController {
 	@Get()
 	@ApiOperation({ summary: '题目列表' })
 	async getQuestionList(
-		@Query('course_id') courseId?: number,
-		@Query('chapter_id') chapterId?: number,
-		@Query('type') type?: QuestionType,
-		@Query('status') status?: number,
+		@Query('course_id') courseId?: string,
+		@Query('chapter_id') chapterId?: string,
+		@Query('type') type?: string,
+		@Query('status') status?: string,
 	) {
+		const courseIdNum = this.parseOptionalInteger(courseId, { min: 1 });
+		const chapterIdNum = this.parseOptionalInteger(chapterId, { min: 1 });
+		const typeNum = this.parseOptionalInteger(type, { min: 1 }) as QuestionType | undefined;
+		const statusNum = this.parseOptionalInteger(status, { min: 0 });
+
 		const result = await this.adminQuestionService.getQuestionList(
-			courseId ? +courseId : undefined,
-			chapterId ? +chapterId : undefined,
-			type,
-			status != null ? +status : undefined,
+			courseIdNum,
+			chapterIdNum,
+			typeNum,
+			statusNum,
 		);
 		return CommonResponseDto.success(result);
 	}
