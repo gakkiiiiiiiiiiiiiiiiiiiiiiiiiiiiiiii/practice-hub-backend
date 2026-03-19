@@ -46,7 +46,7 @@ export class CourseController {
   @Get(':id/file-preview')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: '课程文件试读（付费未购买时返回前 2 页 PDF）' })
+  @ApiOperation({ summary: '课程文件试读（付费未购买时返回前 3 页 PDF）' })
   async getCourseFilePreview(
     @Param('id') id: string,
     @Query('maxPages') maxPagesStr: string | undefined,
@@ -67,7 +67,7 @@ export class CourseController {
     if (course.content_type !== 'file' || !course.file_url) {
       return res.status(404).send('课程无文件');
     }
-    const maxPages = Math.min(10, Math.max(1, parseInt(maxPagesStr || '2', 10) || 2));
+    const maxPages = Math.min(10, Math.max(1, parseInt(maxPagesStr || '3', 10) || 3));
     if (course.hasAuth || Number(course.price) === 0 || course.is_free === 1) {
       return res.redirect(302, course.file_url);
     }

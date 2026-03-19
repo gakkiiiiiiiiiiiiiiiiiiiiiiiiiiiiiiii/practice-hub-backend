@@ -135,7 +135,7 @@ export class CourseService {
       chapters,
       hasAuth,
       expireTime,
-      /** 付费未购买时，试读用：PDF 为前 2 页地址，Word 暂不提供试读 */
+      /** 付费未购买时，试读用：PDF 为前 3 页地址，Word 暂不提供试读 */
       file_preview_url: needPreviewUrl && fileType === 'pdf' ? `/api/app/courses/${courseId}/file-preview` : undefined,
     };
   }
@@ -143,7 +143,7 @@ export class CourseService {
   /**
    * 获取课程文件预览 PDF（前 maxPages 页），仅支持 PDF 类型
    */
-  async getCourseFilePreviewPdf(courseId: number, maxPages: number = 2): Promise<Buffer> {
+  async getCourseFilePreviewPdf(courseId: number, maxPages: number = 3): Promise<Buffer> {
     const course = await this.courseRepository.findOne({
       where: { id: courseId },
       select: ['id', 'content_type', 'file_url', 'file_type'],
@@ -172,7 +172,7 @@ export class CourseService {
   }
 
   /**
-   * 获取课程文件预览页数（用于图片预览：已购/免费为全部，未购付费为 2）
+   * 获取课程文件预览页数（用于图片预览：已购/免费为全部，未购付费为 3）
    */
   async getCourseFilePreviewPageInfo(courseId: number, userId?: number): Promise<{ totalPages: number }> {
     const detail = await this.getCourseDetail(courseId, userId);
@@ -185,7 +185,7 @@ export class CourseService {
     const doc = await PDFDocument.load(bytes);
     const fullCount = doc.getPageCount();
     const totalPages =
-      course.hasAuth || Number(course.price) === 0 || course.is_free === 1 ? fullCount : Math.min(2, fullCount);
+      course.hasAuth || Number(course.price) === 0 || course.is_free === 1 ? fullCount : Math.min(3, fullCount);
     return { totalPages: Math.max(1, totalPages) };
   }
 
@@ -207,7 +207,7 @@ export class CourseService {
     const maxPages =
       course.hasAuth || Number(course.price) === 0 || course.is_free === 1
         ? 999
-        : 2;
+        : 3;
     if (pageNum < 1 || pageNum > maxPages) {
       throw new NotFoundException('页码超出范围');
     }
@@ -223,7 +223,7 @@ export class CourseService {
       const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
       pdfBuffer = Buffer.from(res.data as ArrayBuffer);
     } else {
-      pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 2);
+      pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 3);
     }
     const tmpDir = path.join(os.tmpdir(), `course-preview-${courseId}-${Date.now()}`);
     fs.mkdirSync(tmpDir, { recursive: true });
