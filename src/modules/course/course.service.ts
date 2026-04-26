@@ -86,14 +86,7 @@ export class CourseService {
    * 获取课程详情
    */
   async getCourseDetail(courseId: number, userId?: number) {
-    const course = await this.courseRepository.findOne({
-      where: { id: courseId },
-      relations: ['chapters'],
-    });
-
-    if (!course) {
-      throw new NotFoundException('课程不存在');
-    }
+    const { course, hasAuth, expireTime } = await this.getCourseAccessContext(courseId, userId, true);
 
     // 获取章节列表
     const chapters = await this.chapterRepository.find({
@@ -102,32 +95,10 @@ export class CourseService {
       relations: ['course'],
     });
 
-    // 检查用户是否有权限
-    let hasAuth = false;
-    let expireTime: Date | null = null;
-    
-    // 免费课程，直接有权限
-    const price = Number(course.price) || 0;
-    const isFree = course.is_free === 1;
-    if (price === 0 || isFree) {
-      hasAuth = true;
-    } else if (userId) {
-      // 付费课程，检查用户权限
-      const auth = await this.userCourseAuthRepository.findOne({
-        where: {
-          user_id: userId,
-          course_id: courseId,
-        },
-      });
-      if (auth) {
-        hasAuth = !auth.expire_time || auth.expire_time > new Date();
-        expireTime = auth.expire_time;
-      }
-    }
-
     const fileType = (course.file_type || '').toLowerCase();
     const isFileCourse = course.content_type === 'file' && course.file_url;
     const allowSourceFile = course.allow_source_file !== 0;
+    const price = Number(course.price) || 0;
     const needPreviewUrl =
       isFileCourse && !hasAuth && price > 0 && (fileType === 'pdf' || fileType === 'doc' || fileType === 'docx');
 
@@ -141,6 +112,38 @@ export class CourseService {
       /** 付费未购买时，试读用：PDF 为前 3 页地址，Word 暂不提供试读 */
       file_preview_url: needPreviewUrl && fileType === 'pdf' ? `/api/app/courses/${courseId}/file-preview` : undefined,
     };
+  }
+
+  async getCourseAccessContext(courseId: number, userId?: number, withChapters = false) {
+    const course = await this.courseRepository.findOne({
+      where: { id: courseId },
+      relations: withChapters ? ['chapters'] : [],
+    });
+
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+
+    let hasAuth = false;
+    let expireTime: Date | null = null;
+    const price = Number(course.price) || 0;
+    const isFree = course.is_free === 1;
+    if (price === 0 || isFree) {
+      hasAuth = true;
+    } else if (userId) {
+      const auth = await this.userCourseAuthRepository.findOne({
+        where: {
+          user_id: userId,
+          course_id: courseId,
+        },
+      });
+      if (auth) {
+        hasAuth = !auth.expire_time || auth.expire_time > new Date();
+        expireTime = auth.expire_time;
+      }
+    }
+
+    return { course, hasAuth, expireTime };
   }
 
   /**
@@ -181,8 +184,7 @@ export class CourseService {
     courseId: number,
     userId?: number,
   ): Promise<{ totalPages: number; cacheVersion: string }> {
-    const detail = await this.getCourseDetail(courseId, userId);
-    const course = detail as any;
+    const { course, hasAuth } = await this.getCourseAccessContext(courseId, userId);
     if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
       throw new NotFoundException('课程无 PDF 文件');
     }
@@ -191,9 +193,9 @@ export class CourseService {
     const doc = await PDFDocument.load(bytes);
     const fullCount = doc.getPageCount();
     const totalPages =
-      course.hasAuth || Number(course.price) === 0 || course.is_free === 1 ? fullCount : Math.min(3, fullCount);
+      hasAuth || Number(course.price) === 0 || course.is_free === 1 ? fullCount : Math.min(3, fullCount);
     const previewScope =
-      course.hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
+      hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
     return {
       totalPages: Math.max(1, totalPages),
       cacheVersion: this.getPreviewCacheVersion(course.file_url, previewScope),
@@ -210,27 +212,26 @@ export class CourseService {
     pageNum: number,
     userId?: number,
   ): Promise<{ buffer: Buffer; contentType: string }> {
-    const detail = await this.getCourseDetail(courseId, userId);
-    const course = detail as any;
+    const { course, hasAuth } = await this.getCourseAccessContext(courseId, userId);
     if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
       throw new NotFoundException('课程无 PDF 文件');
     }
     const maxPages =
-      course.hasAuth || Number(course.price) === 0 || course.is_free === 1
+      hasAuth || Number(course.price) === 0 || course.is_free === 1
         ? 999
         : 3;
     if (pageNum < 1 || pageNum > maxPages) {
       throw new NotFoundException('页码超出范围');
     }
     const previewScope =
-      course.hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
+      hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
     const cachePath = this.getPreviewImageCachePath(courseId, pageNum, course.file_url, previewScope);
     if (fs.existsSync(cachePath)) {
       return { buffer: fs.readFileSync(cachePath), contentType: 'image/jpeg' };
     }
 
     let pdfBuffer: Buffer;
-    if (course.hasAuth || Number(course.price) === 0 || course.is_free === 1) {
+    if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
       const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
       pdfBuffer = Buffer.from(res.data as ArrayBuffer);
     } else {

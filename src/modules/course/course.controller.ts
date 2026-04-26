@@ -62,13 +62,13 @@ export class CourseController {
         userId = verified.userId ?? undefined;
       }
     }
-    const detail = await this.courseService.getCourseDetail(courseId, userId);
-    const course = detail as any;
+    const { course, hasAuth } = await this.courseService.getCourseAccessContext(courseId, userId);
     if (course.content_type !== 'file' || !course.file_url) {
       return res.status(404).send('课程无文件');
     }
     const maxPages = Math.min(10, Math.max(1, parseInt(maxPagesStr || '3', 10) || 3));
-    if (course.hasAuth || Number(course.price) === 0 || course.is_free === 1) {
+    const allowSourceFile = course.allow_source_file !== 0;
+    if (allowSourceFile && (hasAuth || Number(course.price) === 0 || course.is_free === 1)) {
       return res.redirect(302, course.file_url);
     }
     if ((course.file_type || '').toLowerCase() !== 'pdf') {
@@ -227,4 +227,3 @@ export class CourseController {
     return CommonResponseDto.success(result);
   }
 }
-
