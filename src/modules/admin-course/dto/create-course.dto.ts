@@ -102,4 +102,10 @@ export class CreateCourseDto {
 	@IsOptional()
 	@IsString()
 	file_type?: string;
+
+	@ApiProperty({ description: '文件课程：是否允许用户查看源文件，0=否，1=是', example: 0, required: false })
+	@IsOptional()
+	@Type(() => Number)
+	@IsNumber()
+	allow_source_file?: number;
 }

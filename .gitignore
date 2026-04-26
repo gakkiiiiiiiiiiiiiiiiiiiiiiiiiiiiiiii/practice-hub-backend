@@ -37,6 +37,7 @@ test-files/
 
 # Environment
 .env
+.env.remote
 .env.local
 .env.*.local
 

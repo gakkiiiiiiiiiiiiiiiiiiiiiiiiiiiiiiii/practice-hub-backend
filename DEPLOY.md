@@ -96,7 +96,7 @@ docker build -t practice-hub-backend:latest .
 
 # 运行容器（需要配置环境变量）
 docker run -d \
-  -p 80:80 \
+  -p 8080:8080 \
   -e DB_HOST=your_db_host \
   -e DB_PORT=3306 \
   -e DB_USERNAME=root \
@@ -119,10 +119,11 @@ docker rm practice-hub-backend
 ## 注意事项
 
 1. **端口配置**
-   - 应用默认使用 8080 端口（避免权限问题）
-   - 应用会自动监听 `0.0.0.0:8080`
-   - 可以通过环境变量 `PORT` 修改端口
-   - 微信云托管会自动处理端口映射
+  - 应用默认使用 8080 端口（避免权限问题）
+  - 应用会自动监听 `0.0.0.0:8080`
+  - 可以通过环境变量 `PORT` 修改端口
+  - 微信云托管控制台中的容器端口、Readiness Probe、Liveness Probe 都应配置为 `8080`
+  - 微信云托管会自动处理外部访问映射，不需要应用监听 `80`
 
 2. **数据库连接**
    - 确保数据库允许从微信云托管网络访问
@@ -155,8 +156,8 @@ docker rm practice-hub-backend
    - 检查安全组规则
 
 3. **端口冲突**
-   - 确保端口 80 未被占用
-   - 可以通过环境变量 `PORT` 修改端口
+  - 确保容器内监听端口与云托管探针端口一致，推荐统一为 `8080`
+  - 可以通过环境变量 `PORT` 修改端口
 
 ## 更新部署
 
@@ -168,4 +169,3 @@ docker rm practice-hub-backend
 cd back-end
 tcb deploy
 ```
-

@@ -73,6 +73,10 @@ export class Course {
 	@Column({ type: 'varchar', length: 20, nullable: true })
 	file_type: string | null;
 
+	/** 文件课程：是否允许用户查看源文件 */
+	@Column({ type: 'tinyint', default: 0, comment: '是否允许查看源文件：0-否，1-是' })
+	allow_source_file: number;
+
 	@Column({ type: 'json', nullable: true, comment: '推荐课程ID列表（JSON数组）' })
 	recommended_course_ids: number[] | null; // 课程推荐列表
 

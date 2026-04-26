@@ -127,11 +127,14 @@ export class CourseService {
 
     const fileType = (course.file_type || '').toLowerCase();
     const isFileCourse = course.content_type === 'file' && course.file_url;
+    const allowSourceFile = course.allow_source_file !== 0;
     const needPreviewUrl =
       isFileCourse && !hasAuth && price > 0 && (fileType === 'pdf' || fileType === 'doc' || fileType === 'docx');
 
     return {
       ...course,
+      file_url: allowSourceFile ? course.file_url : null,
+      allow_source_file: allowSourceFile ? 1 : 0,
       chapters,
       hasAuth,
       expireTime,
@@ -174,7 +177,10 @@ export class CourseService {
   /**
    * 获取课程文件预览页数（用于图片预览：已购/免费为全部，未购付费为 3）
    */
-  async getCourseFilePreviewPageInfo(courseId: number, userId?: number): Promise<{ totalPages: number }> {
+  async getCourseFilePreviewPageInfo(
+    courseId: number,
+    userId?: number,
+  ): Promise<{ totalPages: number; cacheVersion: string }> {
     const detail = await this.getCourseDetail(courseId, userId);
     const course = detail as any;
     if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
@@ -186,7 +192,12 @@ export class CourseService {
     const fullCount = doc.getPageCount();
     const totalPages =
       course.hasAuth || Number(course.price) === 0 || course.is_free === 1 ? fullCount : Math.min(3, fullCount);
-    return { totalPages: Math.max(1, totalPages) };
+    const previewScope =
+      course.hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
+    return {
+      totalPages: Math.max(1, totalPages),
+      cacheVersion: this.getPreviewCacheVersion(course.file_url, previewScope),
+    };
   }
 
   /**
@@ -263,8 +274,12 @@ export class CourseService {
     fileUrl: string,
     scope: 'full' | 'trial',
   ): string {
-    const version = createHash('md5').update(`${fileUrl}|${scope}|jpeg|1000|120|82`).digest('hex').slice(0, 12);
+    const version = this.getPreviewCacheVersion(fileUrl, scope);
     return path.join(os.tmpdir(), 'course-preview-cache', String(courseId), version, `${pageNum}.jpg`);
+  }
+
+  private getPreviewCacheVersion(fileUrl: string, scope: 'full' | 'trial'): string {
+    return createHash('md5').update(`${fileUrl}|${scope}|jpeg|1000|120|82`).digest('hex').slice(0, 12);
   }
 
   /**
