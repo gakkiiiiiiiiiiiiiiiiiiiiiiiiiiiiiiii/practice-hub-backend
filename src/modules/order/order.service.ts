@@ -173,7 +173,7 @@ export class OrderService {
 
     return {
       mode: config.mode,
-      signData,
+      signData: signDataString,
       paySig: this.createHmacSha256(config.appKey, `requestVirtualPayment&${signDataString}`),
       signature: this.createHmacSha256(user.session_key, signDataString),
     };
