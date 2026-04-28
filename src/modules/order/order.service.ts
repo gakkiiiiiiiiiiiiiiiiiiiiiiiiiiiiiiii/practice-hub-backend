@@ -116,10 +116,11 @@ export class OrderService {
   private getVirtualPayConfig() {
     const offerId = this.configService.get<string>('OfferID') || this.configService.get<string>('WECHAT_VIRTUAL_PAY_OFFER_ID');
     const env = Number(this.configService.get<string>('WECHAT_VIRTUAL_PAY_ENV') ?? this.configService.get<string>('VIRTUAL_PAY_ENV') ?? 0);
-    const sandboxAppKey =
-      this.configService.get<string>('sandboxAppKey') || this.configService.get<string>('WECHAT_VIRTUAL_PAY_SANDBOX_APP_KEY');
-    const prodAppKey = this.configService.get<string>('prodAppKey') || this.configService.get<string>('WECHAT_VIRTUAL_PAY_PROD_APP_KEY');
-    const appKey = env === 1 ? sandboxAppKey : prodAppKey;
+    const appKey =
+      this.configService.get<string>('AppKey') ||
+      this.configService.get<string>('WECHAT_VIRTUAL_PAY_APP_KEY') ||
+      this.configService.get<string>('prodAppKey') ||
+      this.configService.get<string>('sandboxAppKey');
 
     if (!offerId || !appKey) {
       throw new BadRequestException('微信虚拟支付配置缺失，请检查 OfferID/AppKey 环境变量');

@@ -64,17 +64,32 @@ export class HttpExceptionFilter implements ExceptionFilter {
         stack: error.stack,
       });
       
-      // 处理数据库连接错误
-      if (error.message && (
+      const errorCode = (error as any).code;
+      const isConnectionError = error.message && (
         error.message.includes('ECONNRESET') ||
         error.message.includes('ECONNREFUSED') ||
         error.message.includes('ETIMEDOUT') ||
         error.message.includes('Connection lost') ||
-        error.name === 'QueryFailedError'
-      )) {
+        errorCode === 'ECONNRESET' ||
+        errorCode === 'ECONNREFUSED' ||
+        errorCode === 'ETIMEDOUT' ||
+        errorCode === 'PROTOCOL_CONNECTION_LOST'
+      );
+      const isQueryFailedError = error.name === 'QueryFailedError';
+
+      if (isConnectionError) {
         message = '数据库连接异常，请稍后重试';
         code = HttpStatus.SERVICE_UNAVAILABLE;
         this.logger.warn('数据库连接错误，建议检查连接池配置和网络状态');
+      } else if (isQueryFailedError) {
+        message = '数据库执行异常，请检查表结构或迁移状态';
+        code = HttpStatus.INTERNAL_SERVER_ERROR;
+        this.logger.error('数据库查询错误详情:', {
+          code: errorCode,
+          errno: (error as any).errno,
+          sqlMessage: (error as any).sqlMessage,
+          query: (error as any).query,
+        });
       } else {
         message = error.message || '服务器内部错误';
       }
@@ -94,4 +109,3 @@ export class HttpExceptionFilter implements ExceptionFilter {
     });
   }
 }
-
