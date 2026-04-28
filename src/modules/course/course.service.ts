@@ -250,7 +250,11 @@ export class CourseService {
         preserveAspectRatio: true,
         density: 120,
       });
-      const result = await convert(pageNum, { responseType: 'buffer' }) as { buffer?: Buffer; data?: Buffer };
+      const result = await this.withTimeout(
+        convert(pageNum, { responseType: 'buffer' }) as Promise<{ buffer?: Buffer; data?: Buffer }>,
+        8000,
+        'PDF 预览图生成超时，请稍后重试',
+      );
       const buffer = result?.buffer ?? result?.data;
       if (!buffer || !Buffer.isBuffer(buffer)) {
         throw new Error('pdf2pic 未返回图片 buffer，请确认容器已安装 GraphicsMagick 和 Ghostscript');
@@ -267,6 +271,21 @@ export class CourseService {
         if (fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir);
       } catch (_) {}
     }
+  }
+
+  private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(message)), ms);
+      promise
+        .then((value) => {
+          clearTimeout(timer);
+          resolve(value);
+        })
+        .catch((error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+    });
   }
 
   private getPreviewImageCachePath(

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -14,6 +14,7 @@ const cloud = require('wx-server-sdk');
 
 @Injectable()
 export class OrderService {
+  private readonly logger = new Logger(OrderService.name);
   private cloudPayInitialized = false;
 
   constructor(
@@ -131,21 +132,37 @@ export class OrderService {
       course_id: order.course_id,
     });
 
-    const result = await cloud.cloudPay.unifiedOrder({
-      body: course.name.slice(0, 127),
-      outTradeNo: order.order_no,
-      spbillCreateIp: config.spbillCreateIp,
-      subMchId: config.subMchId,
-      subAppid: config.subAppid,
-      subOpenid: user.openid,
-      totalFee: amountInCents,
-      feeType: 'CNY',
-      tradeType: 'JSAPI',
-      nonceStr: this.generateNonceStr(),
-      attach,
-      envId: config.callbackEnvId,
-      functionName: config.callbackFunctionName,
-    });
+    let result: any;
+    try {
+      result = await this.withTimeout(
+        cloud.cloudPay.unifiedOrder({
+          body: course.name.slice(0, 127),
+          outTradeNo: order.order_no,
+          spbillCreateIp: config.spbillCreateIp,
+          subMchId: config.subMchId,
+          subAppid: config.subAppid,
+          subOpenid: user.openid,
+          totalFee: amountInCents,
+          feeType: 'CNY',
+          tradeType: 'JSAPI',
+          nonceStr: this.generateNonceStr(),
+          attach,
+          envId: config.callbackEnvId,
+          functionName: config.callbackFunctionName,
+        }),
+        25000,
+        '微信支付统一下单超时，请稍后重试',
+      );
+    } catch (error) {
+      this.logger.error('微信支付云调用统一下单失败', {
+        orderNo: order.order_no,
+        subMchId: config.subMchId,
+        callbackEnvId: config.callbackEnvId,
+        callbackFunctionName: config.callbackFunctionName,
+        error: error?.message || error,
+      });
+      throw new BadRequestException(error?.message || '微信支付统一下单失败，请稍后重试');
+    }
 
     if (!result?.payment) {
       throw new BadRequestException(result?.returnMsg || result?.errMsg || '微信支付云调用统一下单失败');
@@ -206,6 +223,21 @@ export class OrderService {
 
   private generateNonceStr() {
     return crypto.randomBytes(16).toString('hex');
+  }
+
+  private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(message)), ms);
+      promise
+        .then((value) => {
+          clearTimeout(timer);
+          resolve(value);
+        })
+        .catch((error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+    });
   }
 
   /**
