@@ -3,8 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
-import axios from 'axios';
-import * as https from 'https';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { Course } from '../../database/entities/course.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
@@ -12,8 +10,12 @@ import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-
 import { CreateOrderDto } from './dto/create-order.dto';
 import { DistributorService } from '../distributor/distributor.service';
 
+const cloud = require('wx-server-sdk');
+
 @Injectable()
 export class OrderService {
+  private cloudPayInitialized = false;
+
   constructor(
     @InjectRepository(Order)
     private orderRepository: Repository<Order>,
@@ -65,8 +67,6 @@ export class OrderService {
       throw new NotFoundException('用户不存在');
     }
 
-    const virtualPayConfig = this.getVirtualPayConfig();
-
     // 生成订单号
     const orderNo = this.generateOrderNo();
 
@@ -77,21 +77,20 @@ export class OrderService {
       course_id: dto.course_id,
       amount,
       status: OrderStatus.PENDING,
-      pay_provider: 'wechat_virtual',
+      pay_provider: 'wechat_pay',
     });
 
     await this.orderRepository.save(order);
 
-    const paymentParams = this.createVirtualPaymentParams({
+    const paymentParams = await this.createWechatPayParams({
       user,
       course,
       order,
-      config: virtualPayConfig,
     });
 
     order.pay_payload = {
-      mode: paymentParams.mode,
-      signData: paymentParams.signData,
+      prepay_id: paymentParams.prepay_id,
+      payment_params: paymentParams.payment_params,
     };
     await this.orderRepository.save(order);
 
@@ -100,7 +99,7 @@ export class OrderService {
       amount: order.amount,
       course_id: order.course_id,
       status: order.status,
-      payment_params: paymentParams,
+      payment_params: paymentParams.payment_params,
     };
   }
 
@@ -113,41 +112,17 @@ export class OrderService {
     return `ORDER${timestamp}${random}`;
   }
 
-  private getVirtualPayConfig() {
-    const offerId = this.configService.get<string>('OfferID') || this.configService.get<string>('WECHAT_VIRTUAL_PAY_OFFER_ID');
-    const env = Number(this.configService.get<string>('WECHAT_VIRTUAL_PAY_ENV') ?? this.configService.get<string>('VIRTUAL_PAY_ENV') ?? 0);
-    const appKey =
-      this.configService.get<string>('AppKey') ||
-      this.configService.get<string>('WECHAT_VIRTUAL_PAY_APP_KEY') ||
-      this.configService.get<string>('prodAppKey') ||
-      this.configService.get<string>('sandboxAppKey');
-
-    if (!offerId || !appKey) {
-      throw new BadRequestException('微信虚拟支付配置缺失，请检查 OfferID/AppKey 环境变量');
-    }
-
-    return {
-      offerId,
-      env,
-      appKey,
-      mode: this.configService.get<string>('WECHAT_VIRTUAL_PAY_MODE') || 'short_series_coin',
-    };
-  }
-
-  private createVirtualPaymentParams({
+  private async createWechatPayParams({
     user,
     course,
     order,
-    config,
   }: {
     user: AppUser;
     course: Course;
     order: Order;
-    config: { offerId: string; env: number; appKey: string; mode: string };
   }) {
-    if (!user.session_key) {
-      throw new BadRequestException('微信登录态已过期，请重新登录后再支付');
-    }
+    const config = this.getCloudPayConfig();
+    this.initCloudPay();
 
     const amountInCents = Math.max(1, Math.round(Number(order.amount || 0) * 100));
     const attach = JSON.stringify({
@@ -155,32 +130,82 @@ export class OrderService {
       user_id: order.user_id,
       course_id: order.course_id,
     });
-    const signData: Record<string, any> = {
-      offerId: config.offerId,
-      buyQuantity: amountInCents,
-      env: config.env,
-      currencyType: 'CNY',
-      outTradeNo: order.order_no,
-      attach,
-    };
 
-    if (config.mode === 'short_series_goods') {
-      signData.productId = `course_${course.id}`;
-      signData.goodsPrice = amountInCents;
+    const result = await cloud.cloudPay.unifiedOrder({
+      body: course.name.slice(0, 127),
+      outTradeNo: order.order_no,
+      spbillCreateIp: config.spbillCreateIp,
+      subMchId: config.subMchId,
+      subAppid: config.subAppid,
+      subOpenid: user.openid,
+      totalFee: amountInCents,
+      feeType: 'CNY',
+      tradeType: 'JSAPI',
+      nonceStr: this.generateNonceStr(),
+      attach,
+      envId: config.callbackEnvId,
+      functionName: config.callbackFunctionName,
+    });
+
+    if (!result?.payment) {
+      throw new BadRequestException(result?.returnMsg || result?.errMsg || '微信支付云调用统一下单失败');
     }
 
-    const signDataString = JSON.stringify(signData);
-
     return {
-      mode: config.mode,
-      signData: signDataString,
-      paySig: this.createHmacSha256(config.appKey, `requestVirtualPayment&${signDataString}`),
-      signature: this.createHmacSha256(user.session_key, signDataString),
+      prepay_id: result.prepayId || result.prepay_id || '',
+      payment_params: {
+        provider: 'wxpay',
+        ...result.payment,
+      },
     };
   }
 
-  private createHmacSha256(key: string, payload: string) {
-    return crypto.createHmac('sha256', key).update(payload).digest('hex');
+  private getCloudPayConfig() {
+    const subAppid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
+    const subMchId = this.configService.get<string>('WECHAT_PAY_MCH_ID') || this.configService.get<string>('MCH_ID') || '1111726570';
+    const callbackEnvId =
+      this.configService.get<string>('WECHAT_PAY_CALLBACK_ENV_ID') ||
+      this.configService.get<string>('CBR_ENV_ID') ||
+      this.configService.get<string>('TCB_ENV_ID') ||
+      this.configService.get<string>('WX_CLOUDBASE_ENV') ||
+      'prod-d1gguk4ie589126ba';
+    const callbackFunctionName = this.configService.get<string>('WECHAT_PAY_CALLBACK_FUNCTION_NAME') || 'pay_cb';
+    const spbillCreateIp = this.configService.get<string>('WECHAT_PAY_SPBILL_CREATE_IP') || '127.0.0.1';
+
+    if (!subAppid || !subMchId || !callbackEnvId || !callbackFunctionName) {
+      throw new BadRequestException('微信支付云调用配置缺失，请检查 AppID、商户号、回调云函数环境和函数名');
+    }
+
+    return {
+      subAppid,
+      subMchId,
+      callbackEnvId,
+      callbackFunctionName,
+      spbillCreateIp,
+    };
+  }
+
+  private initCloudPay() {
+    if (this.cloudPayInitialized) return;
+
+    cloud.init({
+      env: cloud.DYNAMIC_CURRENT_ENV,
+    });
+    this.cloudPayInitialized = true;
+  }
+
+  async handleWechatPayNotify(_headers: Record<string, any>, body: Record<string, any>) {
+    console.log('微信支付云调用通知:', {
+      return_code: body?.returnCode || body?.return_code,
+      result_code: body?.resultCode || body?.result_code,
+      out_trade_no: body?.outTradeNo || body?.out_trade_no,
+      total_fee: body?.totalFee || body?.total_fee,
+    });
+    return { errcode: 0 };
+  }
+
+  private generateNonceStr() {
+    return crypto.randomBytes(16).toString('hex');
   }
 
   /**
@@ -256,7 +281,7 @@ export class OrderService {
     return { message: '订单支付成功' };
   }
 
-  async confirmVirtualPayment(userId: number, orderNo: string) {
+  async confirmWechatPayment(userId: number, orderNo: string) {
     const order = await this.orderRepository.findOne({
       where: { order_no: orderNo },
     });
@@ -273,30 +298,31 @@ export class OrderService {
     if (order.status !== OrderStatus.PENDING) {
       throw new BadRequestException('当前订单状态不可确认支付');
     }
-    if (order.pay_provider !== 'wechat_virtual') {
+    if (order.pay_provider !== 'wechat_pay') {
       throw new BadRequestException('订单支付方式不匹配');
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('用户不存在');
-    }
-
-    const wechatOrder = await this.queryWeChatVirtualOrder(user, order);
-    const paidStatuses = [2, 4];
-    if (!paidStatuses.includes(Number(wechatOrder.status))) {
+    const wechatOrder = await this.queryWechatPayOrder(order.order_no);
+    const tradeState = wechatOrder.tradeState || wechatOrder.trade_state || wechatOrder.resultCode || wechatOrder.result_code;
+    if (tradeState !== 'SUCCESS') {
       throw new BadRequestException('微信支付结果未完成，请稍后重试');
     }
 
     const expectedFee = Math.max(1, Math.round(Number(order.amount || 0) * 100));
-    const paidFee = Number(wechatOrder.paid_fee ?? wechatOrder.order_fee ?? 0);
+    const paidFee = Number(
+      wechatOrder.totalFee ??
+      wechatOrder.total_fee ??
+      wechatOrder.cashFee ??
+      wechatOrder.cash_fee ??
+      0,
+    );
     if (paidFee < expectedFee) {
       throw new BadRequestException('微信支付金额校验失败');
     }
 
     order.pay_payload = {
       ...(order.pay_payload || {}),
-      wechat_order: wechatOrder,
+      wechat_pay_order: wechatOrder,
     };
     await this.orderRepository.save(order);
     await this.handlePaymentSuccess(order.id);
@@ -308,71 +334,15 @@ export class OrderService {
     };
   }
 
-  private async queryWeChatVirtualOrder(user: AppUser, order: Order) {
-    const appid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
-    const secret =
-      this.configService.get<string>('WECHAT_SECRET') ||
-      this.configService.get<string>('WECHAT_APPSECRET') ||
-      this.configService.get<string>('AppSecret');
-    if (!appid || !secret) {
-      throw new BadRequestException('微信接口配置缺失，无法确认支付结果');
-    }
+  private async queryWechatPayOrder(orderNo: string) {
+    const config = this.getCloudPayConfig();
+    this.initCloudPay();
 
-    const config = this.getVirtualPayConfig();
-    const accessToken = await this.getWeChatAccessToken(appid, secret);
-    const payload = {
-      openid: user.openid,
-      order_id: order.order_no,
-      env: config.env,
-    };
-    const bodyString = JSON.stringify(payload);
-    const paySig = this.createHmacSha256(config.appKey, `/xpay/query_order&${bodyString}`);
-    const httpsAgent = new https.Agent({
-      rejectUnauthorized: false,
+    return cloud.cloudPay.queryOrder({
+      subMchId: config.subMchId,
+      outTradeNo: orderNo,
+      nonceStr: this.generateNonceStr(),
     });
-
-    const response = await axios.post(
-      'https://api.weixin.qq.com/xpay/query_order',
-      bodyString,
-      {
-        params: {
-          access_token: accessToken,
-          pay_sig: paySig,
-        },
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        httpsAgent,
-      },
-    );
-
-    const data = response.data || {};
-    if (data.errcode) {
-      throw new BadRequestException(data.errmsg || `微信订单查询失败：${data.errcode}`);
-    }
-    if (!data.order) {
-      throw new BadRequestException('微信订单查询结果异常');
-    }
-
-    return data.order;
-  }
-
-  private async getWeChatAccessToken(appid: string, secret: string): Promise<string> {
-    const httpsAgent = new https.Agent({
-      rejectUnauthorized: false,
-    });
-    const response = await axios.get('https://api.weixin.qq.com/cgi-bin/token', {
-      params: {
-        grant_type: 'client_credential',
-        appid,
-        secret,
-      },
-      httpsAgent,
-    });
-    if (response.data?.errcode) {
-      throw new BadRequestException(response.data.errmsg || `获取微信 access_token 失败：${response.data.errcode}`);
-    }
-    return response.data.access_token;
   }
 
   /**

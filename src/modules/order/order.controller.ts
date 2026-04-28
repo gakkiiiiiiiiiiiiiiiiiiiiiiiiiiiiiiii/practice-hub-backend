@@ -1,11 +1,11 @@
-import { Controller, Post, Body, Get, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, UseGuards, Headers } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { OrderService } from './order.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { ConfirmVirtualPaymentDto } from './dto/confirm-virtual-payment.dto';
+import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
 
 @ApiTags('订单')
 @Controller('app/order')
@@ -21,10 +21,10 @@ export class OrderController {
     return CommonResponseDto.success(result);
   }
 
-  @Post('virtual-pay/confirm')
-  @ApiOperation({ summary: '确认微信虚拟支付结果并开通课程权限' })
-  async confirmVirtualPayment(@CurrentUser() user: any, @Body() dto: ConfirmVirtualPaymentDto) {
-    const result = await this.orderService.confirmVirtualPayment(user.userId, dto.order_no);
+  @Post('pay/confirm')
+  @ApiOperation({ summary: '确认微信支付结果并开通课程权限' })
+  async confirmWechatPayment(@CurrentUser() user: any, @Body() dto: ConfirmPaymentDto) {
+    const result = await this.orderService.confirmWechatPayment(user.userId, dto.order_no);
     return CommonResponseDto.success(result);
   }
 
@@ -33,5 +33,17 @@ export class OrderController {
   async getOrderCounts(@CurrentUser() user: any) {
     const result = await this.orderService.getOrderCounts(user.userId);
     return CommonResponseDto.success(result);
+  }
+}
+
+@ApiTags('微信支付通知')
+@Controller('app/order/pay')
+export class OrderPayNotifyController {
+  constructor(private readonly orderService: OrderService) {}
+
+  @Post('notify')
+  @ApiOperation({ summary: '微信支付结果通知' })
+  async notify(@Headers() headers: Record<string, any>, @Body() body: Record<string, any>) {
+    return this.orderService.handleWechatPayNotify(headers, body);
   }
 }
