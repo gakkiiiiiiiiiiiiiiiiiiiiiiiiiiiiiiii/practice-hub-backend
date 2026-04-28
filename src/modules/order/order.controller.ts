@@ -24,7 +24,7 @@ export class OrderController {
   @Post('pay/confirm')
   @ApiOperation({ summary: '确认微信支付结果并开通课程权限' })
   async confirmWechatPayment(@CurrentUser() user: any, @Body() dto: ConfirmPaymentDto) {
-    const result = await this.orderService.confirmWechatPayment(user.userId, dto.order_no);
+    const result = await this.orderService.confirmWechatPayment(user.userId, dto.order_no, dto.pay_proof);
     return CommonResponseDto.success(result);
   }
 
