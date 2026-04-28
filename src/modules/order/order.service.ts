@@ -1,8 +1,13 @@
-import { Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import * as crypto from 'crypto';
+import axios from 'axios';
+import * as https from 'https';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { Course } from '../../database/entities/course.entity';
+import { AppUser } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { DistributorService } from '../distributor/distributor.service';
@@ -14,10 +19,13 @@ export class OrderService {
     private orderRepository: Repository<Order>,
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
+    @InjectRepository(AppUser)
+    private appUserRepository: Repository<AppUser>,
     @InjectRepository(UserCourseAuth)
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     @Inject(forwardRef(() => DistributorService))
     private distributorService: DistributorService,
+    private configService: ConfigService,
   ) {}
 
   /**
@@ -30,6 +38,35 @@ export class OrderService {
       throw new NotFoundException('课程不存在');
     }
 
+    const amount = Number(course.price || 0);
+    if (amount <= 0 || course.is_free === 1) {
+      const freeOrder = this.orderRepository.create({
+        order_no: this.generateOrderNo(),
+        user_id: userId,
+        course_id: dto.course_id,
+        amount: 0,
+        status: OrderStatus.PENDING,
+        pay_provider: 'free',
+      });
+      await this.orderRepository.save(freeOrder);
+      await this.handlePaymentSuccess(freeOrder.id);
+
+      return {
+        order_no: freeOrder.order_no,
+        amount: freeOrder.amount,
+        course_id: freeOrder.course_id,
+        status: OrderStatus.PAID,
+        payment_params: null,
+      };
+    }
+
+    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    const virtualPayConfig = this.getVirtualPayConfig();
+
     // 生成订单号
     const orderNo = this.generateOrderNo();
 
@@ -38,23 +75,32 @@ export class OrderService {
       order_no: orderNo,
       user_id: userId,
       course_id: dto.course_id,
-      amount: course.price,
+      amount,
       status: OrderStatus.PENDING,
+      pay_provider: 'wechat_virtual',
     });
 
     await this.orderRepository.save(order);
 
-    // TODO: 对接微信支付 V3，生成预支付订单
-    // 这里返回订单信息，实际支付参数需要对接微信支付
+    const paymentParams = this.createVirtualPaymentParams({
+      user,
+      course,
+      order,
+      config: virtualPayConfig,
+    });
+
+    order.pay_payload = {
+      mode: paymentParams.mode,
+      signData: paymentParams.signData,
+    };
+    await this.orderRepository.save(order);
 
     return {
       order_no: order.order_no,
       amount: order.amount,
       course_id: order.course_id,
-      // 微信支付参数（需要对接）
-      payment_params: {
-        // timeStamp, nonceStr, package, signType, paySign
-      },
+      status: order.status,
+      payment_params: paymentParams,
     };
   }
 
@@ -65,6 +111,75 @@ export class OrderService {
     const timestamp = Date.now();
     const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
     return `ORDER${timestamp}${random}`;
+  }
+
+  private getVirtualPayConfig() {
+    const offerId = this.configService.get<string>('OfferID') || this.configService.get<string>('WECHAT_VIRTUAL_PAY_OFFER_ID');
+    const env = Number(this.configService.get<string>('WECHAT_VIRTUAL_PAY_ENV') ?? this.configService.get<string>('VIRTUAL_PAY_ENV') ?? 0);
+    const sandboxAppKey =
+      this.configService.get<string>('sandboxAppKey') || this.configService.get<string>('WECHAT_VIRTUAL_PAY_SANDBOX_APP_KEY');
+    const prodAppKey = this.configService.get<string>('prodAppKey') || this.configService.get<string>('WECHAT_VIRTUAL_PAY_PROD_APP_KEY');
+    const appKey = env === 1 ? sandboxAppKey : prodAppKey;
+
+    if (!offerId || !appKey) {
+      throw new BadRequestException('微信虚拟支付配置缺失，请检查 OfferID/AppKey 环境变量');
+    }
+
+    return {
+      offerId,
+      env,
+      appKey,
+      mode: this.configService.get<string>('WECHAT_VIRTUAL_PAY_MODE') || 'short_series_coin',
+    };
+  }
+
+  private createVirtualPaymentParams({
+    user,
+    course,
+    order,
+    config,
+  }: {
+    user: AppUser;
+    course: Course;
+    order: Order;
+    config: { offerId: string; env: number; appKey: string; mode: string };
+  }) {
+    if (!user.session_key) {
+      throw new BadRequestException('微信登录态已过期，请重新登录后再支付');
+    }
+
+    const amountInCents = Math.max(1, Math.round(Number(order.amount || 0) * 100));
+    const attach = JSON.stringify({
+      order_no: order.order_no,
+      user_id: order.user_id,
+      course_id: order.course_id,
+    });
+    const signData: Record<string, any> = {
+      offerId: config.offerId,
+      buyQuantity: amountInCents,
+      env: config.env,
+      currencyType: 'CNY',
+      outTradeNo: order.order_no,
+      attach,
+    };
+
+    if (config.mode === 'short_series_goods') {
+      signData.productId = `course_${course.id}`;
+      signData.goodsPrice = amountInCents;
+    }
+
+    const signDataString = JSON.stringify(signData);
+
+    return {
+      mode: config.mode,
+      signData,
+      paySig: this.createHmacSha256(config.appKey, `requestVirtualPayment&${signDataString}`),
+      signature: this.createHmacSha256(user.session_key, signDataString),
+    };
+  }
+
+  private createHmacSha256(key: string, payload: string) {
+    return crypto.createHmac('sha256', key).update(payload).digest('hex');
   }
 
   /**
@@ -79,8 +194,13 @@ export class OrderService {
       throw new NotFoundException('订单不存在');
     }
 
+    if (order.status === OrderStatus.PAID) {
+      return { message: '订单已支付' };
+    }
+
     // 更新订单状态为已支付
     order.status = OrderStatus.PAID;
+    order.paid_time = new Date();
     await this.orderRepository.save(order);
 
     // 获取课程信息
@@ -135,6 +255,125 @@ export class OrderService {
     return { message: '订单支付成功' };
   }
 
+  async confirmVirtualPayment(userId: number, orderNo: string) {
+    const order = await this.orderRepository.findOne({
+      where: { order_no: orderNo },
+    });
+
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+    if (order.user_id !== userId) {
+      throw new ForbiddenException('无权确认该订单');
+    }
+    if (order.status === OrderStatus.PAID) {
+      return { message: '订单已支付', order_no: order.order_no, status: order.status };
+    }
+    if (order.status !== OrderStatus.PENDING) {
+      throw new BadRequestException('当前订单状态不可确认支付');
+    }
+    if (order.pay_provider !== 'wechat_virtual') {
+      throw new BadRequestException('订单支付方式不匹配');
+    }
+
+    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    const wechatOrder = await this.queryWeChatVirtualOrder(user, order);
+    const paidStatuses = [2, 4];
+    if (!paidStatuses.includes(Number(wechatOrder.status))) {
+      throw new BadRequestException('微信支付结果未完成，请稍后重试');
+    }
+
+    const expectedFee = Math.max(1, Math.round(Number(order.amount || 0) * 100));
+    const paidFee = Number(wechatOrder.paid_fee ?? wechatOrder.order_fee ?? 0);
+    if (paidFee < expectedFee) {
+      throw new BadRequestException('微信支付金额校验失败');
+    }
+
+    order.pay_payload = {
+      ...(order.pay_payload || {}),
+      wechat_order: wechatOrder,
+    };
+    await this.orderRepository.save(order);
+    await this.handlePaymentSuccess(order.id);
+
+    return {
+      message: '支付确认成功',
+      order_no: order.order_no,
+      status: OrderStatus.PAID,
+    };
+  }
+
+  private async queryWeChatVirtualOrder(user: AppUser, order: Order) {
+    const appid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
+    const secret =
+      this.configService.get<string>('WECHAT_SECRET') ||
+      this.configService.get<string>('WECHAT_APPSECRET') ||
+      this.configService.get<string>('AppSecret');
+    if (!appid || !secret) {
+      throw new BadRequestException('微信接口配置缺失，无法确认支付结果');
+    }
+
+    const config = this.getVirtualPayConfig();
+    const accessToken = await this.getWeChatAccessToken(appid, secret);
+    const payload = {
+      openid: user.openid,
+      order_id: order.order_no,
+      env: config.env,
+    };
+    const bodyString = JSON.stringify(payload);
+    const paySig = this.createHmacSha256(config.appKey, `/xpay/query_order&${bodyString}`);
+    const httpsAgent = new https.Agent({
+      rejectUnauthorized: false,
+    });
+
+    const response = await axios.post(
+      'https://api.weixin.qq.com/xpay/query_order',
+      bodyString,
+      {
+        params: {
+          access_token: accessToken,
+          pay_sig: paySig,
+        },
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        httpsAgent,
+      },
+    );
+
+    const data = response.data || {};
+    if (data.errcode) {
+      throw new BadRequestException(data.errmsg || `微信订单查询失败：${data.errcode}`);
+    }
+    if (!data.order) {
+      throw new BadRequestException('微信订单查询结果异常');
+    }
+
+    return data.order;
+  }
+
+  private async getWeChatAccessToken(appid: string, secret: string): Promise<string> {
+    const httpsAgent = new https.Agent({
+      rejectUnauthorized: false,
+    });
+    const response = await axios.get('https://api.weixin.qq.com/cgi-bin/token', {
+      params: {
+        grant_type: 'client_credential',
+        appid,
+        secret,
+      },
+      httpsAgent,
+    });
+    if (response.data?.errcode) {
+      throw new BadRequestException(response.data.errmsg || `获取微信 access_token 失败：${response.data.errcode}`);
+    }
+    return response.data.access_token;
+  }
+
   /**
    * 获取订单统计数量
    */
@@ -167,4 +406,3 @@ export class OrderService {
     };
   }
 }
-

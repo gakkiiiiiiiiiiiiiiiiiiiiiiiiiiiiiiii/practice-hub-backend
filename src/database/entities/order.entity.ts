@@ -31,6 +31,15 @@ export class Order {
 	@Column()
 	course_id: number; // 从 subject_id 改为 course_id
 
+	@Column({ length: 30, nullable: true })
+	pay_provider: string | null;
+
+	@Column({ type: 'json', nullable: true })
+	pay_payload: Record<string, any> | null;
+
+	@Column({ type: 'datetime', nullable: true })
+	paid_time: Date | null;
+
 	@CreateDateColumn()
 	create_time: Date;
 

@@ -43,7 +43,7 @@ import { ProcessPdfModule } from './modules/process-pdf/process-pdf.module';
 	imports: [
 		ConfigModule.forRoot({
 			isGlobal: true,
-			envFilePath: ['.env.local', '.env'],
+			envFilePath: ['.env.local', '.env.pay', '.env'],
 		}),
 		TypeOrmModule.forRootAsync({
 			imports: [ConfigModule],

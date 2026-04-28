@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { ConfirmVirtualPaymentDto } from './dto/confirm-virtual-payment.dto';
 
 @ApiTags('订单')
 @Controller('app/order')
@@ -20,6 +21,13 @@ export class OrderController {
     return CommonResponseDto.success(result);
   }
 
+  @Post('virtual-pay/confirm')
+  @ApiOperation({ summary: '确认微信虚拟支付结果并开通课程权限' })
+  async confirmVirtualPayment(@CurrentUser() user: any, @Body() dto: ConfirmVirtualPaymentDto) {
+    const result = await this.orderService.confirmVirtualPayment(user.userId, dto.order_no);
+    return CommonResponseDto.success(result);
+  }
+
   @Get('counts')
   @ApiOperation({ summary: '获取订单统计数量' })
   async getOrderCounts(@CurrentUser() user: any) {
@@ -27,4 +35,3 @@ export class OrderController {
     return CommonResponseDto.success(result);
   }
 }
-

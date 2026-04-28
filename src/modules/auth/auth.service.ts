@@ -34,8 +34,9 @@ export class AuthService {
 		}
 
 		// 调用微信接口换取 openid
-		const appid = this.configService.get('WECHAT_APPID');
-		const secret = this.configService.get('WECHAT_SECRET');
+		const appid = this.configService.get('WECHAT_APPID') || this.configService.get('AppID');
+		const secret =
+			this.configService.get('WECHAT_SECRET') || this.configService.get('WECHAT_APPSECRET') || this.configService.get('AppSecret');
 
 		// 检查配置
 		if (!appid || !secret) {
@@ -103,8 +104,9 @@ export class AuthService {
 					openid,
 					nickname: '新用户',
 				});
-				await this.appUserRepository.save(user);
 			}
+			user.session_key = session_key || user.session_key;
+			await this.appUserRepository.save(user);
 
 			// 如果是新用户且提供了分销商编号，绑定分销关系
 			if (isNewUser && distributorCode) {

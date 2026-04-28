@@ -14,6 +14,9 @@ export class AppUser {
   @Column({ length: 100, unique: true })
   openid: string;
 
+  @Column({ length: 255, nullable: true })
+  session_key: string;
+
   @Column({ length: 100, nullable: true })
   nickname: string;
 
@@ -32,4 +35,3 @@ export class AppUser {
   @UpdateDateColumn()
   update_time: Date;
 }
-
