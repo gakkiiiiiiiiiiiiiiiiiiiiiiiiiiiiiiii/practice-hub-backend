@@ -252,8 +252,21 @@ export class OrderService {
   private signPaymentPayload(payload: Record<string, any>) {
     return crypto
       .createHmac('sha256', this.getPaymentSignSecret())
-      .update(JSON.stringify(payload))
+      .update(this.stableStringify(payload))
       .digest('base64url');
+  }
+
+  private stableStringify(value: any): string {
+    if (value === null || typeof value !== 'object') {
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => this.stableStringify(item)).join(',')}]`;
+    }
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${this.stableStringify(value[key])}`)
+      .join(',')}}`;
   }
 
   private verifyPaymentProof(proof: string) {
