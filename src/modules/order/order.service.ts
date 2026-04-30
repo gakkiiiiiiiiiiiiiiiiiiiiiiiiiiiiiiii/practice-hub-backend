@@ -129,6 +129,7 @@ export class OrderService {
     });
     const requestBody = {
       openid: user.openid,
+      sub_openid: user.openid,
       body: course.name.slice(0, 127),
       out_trade_no: order.order_no,
       spbill_create_ip: config.spbillCreateIp,
@@ -149,7 +150,11 @@ export class OrderService {
 
     const result = await this.callWechatPayOpenApi('unifiedOrder', requestBody);
     if (!result?.payment) {
-      throw new BadRequestException(result?.return_msg || result?.returnMsg || result?.errMsg || '微信支付统一下单失败');
+      this.logger.error('微信支付统一下单未返回 payment', {
+        result,
+        request: this.maskWechatPayRequest(requestBody),
+      });
+      throw new BadRequestException(this.getWechatPayErrorMessage(result, '微信支付统一下单失败'));
     }
 
     return {
@@ -261,7 +266,11 @@ export class OrderService {
       const returnCode = result?.return_code || result?.returnCode;
       const resultCode = result?.result_code || result?.resultCode;
       if ((returnCode && returnCode !== 'SUCCESS') || (resultCode && resultCode !== 'SUCCESS')) {
-        throw new BadRequestException(result?.return_msg || result?.err_code_des || result?.errMsg || `微信支付${apiName}接口失败`);
+        this.logger.error(`微信支付开放接口 ${apiName} 返回失败`, {
+          result,
+          request: this.maskWechatPayRequest(data),
+        });
+        throw new BadRequestException(this.getWechatPayErrorMessage(result, `微信支付${apiName}接口失败`));
       }
       return result;
     } catch (error) {
@@ -269,16 +278,38 @@ export class OrderService {
       const responseData = error?.response?.data;
       this.logger.error(`微信支付开放接口 ${apiName} 调用失败`, {
         responseData,
+        request: this.maskWechatPayRequest(data),
         error: error?.message || error,
       });
       throw new BadRequestException(
-        responseData?.return_msg ||
-        responseData?.err_code_des ||
-        responseData?.errMsg ||
+        this.getWechatPayErrorMessage(responseData, '') ||
         error?.message ||
         `微信支付${apiName}接口调用失败`,
       );
     }
+  }
+
+  private getWechatPayErrorMessage(result: Record<string, any> | undefined, fallback: string) {
+    if (!result) return fallback;
+    return (
+      result.err_code_des ||
+      result.errCodeDes ||
+      result.return_msg ||
+      result.returnMsg ||
+      result.err_msg ||
+      result.errMsg ||
+      result.message ||
+      result.msg ||
+      fallback
+    );
+  }
+
+  private maskWechatPayRequest(data: Record<string, any>) {
+    return {
+      ...data,
+      openid: data.openid ? `${String(data.openid).slice(0, 6)}***` : data.openid,
+      sub_openid: data.sub_openid ? `${String(data.sub_openid).slice(0, 6)}***` : data.sub_openid,
+    };
   }
 
   /**
