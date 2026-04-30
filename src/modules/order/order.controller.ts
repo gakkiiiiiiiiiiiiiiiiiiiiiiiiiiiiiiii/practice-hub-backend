@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, UseGuards, Headers } from '@nestjs/common';
+import { Controller, Post, Body, Get, UseGuards, Headers, Query, Param, ParseIntPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { OrderService } from './order.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -25,6 +25,20 @@ export class OrderController {
   @ApiOperation({ summary: '确认微信支付结果并开通课程权限' })
   async confirmWechatPayment(@CurrentUser() user: any, @Body() dto: ConfirmPaymentDto) {
     const result = await this.orderService.confirmWechatPayment(user.userId, dto.order_no);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('list')
+  @ApiOperation({ summary: '获取我的订单列表' })
+  async getOrderList(@CurrentUser() user: any, @Query('status') status?: string) {
+    const result = await this.orderService.getOrderList(user.userId, status);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post(':id/pay')
+  @ApiOperation({ summary: '继续支付待支付订单' })
+  async payPendingOrder(@CurrentUser() user: any, @Param('id', ParseIntPipe) id: number) {
+    const result = await this.orderService.payPendingOrder(user.userId, id);
     return CommonResponseDto.success(result);
   }
 

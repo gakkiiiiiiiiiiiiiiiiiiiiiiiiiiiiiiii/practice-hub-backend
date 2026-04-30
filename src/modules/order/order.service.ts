@@ -461,6 +461,101 @@ export class OrderService {
   /**
    * 获取订单统计数量
    */
+  async getOrderList(userId: number, status?: string) {
+    const query = this.orderRepository
+      .createQueryBuilder('o')
+      .leftJoin(Course, 'course', 'course.id = o.course_id')
+      .where('o.user_id = :userId', { userId })
+      .select([
+        'o.id AS id',
+        'o.order_no AS orderNo',
+        'o.amount AS amount',
+        'o.status AS status',
+        'o.course_id AS courseId',
+        'o.create_time AS createTime',
+        'o.paid_time AS paidTime',
+        'course.name AS productName',
+        'course.cover_img AS coverImg',
+        'course.content_type AS contentType',
+        'course.file_type AS fileType',
+      ])
+      .orderBy('o.create_time', 'DESC');
+
+    if (status && status !== 'all') {
+      const validStatuses = Object.values(OrderStatus);
+      if (!validStatuses.includes(status as OrderStatus)) {
+        throw new BadRequestException('订单状态参数错误');
+      }
+      query.andWhere('o.status = :status', { status });
+    }
+
+    const rows = await query.getRawMany();
+    return rows.map((row) => ({
+      id: Number(row.id),
+      orderNo: row.orderNo,
+      amount: Number(row.amount || 0),
+      status: row.status,
+      courseId: Number(row.courseId),
+      productName: row.productName || '课程',
+      coverImg: row.coverImg || '',
+      contentType: row.contentType || 'normal',
+      fileType: row.fileType || '',
+      createTime: row.createTime,
+      paidTime: row.paidTime,
+    }));
+  }
+
+  async payPendingOrder(userId: number, orderId: number) {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+    });
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+    if (order.user_id !== userId) {
+      throw new ForbiddenException('无权支付该订单');
+    }
+    if (order.status === OrderStatus.PAID) {
+      return {
+        order_no: order.order_no,
+        amount: order.amount,
+        course_id: order.course_id,
+        status: order.status,
+        payment_params: null,
+      };
+    }
+    if (order.status !== OrderStatus.PENDING || order.pay_provider !== 'wechat_pay') {
+      throw new BadRequestException('当前订单不可继续支付');
+    }
+
+    const [user, course] = await Promise.all([
+      this.appUserRepository.findOne({ where: { id: userId } }),
+      this.courseRepository.findOne({ where: { id: order.course_id } }),
+    ]);
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+
+    const paymentParams = await this.createWechatPayParams({ user, course, order });
+    order.pay_payload = {
+      ...(order.pay_payload || {}),
+      prepay_id: paymentParams.prepay_id,
+      payment_params: paymentParams.payment_params,
+    };
+    await this.orderRepository.save(order);
+
+    return {
+      order_no: order.order_no,
+      amount: order.amount,
+      course_id: order.course_id,
+      status: order.status,
+      payment_params: paymentParams.payment_params,
+    };
+  }
+
   async getOrderCounts(userId: number) {
     const [pendingCount, paidCount, afterSaleCount] = await Promise.all([
       this.orderRepository.count({
