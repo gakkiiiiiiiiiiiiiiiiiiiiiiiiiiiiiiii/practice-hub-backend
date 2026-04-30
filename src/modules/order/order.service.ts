@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
+import axios from 'axios';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { Course } from '../../database/entities/course.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
@@ -10,12 +11,9 @@ import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-
 import { CreateOrderDto } from './dto/create-order.dto';
 import { DistributorService } from '../distributor/distributor.service';
 
-const cloud = require('wx-server-sdk');
-
 @Injectable()
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
-  private cloudPayInitialized = false;
 
   constructor(
     @InjectRepository(Order)
@@ -83,7 +81,7 @@ export class OrderService {
 
     await this.orderRepository.save(order);
 
-    const paymentParams = this.createWechatPayParams({
+    const paymentParams = await this.createWechatPayParams({
       user,
       course,
       order,
@@ -92,7 +90,6 @@ export class OrderService {
     order.pay_payload = {
       prepay_id: paymentParams.prepay_id,
       payment_params: paymentParams.payment_params,
-      cloud_payment_request: paymentParams.cloud_payment_request,
     };
     await this.orderRepository.save(order);
 
@@ -102,7 +99,6 @@ export class OrderService {
       course_id: order.course_id,
       status: order.status,
       payment_params: paymentParams.payment_params,
-      cloud_payment_request: paymentParams.cloud_payment_request,
     };
   }
 
@@ -115,7 +111,7 @@ export class OrderService {
     return `ORDER${timestamp}${random}`;
   }
 
-  private createWechatPayParams({
+  private async createWechatPayParams({
     user,
     course,
     order,
@@ -125,37 +121,42 @@ export class OrderService {
     order: Order;
   }) {
     const config = this.getCloudPayConfig();
-
     const amountInCents = Math.max(1, Math.round(Number(order.amount || 0) * 100));
     const attach = JSON.stringify({
       order_no: order.order_no,
       user_id: order.user_id,
       course_id: order.course_id,
     });
-    const expiresAt = Date.now() + 5 * 60 * 1000;
-    const cloudPaymentRequest = {
+    const requestBody = {
+      openid: user.openid,
       body: course.name.slice(0, 127),
-      outTradeNo: order.order_no,
-      spbillCreateIp: config.spbillCreateIp,
-      subMchId: config.subMchId,
-      subAppid: config.subAppid,
-      subOpenid: user.openid,
-      totalFee: amountInCents,
-      feeType: 'CNY',
-      tradeType: 'JSAPI',
-      nonceStr: this.generateNonceStr(),
+      out_trade_no: order.order_no,
+      spbill_create_ip: config.spbillCreateIp,
+      sub_mch_id: config.subMchId,
+      sub_appid: config.subAppid,
+      total_fee: amountInCents,
+      fee_type: 'CNY',
+      trade_type: 'JSAPI',
+      nonce_str: this.generateNonceStr(),
       attach,
-      envId: config.callbackEnvId,
-      functionName: config.callbackFunctionName,
-      expiresAt,
+      env_id: config.callbackEnvId,
+      callback_type: 2,
+      container: {
+        service: config.callbackService,
+        path: config.callbackPath,
+      },
     };
 
+    const result = await this.callWechatPayOpenApi('unifiedOrder', requestBody);
+    if (!result?.payment) {
+      throw new BadRequestException(result?.return_msg || result?.returnMsg || result?.errMsg || '微信支付统一下单失败');
+    }
+
     return {
-      prepay_id: '',
-      payment_params: null,
-      cloud_payment_request: {
-        ...cloudPaymentRequest,
-        sign: this.signPaymentPayload(cloudPaymentRequest),
+      prepay_id: result.prepay_id || result.prepayId || '',
+      payment_params: {
+        provider: 'wxpay',
+        ...result.payment,
       },
     };
   }
@@ -164,40 +165,30 @@ export class OrderService {
     const subAppid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
     const subMchId = this.configService.get<string>('WECHAT_PAY_MCH_ID') || this.configService.get<string>('MCH_ID') || '1111726570';
     const callbackEnvId =
-      this.configService.get<string>('WECHAT_PAY_CALLBACK_ENV_ID') ||
-      this.configService.get<string>('CBR_ENV_ID') ||
-      this.configService.get<string>('TCB_ENV_ID') ||
+      this.configService.get<string>('WECHAT_PAY_CLOUDRUN_ENV_ID') ||
+      this.configService.get<string>('WX_CLOUDRUN_ENV_ID') ||
       this.configService.get<string>('WX_CLOUDBASE_ENV') ||
       'prod-d1gguk4ie589126ba';
-    const callbackFunctionName = this.configService.get<string>('WECHAT_PAY_CALLBACK_FUNCTION_NAME') || 'pay_cb';
+    const callbackService = this.configService.get<string>('WECHAT_PAY_CALLBACK_SERVICE') || 'prod';
+    const callbackPath = this.configService.get<string>('WECHAT_PAY_CALLBACK_PATH') || '/api/app/order/pay/notify';
     const spbillCreateIp = this.configService.get<string>('WECHAT_PAY_SPBILL_CREATE_IP') || '127.0.0.1';
 
-    if (!subAppid || !subMchId || !callbackEnvId || !callbackFunctionName) {
-      throw new BadRequestException('微信支付云调用配置缺失，请检查 AppID、商户号、回调云函数环境和函数名');
+    if (!subAppid || !subMchId || !callbackEnvId || !callbackService || !callbackPath) {
+      throw new BadRequestException('微信支付开放接口配置缺失，请检查 AppID、商户号、云托管环境、服务名和回调路径');
     }
 
     return {
       subAppid,
       subMchId,
       callbackEnvId,
-      callbackFunctionName,
+      callbackService,
+      callbackPath,
       spbillCreateIp,
     };
   }
 
-  private initCloudPay() {
-    if (this.cloudPayInitialized) return;
-
-    cloud.init({
-      env: cloud.DYNAMIC_CURRENT_ENV,
-    });
-    this.cloudPayInitialized = true;
-  }
-
-  async handleWechatPayNotify(headers: Record<string, any>, body: Record<string, any>) {
-    this.verifyPaymentCallback(headers, body);
-
-    console.log('微信支付云调用通知:', {
+  async handleWechatPayNotify(_headers: Record<string, any>, body: Record<string, any>) {
+    console.log('微信支付开放接口通知:', {
       return_code: body?.returnCode || body?.return_code,
       result_code: body?.resultCode || body?.result_code,
       out_trade_no: body?.outTradeNo || body?.out_trade_no,
@@ -240,92 +231,6 @@ export class OrderService {
     return crypto.randomBytes(16).toString('hex');
   }
 
-  private getPaymentSignSecret() {
-    return (
-      this.configService.get<string>('AppKey') ||
-      this.configService.get<string>('WECHAT_PAY_APPKEY') ||
-      this.configService.get<string>('JWT_SECRET') ||
-      'default_secret'
-    );
-  }
-
-  private signPaymentPayload(payload: Record<string, any>) {
-    return crypto
-      .createHmac('sha256', this.getPaymentSignSecret())
-      .update(this.stableStringify(payload))
-      .digest('base64url');
-  }
-
-  private stableStringify(value: any): string {
-    if (value === null || typeof value !== 'object') {
-      return JSON.stringify(value);
-    }
-    if (Array.isArray(value)) {
-      return `[${value.map((item) => this.stableStringify(item)).join(',')}]`;
-    }
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${this.stableStringify(value[key])}`)
-      .join(',')}}`;
-  }
-
-  private verifyPaymentProof(proof: string) {
-    const [payloadBase64, signature] = String(proof || '').split('.');
-    if (!payloadBase64 || !signature) {
-      throw new BadRequestException('支付证明格式错误');
-    }
-
-    const expected = crypto
-      .createHmac('sha256', this.getPaymentSignSecret())
-      .update(payloadBase64)
-      .digest('base64url');
-    if (
-      expected.length !== signature.length ||
-      !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))
-    ) {
-      throw new BadRequestException('支付证明签名无效');
-    }
-
-    try {
-      const payload = JSON.parse(Buffer.from(payloadBase64, 'base64url').toString('utf8'));
-      if (!payload?.orderNo || !payload?.tradeState || !payload?.issuedAt) {
-        throw new Error('payload invalid');
-      }
-      if (Date.now() - Number(payload.issuedAt) > 5 * 60 * 1000) {
-        throw new BadRequestException('支付证明已过期');
-      }
-      return payload;
-    } catch (error) {
-      if (error instanceof BadRequestException) throw error;
-      throw new BadRequestException('支付证明解析失败');
-    }
-  }
-
-  private verifyPaymentCallback(headers: Record<string, any>, body: Record<string, any>) {
-    const timestamp = String(headers['x-pay-callback-timestamp'] || '');
-    const signature = String(headers['x-pay-callback-signature'] || '');
-    if (!timestamp || !signature) {
-      throw new BadRequestException('支付回调签名缺失');
-    }
-
-    const age = Math.abs(Date.now() - Number(timestamp));
-    if (!Number.isFinite(age) || age > 5 * 60 * 1000) {
-      throw new BadRequestException('支付回调签名已过期');
-    }
-
-    const expected = crypto
-      .createHmac('sha256', this.getPaymentSignSecret())
-      .update(`${timestamp}.${JSON.stringify(body)}`)
-      .digest('base64url');
-
-    if (
-      expected.length !== signature.length ||
-      !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))
-    ) {
-      throw new BadRequestException('支付回调签名无效');
-    }
-  }
-
   private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(message)), ms);
@@ -339,6 +244,41 @@ export class OrderService {
           reject(error);
         });
     });
+  }
+
+  private async callWechatPayOpenApi(apiName: string, data: Record<string, any>) {
+    const url = `http://api.weixin.qq.com/_/pay/${apiName}`;
+    try {
+      const response = await this.withTimeout(
+        axios.post(url, data, {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 25000,
+        }),
+        26000,
+        `微信支付${apiName}接口超时，请稍后重试`,
+      );
+      const result = response.data;
+      const returnCode = result?.return_code || result?.returnCode;
+      const resultCode = result?.result_code || result?.resultCode;
+      if ((returnCode && returnCode !== 'SUCCESS') || (resultCode && resultCode !== 'SUCCESS')) {
+        throw new BadRequestException(result?.return_msg || result?.err_code_des || result?.errMsg || `微信支付${apiName}接口失败`);
+      }
+      return result;
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      const responseData = error?.response?.data;
+      this.logger.error(`微信支付开放接口 ${apiName} 调用失败`, {
+        responseData,
+        error: error?.message || error,
+      });
+      throw new BadRequestException(
+        responseData?.return_msg ||
+        responseData?.err_code_des ||
+        responseData?.errMsg ||
+        error?.message ||
+        `微信支付${apiName}接口调用失败`,
+      );
+    }
   }
 
   /**
@@ -414,7 +354,7 @@ export class OrderService {
     return { message: '订单支付成功' };
   }
 
-  async confirmWechatPayment(userId: number, orderNo: string, payProof?: string) {
+  async confirmWechatPayment(userId: number, orderNo: string) {
     const order = await this.orderRepository.findOne({
       where: { order_no: orderNo },
     });
@@ -435,24 +375,27 @@ export class OrderService {
       throw new BadRequestException('订单支付方式不匹配');
     }
 
-    if (!payProof) {
-      throw new BadRequestException('支付结果同步中，请稍后刷新');
-    }
-
-    const proof = this.verifyPaymentProof(payProof);
-    if (proof.orderNo !== order.order_no || proof.tradeState !== 'SUCCESS') {
+    const wechatOrder = await this.queryWechatPayOrder(order.order_no);
+    const tradeState = wechatOrder.trade_state || wechatOrder.tradeState || wechatOrder.result_code || wechatOrder.resultCode;
+    if (tradeState !== 'SUCCESS') {
       throw new BadRequestException('微信支付结果未完成，请稍后重试');
     }
 
     const expectedFee = Math.max(1, Math.round(Number(order.amount || 0) * 100));
-    const paidFee = Number(proof.totalFee || 0);
+    const paidFee = Number(
+      wechatOrder.total_fee ??
+      wechatOrder.totalFee ??
+      wechatOrder.cash_fee ??
+      wechatOrder.cashFee ??
+      0,
+    );
     if (paidFee < expectedFee) {
       throw new BadRequestException('微信支付金额校验失败');
     }
 
     order.pay_payload = {
       ...(order.pay_payload || {}),
-      wechat_pay_proof: proof,
+      wechat_pay_order: wechatOrder,
     };
     await this.orderRepository.save(order);
     await this.handlePaymentSuccess(order.id);
@@ -466,12 +409,10 @@ export class OrderService {
 
   private async queryWechatPayOrder(orderNo: string) {
     const config = this.getCloudPayConfig();
-    this.initCloudPay();
-
-    return cloud.cloudPay.queryOrder({
-      subMchId: config.subMchId,
-      outTradeNo: orderNo,
-      nonceStr: this.generateNonceStr(),
+    return this.callWechatPayOpenApi('queryorder', {
+      sub_mch_id: config.subMchId,
+      out_trade_no: orderNo,
+      nonce_str: this.generateNonceStr(),
     });
   }
 
