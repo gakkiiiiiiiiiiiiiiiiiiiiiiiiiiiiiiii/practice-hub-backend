@@ -149,7 +149,8 @@ export class OrderService {
     };
 
     const result = await this.callWechatPayOpenApi('unifiedOrder', requestBody);
-    if (!result?.payment) {
+    const payment = result?.payment;
+    if (!payment) {
       this.logger.error('微信支付统一下单未返回 payment', {
         result,
         request: this.maskWechatPayRequest(requestBody),
@@ -161,7 +162,7 @@ export class OrderService {
       prepay_id: result.prepay_id || result.prepayId || '',
       payment_params: {
         provider: 'wxpay',
-        ...result.payment,
+        ...payment,
       },
     };
   }
@@ -262,7 +263,7 @@ export class OrderService {
         26000,
         `微信支付${apiName}接口超时，请稍后重试`,
       );
-      const result = response.data;
+      const result = this.unwrapWechatPayOpenApiResponse(response.data);
       const returnCode = result?.return_code || result?.returnCode;
       const resultCode = result?.result_code || result?.resultCode;
       if ((returnCode && returnCode !== 'SUCCESS') || (resultCode && resultCode !== 'SUCCESS')) {
@@ -287,6 +288,16 @@ export class OrderService {
         `微信支付${apiName}接口调用失败`,
       );
     }
+  }
+
+  private unwrapWechatPayOpenApiResponse(data: Record<string, any>) {
+    if (data?.respdata) {
+      return data.respdata;
+    }
+    if (data?.result?.respdata) {
+      return data.result.respdata;
+    }
+    return data;
   }
 
   private getWechatPayErrorMessage(result: Record<string, any> | undefined, fallback: string) {
