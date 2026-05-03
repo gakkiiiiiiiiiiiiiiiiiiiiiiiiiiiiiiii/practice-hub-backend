@@ -14,6 +14,7 @@ import { ActivationCode, ActivationCodeStatus } from '../../database/entities/ac
 import { Course } from '../../database/entities/course.entity';
 import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
+import { OrderService } from '../order/order.service';
 import { UploadService } from '../upload/upload.service';
 
 @Injectable()
@@ -38,6 +39,8 @@ export class DistributorService {
 		@InjectRepository(Course)
 		private courseRepository: Repository<Course>,
 		private configService: ConfigService,
+		@Inject(forwardRef(() => OrderService))
+		private orderService: OrderService,
 		@Inject(forwardRef(() => UploadService))
 		private uploadService: UploadService,
 	) {}
@@ -703,6 +706,10 @@ export class DistributorService {
 	 * 购买激活码（分销商）
 	 */
 	async buyActivationCodes(userId: number, courseId: number, count: number) {
+		const normalizedCount = Number(count);
+		if (!Number.isInteger(normalizedCount) || normalizedCount < 1 || normalizedCount > 1000) {
+			throw new BadRequestException('购买数量需为 1～1000 的整数');
+		}
 		// 检查是否是分销商且状态为已通过
 		const distributor = await this.distributorRepository.findOne({
 			where: { user_id: userId },
@@ -726,41 +733,87 @@ export class DistributorService {
 		}
 
 		// 获取代理商价格（如果有），否则使用原价
-		const agentPrice = course.agent_price || course.price || 0;
-		const totalPrice = agentPrice * count;
+		const agentPrice = Number(course.agent_price || course.price || 0);
+		const totalPrice = Number((agentPrice * normalizedCount).toFixed(2));
+		if (totalPrice <= 0) {
+			throw new BadRequestException('激活码购买金额异常，请检查课程代理商售价');
+		}
 
-		// 这里可以添加支付逻辑，暂时直接生成激活码
-		// 生成批次ID
 		const batchId = `D${distributor.distributor_code}${Date.now()}`;
+		const order = this.orderRepository.create({
+			order_no: this.generateActivationCodeOrderNo(),
+			user_id: userId,
+			course_id: courseId,
+			amount: totalPrice,
+			status: OrderStatus.PENDING,
+			pay_provider: 'wechat_pay',
+			pay_payload: {
+				activation_code_purchase: {
+					distributor_id: distributor.id,
+					distributor_code: distributor.distributor_code,
+					batch_id: batchId,
+					course_id: courseId,
+					course_name: course.name,
+					count: normalizedCount,
+					unit_price: agentPrice,
+					total_price: totalPrice,
+				},
+			},
+		});
+		await this.orderRepository.save(order);
 
-		// 生成激活码
+		const payment = await this.orderService.createWechatPayParamsForExistingOrder(userId, order.order_no);
+
+		return {
+			order_no: order.order_no,
+			batch_id: batchId,
+			batch_no: batchId, // 兼容前端
+			count: normalizedCount,
+			course_id: courseId,
+			course_name: course.name,
+			total_price: totalPrice,
+			payment_params: payment.payment_params,
+		};
+	}
+
+	async fulfillActivationCodeOrder(order: Order) {
+		const payload = order.pay_payload?.activation_code_purchase;
+		if (!payload) {
+			return { message: '非激活码订单' };
+		}
+
+		const existingCount = await this.activationCodeRepository.count({
+			where: {
+				batch_id: payload.batch_id,
+				agent_id: payload.distributor_id,
+			},
+		});
+		if (existingCount > 0) {
+			return {
+				message: '激活码已生成',
+				batch_no: payload.batch_id,
+				count: existingCount,
+			};
+		}
+
 		const codes = [];
-		for (let i = 0; i < count; i++) {
-			const code = this.generateActivationCode();
+		for (let i = 0; i < Number(payload.count || 0); i++) {
 			codes.push(
 				this.activationCodeRepository.create({
-					code,
-					course_id: courseId,
-					batch_id: batchId,
-					agent_id: distributor.id, // 使用分销商ID作为代理商ID
+					code: this.generateActivationCode(),
+					course_id: payload.course_id,
+					batch_id: payload.batch_id,
+					agent_id: payload.distributor_id,
 					status: ActivationCodeStatus.PENDING,
 				}),
 			);
 		}
-
 		await this.activationCodeRepository.save(codes);
 
-		// 这里可以创建订单记录（如果需要）
-		// 暂时直接返回结果
-
 		return {
-			batch_id: batchId,
-			batch_no: batchId, // 兼容前端
+			message: '激活码生成成功',
+			batch_no: payload.batch_id,
 			count: codes.length,
-			course_id: courseId,
-			course_name: course.name,
-			total_price: totalPrice,
-			codes: codes.map((c) => c.code), // 返回激活码列表
 		};
 	}
 
@@ -868,5 +921,11 @@ export class DistributorService {
 			code += chars.charAt(Math.floor(Math.random() * chars.length));
 		}
 		return code;
+	}
+
+	private generateActivationCodeOrderNo(): string {
+		const timestamp = Date.now();
+		const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+		return `AC${timestamp}${random}`;
 	}
 }

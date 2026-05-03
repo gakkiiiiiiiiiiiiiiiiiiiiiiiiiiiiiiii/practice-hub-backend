@@ -167,6 +167,55 @@ export class OrderService {
     };
   }
 
+  async createWechatPayParamsForExistingOrder(userId: number, orderNo: string) {
+    const [user, order] = await Promise.all([
+      this.appUserRepository.findOne({ where: { id: userId } }),
+      this.orderRepository.findOne({ where: { order_no: orderNo } }),
+    ]);
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+    if (order.user_id !== userId) {
+      throw new ForbiddenException('无权支付该订单');
+    }
+    if (order.status === OrderStatus.PAID) {
+      return {
+        order_no: order.order_no,
+        amount: order.amount,
+        course_id: order.course_id,
+        status: order.status,
+        payment_params: null,
+      };
+    }
+    if (order.status !== OrderStatus.PENDING || order.pay_provider !== 'wechat_pay') {
+      throw new BadRequestException('当前订单不可支付');
+    }
+
+    const course = await this.courseRepository.findOne({ where: { id: order.course_id } });
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+
+    const paymentParams = await this.createWechatPayParams({ user, course, order });
+    order.pay_payload = {
+      ...(order.pay_payload || {}),
+      prepay_id: paymentParams.prepay_id,
+      payment_params: paymentParams.payment_params,
+    };
+    await this.orderRepository.save(order);
+
+    return {
+      order_no: order.order_no,
+      amount: order.amount,
+      course_id: order.course_id,
+      status: order.status,
+      payment_params: paymentParams.payment_params,
+    };
+  }
+
   private getCloudPayConfig() {
     const subAppid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
     const subMchId = this.configService.get<string>('WECHAT_PAY_MCH_ID') || this.configService.get<string>('MCH_ID') || '1111726570';
@@ -343,6 +392,10 @@ export class OrderService {
     order.status = OrderStatus.PAID;
     order.paid_time = new Date();
     await this.orderRepository.save(order);
+
+    if (order.pay_payload?.activation_code_purchase) {
+      return this.distributorService.fulfillActivationCodeOrder(order);
+    }
 
     // 获取课程信息
     const course = await this.courseRepository.findOne({

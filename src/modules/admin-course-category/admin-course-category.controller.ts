@@ -18,6 +18,8 @@ import { AdminRole } from '../../database/entities/sys-user.entity';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { OperationLogInterceptor } from '../../common/interceptors/operation-log.interceptor';
 import { AdminCourseCategoryService } from './admin-course-category.service';
+import { BatchDeleteCourseCategoriesDto } from './dto/batch-delete-course-categories.dto';
+import { BatchUpdateCourseCategoriesStatusDto } from './dto/batch-update-course-categories-status.dto';
 import { CreateCourseCategoryDto } from './dto/create-course-category.dto';
 import { UpdateCourseCategoryDto } from './dto/update-course-category.dto';
 
@@ -44,6 +46,20 @@ export class AdminCourseCategoryController {
 	@ApiOperation({ summary: '创建题库分类' })
 	async createCategory(@Body() dto: CreateCourseCategoryDto) {
 		const result = await this.adminCourseCategoryService.createCategory(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch-delete')
+	@ApiOperation({ summary: '批量删除题库分类' })
+	async batchDeleteCategories(@Body() dto: BatchDeleteCourseCategoriesDto) {
+		const result = await this.adminCourseCategoryService.batchDeleteCategories(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch-update-status')
+	@ApiOperation({ summary: '批量更新题库分类状态（启用/禁用）' })
+	async batchUpdateStatus(@Body() dto: BatchUpdateCourseCategoriesStatusDto) {
+		const result = await this.adminCourseCategoryService.batchUpdateStatus(dto);
 		return CommonResponseDto.success(result);
 	}
 

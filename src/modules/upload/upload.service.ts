@@ -631,12 +631,16 @@ export class UploadService {
 		if (!resolvedPath.startsWith(resolvedUploadDir)) {
 			throw new BadRequestException('文件路径不安全');
 		}
-		const buffer = (file as any).buffer ?? (file.path ? await fs.promises.readFile(file.path) : null);
-		if (!buffer) {
-			throw new BadRequestException('无法读取文件内容');
+		const buffer = (file as any).buffer;
+		if (buffer) {
+			await fs.promises.writeFile(filePath, buffer);
+			return `${folder}/${fileName}`;
 		}
-		fs.writeFileSync(filePath, buffer);
-		return `${folder}/${fileName}`;
+		if (file.path && fs.existsSync(file.path)) {
+			await fs.promises.copyFile(file.path, filePath);
+			return `${folder}/${fileName}`;
+		}
+		throw new BadRequestException('无法读取文件内容');
 	}
 
 	private async uploadCourseFileToCOS(
@@ -654,17 +658,18 @@ export class UploadService {
 		const fileName = `${folder}/${timestamp}-${randomStr}${ext}`;
 		const cloudPath = `/${fileName}`;
 		const metaFileId = await this.getFileMetaData(cloudPath, openid);
-		const buffer = (file as any).buffer ?? (file.path ? await fs.promises.readFile(file.path) : null);
-		if (!buffer) {
+		const buffer = (file as any).buffer;
+		const filePath = file.path && fs.existsSync(file.path) ? file.path : '';
+		if (!buffer && !filePath) {
 			throw new BadRequestException('无法读取文件内容');
 		}
 		const uploadOptions: any = {
 			Bucket: this.bucket,
 			Region: this.region,
 			Key: fileName,
-			Body: buffer,
+			Body: buffer || fs.createReadStream(filePath),
 			ContentType: file.mimetype,
-			ContentLength: buffer.length,
+			ContentLength: buffer ? buffer.length : (await fs.promises.stat(filePath)).size,
 			StorageClass: 'STANDARD',
 		};
 		if (metaFileId) {
@@ -794,32 +799,36 @@ export class UploadService {
 		if (!fs.existsSync(dir)) {
 			throw new BadRequestException('未找到该上传任务的分片，请先上传全部分片');
 		}
-		const chunks: Buffer[] = [];
+		const mergedFileName = `merged-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`;
+		const mergedPath = path.join(dir, mergedFileName);
+		if (fs.existsSync(mergedPath)) {
+			await fs.promises.unlink(mergedPath);
+		}
 		for (let i = 0; i < totalChunks; i++) {
 			const chunkPath = path.join(dir, String(i));
 			if (!fs.existsSync(chunkPath)) {
 				throw new BadRequestException(`缺少分片 ${i}，请补传`);
 			}
-			chunks.push(fs.readFileSync(chunkPath));
+			await fs.promises.appendFile(mergedPath, await fs.promises.readFile(chunkPath));
 		}
-		const merged = Buffer.concat(chunks);
 		const mimeMap: Record<string, string> = {
 			'.pdf': 'application/pdf',
 			'.doc': 'application/msword',
 			'.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 		};
 		const mimetype = mimeMap[ext] || 'application/octet-stream';
+		const stat = await fs.promises.stat(mergedPath);
 		const fakeFile: Express.Multer.File = {
 			fieldname: 'file',
 			originalname: fileName || `merged${ext}`,
 			encoding: '7bit',
 			mimetype,
-			size: merged.length,
-			buffer: merged,
+			size: stat.size,
+			buffer: undefined as any,
 			stream: null as any,
 			destination: '',
-			filename: '',
-			path: '',
+			filename: mergedFileName,
+			path: mergedPath,
 		};
 		try {
 			const fileUrl = await this.uploadCourseFile(fakeFile, '');
@@ -830,6 +839,7 @@ export class UploadService {
 					const chunkPath = path.join(dir, String(i));
 					if (fs.existsSync(chunkPath)) fs.unlinkSync(chunkPath);
 				}
+				if (fs.existsSync(mergedPath)) fs.unlinkSync(mergedPath);
 				if (fs.existsSync(dir)) fs.rmdirSync(dir);
 			} catch (e) {
 				console.warn('[分片合并] 清理临时目录失败:', e);

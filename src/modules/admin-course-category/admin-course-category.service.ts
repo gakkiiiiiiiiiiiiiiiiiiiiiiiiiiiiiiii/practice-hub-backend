@@ -1,8 +1,10 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { CourseCategory } from '../../database/entities/course-category.entity';
 import { Course } from '../../database/entities/course.entity';
+import { BatchDeleteCourseCategoriesDto } from './dto/batch-delete-course-categories.dto';
+import { BatchUpdateCourseCategoriesStatusDto } from './dto/batch-update-course-categories-status.dto';
 import { CreateCourseCategoryDto } from './dto/create-course-category.dto';
 import { UpdateCourseCategoryDto } from './dto/update-course-category.dto';
 
@@ -144,5 +146,59 @@ export class AdminCourseCategoryService {
 
 		await this.courseCategoryRepository.remove(category);
 		return { success: true };
+	}
+
+	async batchDeleteCategories(dto: BatchDeleteCourseCategoriesDto) {
+		if (!dto.ids || dto.ids.length === 0) {
+			throw new BadRequestException('分类ID列表不能为空');
+		}
+
+		const categories = await this.courseCategoryRepository.find({
+			where: { id: In(dto.ids) },
+		});
+
+		if (categories.length === 0) {
+			throw new NotFoundException('未找到要删除的分类');
+		}
+
+		const sortedCategories = [...categories].sort((a, b) => {
+			if (a.parent_id && !b.parent_id) return -1;
+			if (!a.parent_id && b.parent_id) return 1;
+			return b.id - a.id;
+		});
+
+		for (const category of sortedCategories) {
+			await this.deleteCategory(category.id);
+		}
+
+		return {
+			success: true,
+			count: categories.length,
+		};
+	}
+
+	async batchUpdateStatus(dto: BatchUpdateCourseCategoriesStatusDto) {
+		if (!dto.ids || dto.ids.length === 0) {
+			throw new BadRequestException('分类ID列表不能为空');
+		}
+
+		const categories = await this.courseCategoryRepository.find({
+			where: { id: In(dto.ids) },
+		});
+
+		if (categories.length === 0) {
+			throw new NotFoundException('未找到要更新的分类');
+		}
+
+		await this.courseCategoryRepository.update(
+			{ id: In(dto.ids) },
+			{ status: dto.status },
+		);
+
+		return {
+			success: true,
+			count: categories.length,
+			status: dto.status,
+		};
 	}
 }
