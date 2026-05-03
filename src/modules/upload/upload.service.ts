@@ -502,10 +502,9 @@ export class UploadService {
 			if (inCloudRun) {
 				try {
 					const token = await this.getWeChatAccessToken();
-					const publicRes = await axios.post(
+					const publicRes = await this.requestWechatPublicApi(
 						`https://api.weixin.qq.com/tcb/uploadfile?access_token=${token}`,
 						{ env: envId, path: pathNorm },
-						{ timeout: 10000 },
 					);
 					const data = publicRes.data;
 					if (data.errcode && data.errcode !== 0) {
@@ -525,14 +524,16 @@ export class UploadService {
 						path: pathNorm,
 						finalFileUrl,
 					};
-				} catch (fallbackErr: any) {
-					const fbMsg = fallbackErr?.response?.data?.errmsg || fallbackErr.message;
-					console.error('[直传凭证] 公网 fallback 失败:', fbMsg);
-					throw new BadRequestException(
-						'获取上传凭证失败（内网接口不可用且公网回退失败）。请确认已配置 WECHAT_APPID、WECHAT_SECRET：' +
-							(fbMsg || ''),
-					);
-				}
+					} catch (fallbackErr: any) {
+						const fbMsg = fallbackErr?.response?.data?.errmsg || fallbackErr.message;
+						console.error('[直传凭证] 公网 fallback 失败:', fbMsg);
+						const configHint = fbMsg?.includes('未配置') ? '请确认已配置 WECHAT_APPID、WECHAT_SECRET：' : '公网回退错误：';
+						throw new BadRequestException(
+							'获取上传凭证失败（内网接口不可用且公网回退失败）。' +
+								configHint +
+								(fbMsg || ''),
+						);
+					}
 			}
 
 			if (code === '85107' || code === 85107) {
@@ -546,19 +547,59 @@ export class UploadService {
 
 	/** 使用小程序 appid/secret 获取 access_token，用于公网 tcb/uploadfile 等接口 */
 	private async getWeChatAccessToken(): Promise<string> {
-		const appid = this.configService.get<string>('WECHAT_APPID');
-		const secret = this.configService.get<string>('WECHAT_SECRET');
+		const appid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
+		const secret =
+			this.configService.get<string>('WECHAT_SECRET') ||
+			this.configService.get<string>('WECHAT_APPSECRET') ||
+			this.configService.get<string>('AppSecret');
 		if (!appid || !secret) {
 			throw new Error('未配置 WECHAT_APPID 或 WECHAT_SECRET，无法使用公网 tcb/uploadfile');
 		}
-		const res = await axios.get('https://api.weixin.qq.com/cgi-bin/token', {
-			params: { grant_type: 'client_credential', appid, secret },
-			timeout: 10000,
+		const res = await this.requestWechatPublicApi('https://api.weixin.qq.com/cgi-bin/token', null, {
+			grant_type: 'client_credential',
+			appid,
+			secret,
 		});
 		if (res.data.errcode) {
 			throw new Error(res.data.errmsg || `获取 access_token 失败: ${res.data.errcode}`);
 		}
 		return res.data.access_token;
+	}
+
+	private async requestWechatPublicApi(url: string, data?: Record<string, any> | null, params?: Record<string, any>) {
+		try {
+			if (data) {
+				return await axios.post(url, data, { params, timeout: 10000 });
+			}
+			return await axios.get(url, { params, timeout: 10000 });
+		} catch (error: any) {
+			if (!this.isTlsCertificateError(error)) {
+				throw error;
+			}
+
+			console.warn('[微信公网接口] TLS 证书校验失败，使用兼容模式重试:', error.message);
+			const requestConfig = {
+				params,
+				timeout: 10000,
+				httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+			};
+			if (data) {
+				return axios.post(url, data, requestConfig);
+			}
+			return axios.get(url, requestConfig);
+		}
+	}
+
+	private isTlsCertificateError(error: any): boolean {
+		const code = error?.code || error?.cause?.code;
+		const message = String(error?.message || error?.cause?.message || '').toLowerCase();
+		return (
+			code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+			code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
+			code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+			message.includes('self-signed certificate') ||
+			message.includes('unable to verify the first certificate')
+		);
 	}
 
 	private getEnvIdFromBucket(): string {
