@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { DataSource, Repository, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import * as https from 'https';
@@ -8,10 +8,11 @@ import { Distributor } from '../../database/entities/distributor.entity';
 import { DistributionRelation } from '../../database/entities/distribution-relation.entity';
 import { DistributionOrder } from '../../database/entities/distribution-order.entity';
 import { DistributionConfig } from '../../database/entities/distribution-config.entity';
-import { AppUser } from '../../database/entities/app-user.entity';
+import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
-import { ActivationCode, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
+import { ActivationCode, ActivationCodeSourceType, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
 import { Course } from '../../database/entities/course.entity';
+import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
 import { OrderService } from '../order/order.service';
@@ -41,9 +42,10 @@ export class DistributorService {
 		private configService: ConfigService,
 		@Inject(forwardRef(() => OrderService))
 		private orderService: OrderService,
-		@Inject(forwardRef(() => UploadService))
-		private uploadService: UploadService,
-	) {}
+			@Inject(forwardRef(() => UploadService))
+			private uploadService: UploadService,
+			private dataSource: DataSource,
+		) {}
 
 	/**
 	 * 申请成为分销用户
@@ -97,6 +99,20 @@ export class DistributorService {
 		});
 
 		if (!distributor) {
+			const appUser = await this.appUserRepository.findOne({ where: { id: userId } });
+			if (appUser?.role === AppUserRole.ADMIN) {
+				return {
+					id: null,
+					distributor_code: 'APP_ADMIN',
+					qr_code_url: null,
+					status: 1,
+					is_app_admin: true,
+					total_earnings: 0,
+					withdrawable_amount: 0,
+					subordinate_count: 0,
+					total_orders: 0,
+				};
+			}
 			throw new NotFoundException('您还不是分销用户');
 		}
 
@@ -527,6 +543,7 @@ export class DistributorService {
 			withdrawable_amount: distributor.withdrawable_amount,
 			subordinate_count: distributor.subordinate_count,
 			total_orders: distributor.total_orders,
+			is_app_admin: false,
 		};
 	}
 
@@ -739,7 +756,8 @@ export class DistributorService {
 			throw new BadRequestException('激活码购买金额异常，请检查课程代理商售价');
 		}
 
-		const batchId = `D${distributor.distributor_code}${Date.now()}`;
+			const batchPrefix = 'DST';
+			const batchId = `${batchPrefix}${distributor.distributor_code}${Date.now()}`;
 		const order = this.orderRepository.create({
 			order_no: this.generateActivationCodeOrderNo(),
 			user_id: userId,
@@ -751,8 +769,11 @@ export class DistributorService {
 				activation_code_purchase: {
 					distributor_id: distributor.id,
 					distributor_code: distributor.distributor_code,
-					batch_id: batchId,
-					course_id: courseId,
+						batch_id: batchId,
+						batch_prefix: batchPrefix,
+						source_type: ActivationCodeSourceType.DISTRIBUTOR,
+						source_id: distributor.id,
+						course_id: courseId,
 					course_name: course.name,
 					count: normalizedCount,
 					unit_price: agentPrice,
@@ -802,11 +823,14 @@ export class DistributorService {
 				this.activationCodeRepository.create({
 					code: this.generateActivationCode(),
 					course_id: payload.course_id,
-					batch_id: payload.batch_id,
-					agent_id: payload.distributor_id,
-					status: ActivationCodeStatus.PENDING,
-				}),
-			);
+						batch_id: payload.batch_id,
+						batch_prefix: payload.batch_prefix || this.getBatchPrefix(payload.batch_id),
+						agent_id: payload.distributor_id,
+						source_type: ActivationCodeSourceType.DISTRIBUTOR,
+						source_id: payload.distributor_id,
+						status: ActivationCodeStatus.PENDING,
+					}),
+				);
 		}
 		await this.activationCodeRepository.save(codes);
 
@@ -820,25 +844,32 @@ export class DistributorService {
 	/**
 	 * 获取分销商购买的激活码列表
 	 */
-	async getDistributorCodes(userId: number, page = 1, pageSize = 20, batchId?: string, status?: number) {
+		async getDistributorCodes(userId: number, page = 1, pageSize = 20, batchId?: string, status?: number) {
 		// 校验分页参数，避免 NaN 传入 TypeORM
 		const validPage = Number.isFinite(page) && Number.isInteger(page) && page > 0 ? page : 1;
 		const validPageSize =
 			Number.isFinite(pageSize) && Number.isInteger(pageSize) && pageSize > 0 ? Math.min(100, pageSize) : 20;
 
-		// 检查是否是分销商
-		const distributor = await this.distributorRepository.findOne({
-			where: { user_id: userId },
-		});
+			const appUser = await this.appUserRepository.findOne({ where: { id: userId } });
+			const isAppAdmin = appUser?.role === AppUserRole.ADMIN;
 
-		if (!distributor) {
-			throw new BadRequestException('您还不是分销用户');
-		}
+			// 检查是否是分销商
+			const distributor = await this.distributorRepository.findOne({
+				where: { user_id: userId },
+			});
 
-		const queryBuilder = this.activationCodeRepository.createQueryBuilder('code');
+			if (!distributor && !isAppAdmin) {
+				throw new BadRequestException('您还不是分销用户');
+			}
 
-		// 只查询该分销商购买的激活码（通过 agent_id 关联）
-		queryBuilder.where('code.agent_id = :agentId', { agentId: distributor.id });
+			const queryBuilder = this.activationCodeRepository.createQueryBuilder('code');
+
+			if (isAppAdmin) {
+				queryBuilder.where('code.source_type = :sourceType', { sourceType: ActivationCodeSourceType.APP_ADMIN });
+			} else {
+				// 只查询该分销商购买的激活码（通过 agent_id 关联）
+				queryBuilder.where('code.agent_id = :agentId', { agentId: distributor.id });
+			}
 
 		// 批次号筛选
 		if (batchId && batchId.trim() !== '') {
@@ -859,13 +890,18 @@ export class DistributorService {
 			.getManyAndCount();
 
 		// 统计激活码数量（不限制分页，统计所有数据）
-		const statsQueryBuilder = this.activationCodeRepository.createQueryBuilder('code');
-		statsQueryBuilder.where('code.agent_id = :agentId', { agentId: distributor.id });
+			const statsQueryBuilder = this.activationCodeRepository.createQueryBuilder('code');
+			if (isAppAdmin) {
+				statsQueryBuilder.where('code.source_type = :sourceType', { sourceType: ActivationCodeSourceType.APP_ADMIN });
+			} else {
+				statsQueryBuilder.where('code.agent_id = :agentId', { agentId: distributor.id });
+			}
 
-		const allCodes = await statsQueryBuilder.getMany();
-		const totalCount = allCodes.length;
-		const usedCount = allCodes.filter((c) => c.status === ActivationCodeStatus.USED).length;
-		const pendingCount = allCodes.filter((c) => c.status === ActivationCodeStatus.PENDING).length;
+			const allCodes = await statsQueryBuilder.getMany();
+			const totalCount = allCodes.length;
+			const usedCount = allCodes.filter((c) => c.status === ActivationCodeStatus.USED).length;
+			const pendingCount = allCodes.filter((c) => c.status === ActivationCodeStatus.PENDING).length;
+			const invalidCount = allCodes.filter((c) => c.status === ActivationCodeStatus.INVALID).length;
 
 		// 获取使用激活码的用户信息
 		const usedUserIds = codes.filter((c) => c.used_by_uid).map((c) => c.used_by_uid);
@@ -882,8 +918,11 @@ export class DistributorService {
 			list: codes.map((code) => ({
 				id: code.id,
 				code: code.code,
-				batch_id: code.batch_id,
-				course_id: code.course_id,
+					batch_id: code.batch_id,
+					batch_prefix: code.batch_prefix || this.getBatchPrefix(code.batch_id),
+					source_type: code.source_type,
+					source_text: this.getSourceText(code),
+					course_id: code.course_id,
 				course_name: code.course?.name || '-',
 				status: code.status,
 				status_text:
@@ -901,12 +940,104 @@ export class DistributorService {
 			page: validPage,
 			pageSize: validPageSize,
 			stats: {
-				total_count: totalCount,
-				used_count: usedCount,
-				pending_count: pendingCount,
-			},
-		};
-	}
+					total_count: totalCount,
+					used_count: usedCount,
+					pending_count: pendingCount,
+					invalid_count: invalidCount,
+				},
+			};
+		}
+
+		async generateAdminActivationCodes(userId: number, courseId: number, count: number) {
+			const appUser = await this.appUserRepository.findOne({ where: { id: userId } });
+			if (appUser?.role !== AppUserRole.ADMIN) {
+				throw new BadRequestException('仅小程序管理员可以生成激活码');
+			}
+
+			const normalizedCount = Number(count);
+			if (!Number.isInteger(normalizedCount) || normalizedCount < 1) {
+				throw new BadRequestException('生成数量需为大于 0 的整数');
+			}
+
+			const course = await this.courseRepository.findOne({ where: { id: courseId } });
+			if (!course) {
+				throw new NotFoundException('课程不存在');
+			}
+
+			const batchPrefix = 'APP';
+			const batchId = `${batchPrefix}${userId}${Date.now()}`;
+			const codes = Array.from({ length: normalizedCount }, () =>
+				this.activationCodeRepository.create({
+					code: this.generateActivationCode(),
+					course_id: courseId,
+					batch_id: batchId,
+					batch_prefix: batchPrefix,
+					agent_id: null,
+					source_type: ActivationCodeSourceType.APP_ADMIN,
+					source_id: userId,
+					status: ActivationCodeStatus.PENDING,
+				}),
+			);
+			await this.activationCodeRepository.save(codes);
+
+			return {
+				message: '激活码生成成功',
+				batch_no: batchId,
+				batch_id: batchId,
+				count: codes.length,
+				course_id: courseId,
+				course_name: course.name,
+			};
+		}
+
+		async invalidateAppActivationCode(userId: number, codeId: number) {
+			const appUser = await this.appUserRepository.findOne({ where: { id: userId } });
+			const isAppAdmin = appUser?.role === AppUserRole.ADMIN;
+			const distributor = isAppAdmin
+				? null
+				: await this.distributorRepository.findOne({
+						where: { user_id: userId },
+					});
+
+			if (!isAppAdmin && !distributor) {
+				throw new BadRequestException('您还不是分销用户');
+			}
+
+			const queryRunner = this.dataSource.createQueryRunner();
+			await queryRunner.connect();
+			await queryRunner.startTransaction();
+
+			try {
+				const queryBuilder = queryRunner.manager
+					.createQueryBuilder(ActivationCode, 'code')
+					.setLock('pessimistic_write')
+					.where('code.id = :codeId', { codeId });
+
+				if (!isAppAdmin) {
+					queryBuilder.andWhere('code.agent_id = :agentId', { agentId: distributor.id });
+				}
+
+				const code = await queryBuilder.getOne();
+				if (!code) {
+					throw new BadRequestException('激活码不存在');
+				}
+				if (code.status !== ActivationCodeStatus.USED || !code.used_by_uid) {
+					throw new BadRequestException('只能禁用已激活的激活码');
+				}
+
+				code.status = ActivationCodeStatus.INVALID;
+				await queryRunner.manager.save(ActivationCode, code);
+				await this.revokeCodeCourseAuth(queryRunner.manager, code);
+				await queryRunner.commitTransaction();
+
+				return { success: true };
+			} catch (error) {
+				await queryRunner.rollbackTransaction();
+				throw error;
+			} finally {
+				await queryRunner.release();
+			}
+		}
 
 	/**
 	 * 生成随机激活码
@@ -923,9 +1054,60 @@ export class DistributorService {
 		return code;
 	}
 
-	private generateActivationCodeOrderNo(): string {
-		const timestamp = Date.now();
-		const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-		return `AC${timestamp}${random}`;
+		private generateActivationCodeOrderNo(): string {
+			const timestamp = Date.now();
+			const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+			return `AC${timestamp}${random}`;
+		}
+
+		private async revokeCodeCourseAuth(manager: any, code: ActivationCode) {
+			if (!code.used_by_uid) return;
+
+			const paidOrder = await manager.findOne(Order, {
+				where: {
+					user_id: code.used_by_uid,
+					course_id: code.course_id,
+					status: OrderStatus.PAID,
+				},
+			});
+			if (paidOrder) return;
+
+			const otherUsedCodeCount = await manager.count(ActivationCode, {
+				where: {
+					used_by_uid: code.used_by_uid,
+					course_id: code.course_id,
+					status: ActivationCodeStatus.USED,
+				},
+			});
+			if (otherUsedCodeCount > 0) return;
+
+			await manager.delete(UserCourseAuth, {
+				user_id: code.used_by_uid,
+				course_id: code.course_id,
+				source: AuthSource.CODE,
+			});
+		}
+
+		private getBatchPrefix(batchId?: string) {
+			if (!batchId) return '-';
+			if (batchId.startsWith('DST')) return 'DST';
+			if (batchId.startsWith('APP')) return 'APP';
+			if (batchId.startsWith('ADM')) return 'ADM';
+			if (batchId.startsWith('AGT')) return 'AGT';
+			if (batchId.startsWith('D')) return 'D';
+			return 'BATCH';
+		}
+
+		private getSourceText(code: ActivationCode) {
+			const sourceType =
+				code.source_type ||
+				(code.batch_id?.startsWith('D') ? ActivationCodeSourceType.DISTRIBUTOR : ActivationCodeSourceType.ADMIN);
+			const textMap: Record<string, string> = {
+				[ActivationCodeSourceType.ADMIN]: '管理端生成',
+				[ActivationCodeSourceType.AGENT]: '代理商生成',
+				[ActivationCodeSourceType.DISTRIBUTOR]: '分销购买',
+				[ActivationCodeSourceType.APP_ADMIN]: '小程序管理员生成',
+			};
+			return textMap[sourceType] || '未知来源';
+		}
 	}
-}

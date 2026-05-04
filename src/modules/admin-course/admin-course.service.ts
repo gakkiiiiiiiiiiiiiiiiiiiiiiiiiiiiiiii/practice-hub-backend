@@ -48,9 +48,24 @@ export class AdminCourseService {
       if (!course) {
         throw new NotFoundException('课程不存在');
       }
+      if (dto.is_free === 0 && dto.validity_days === undefined && course.validity_days == null) {
+        dto.validity_days = 365;
+      }
+      if (dto.is_free === 1) {
+        dto.validity_days = null;
+      }
       Object.assign(course, dto);
       return await this.courseRepository.save(course);
     } else {
+      if (dto.sort === undefined || dto.sort === null) {
+        dto.sort = await this.getNextSortValue();
+      }
+      if ((dto.is_free ?? 0) === 0 && dto.validity_days == null) {
+        dto.validity_days = 365;
+      }
+      if (dto.is_free === 1) {
+        dto.validity_days = null;
+      }
       const course = this.courseRepository.create(dto);
       return await this.courseRepository.save(course);
     }
@@ -289,7 +304,7 @@ export class AdminCourseService {
   /**
    * 批量更新课程状态
    */
-  async batchUpdateStatus(dto: BatchUpdateStatusDto) {
+	  async batchUpdateStatus(dto: BatchUpdateStatusDto) {
     if (!dto.ids || dto.ids.length === 0) {
       throw new Error('课程ID列表不能为空');
     }
@@ -313,6 +328,13 @@ export class AdminCourseService {
       count: courses.length,
       status: dto.status,
     };
-  }
-}
+	  }
 
+  private async getNextSortValue() {
+    const latest = await this.courseRepository
+      .createQueryBuilder('course')
+      .select('MAX(course.sort)', 'maxSort')
+      .getRawOne();
+    return Number(latest?.maxSort ?? 0) + 1;
+  }
+	}

@@ -23,6 +23,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       return {
         userId: payload.userId,
         openid: payload.openid,
+        role: payload.role,
         type: 'app',
       };
     } else if (payload.type === 'admin') {
@@ -36,4 +37,3 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     return payload;
   }
 }
-

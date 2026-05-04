@@ -30,6 +30,8 @@ export class UserService {
       nickname: user.nickname,
       avatar: user.avatar,
       phone: user.phone,
+      role: user.role || 'user',
+      is_admin: user.role === 'admin',
       isVip,
       vip_expire_time: user.vip_expire_time,
     };
@@ -73,4 +75,3 @@ export class UserService {
     return this.getUserInfo(userId);
   }
 }
-

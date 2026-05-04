@@ -10,8 +10,9 @@ import {
 	UseGuards,
 	UseInterceptors,
 	UseFilters,
+	BadRequestException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { AdminCourseService } from './admin-course.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -68,19 +69,14 @@ export class AdminCourseController {
 		// 处理 courseId：如果为空、undefined 或无效，则传递 null
 		let parsedCourseId: number | null = null;
 
-		// 调试日志
-		console.log('[getRecommendations] 原始 courseId:', courseId, '类型:', typeof courseId);
-
 		if (courseId !== undefined && courseId !== null && courseId !== '') {
 			const numId = typeof courseId === 'string' ? parseInt(courseId, 10) : Number(courseId);
-			console.log('[getRecommendations] 转换后的 numId:', numId, 'isNaN:', isNaN(numId));
 
 			if (!isNaN(numId) && Number.isFinite(numId) && numId > 0) {
 				parsedCourseId = numId;
 			}
 		}
 
-		console.log('[getRecommendations] 最终 parsedCourseId:', parsedCourseId);
 		const result = await this.adminCourseService.getRecommendations(parsedCourseId);
 		return CommonResponseDto.success(result);
 	}
@@ -88,9 +84,44 @@ export class AdminCourseController {
 	@Put('recommendations')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 	@ApiOperation({ summary: '更新相关推荐配置' })
-	async updateRecommendations(@Body() dto: UpdateRecommendationsDto) {
+	@ApiBody({ type: UpdateRecommendationsDto })
+	async updateRecommendations(@Body() body: Record<string, unknown>) {
+		const dto: UpdateRecommendationsDto = {
+			courseId: this.parseOptionalCourseId(body?.courseId),
+			recommendedCourseIds: this.parseRecommendedCourseIds(body?.recommendedCourseIds),
+		};
 		const result = await this.adminCourseService.updateRecommendations(dto);
 		return CommonResponseDto.success(result);
+	}
+
+	private parseOptionalCourseId(value: unknown): number | null {
+		if (value === undefined || value === null || value === '') {
+			return null;
+		}
+
+		const courseId = Number(value);
+		if (!Number.isInteger(courseId) || courseId <= 0) {
+			throw new BadRequestException('courseId 必须是大于 0 的整数');
+		}
+
+		return courseId;
+	}
+
+	private parseRecommendedCourseIds(value: unknown): number[] {
+		if (!Array.isArray(value)) {
+			throw new BadRequestException('recommendedCourseIds 必须是数组');
+		}
+
+		const recommendedCourseIds = Array.from(new Set(value.map((item) => Number(item))));
+		if (recommendedCourseIds.length === 0) {
+			throw new BadRequestException('至少选择一个推荐课程');
+		}
+
+		if (recommendedCourseIds.some((id) => !Number.isInteger(id) || id <= 0)) {
+			throw new BadRequestException('推荐课程ID必须是大于 0 的整数');
+		}
+
+		return recommendedCourseIds;
 	}
 
 	@Get(':id')

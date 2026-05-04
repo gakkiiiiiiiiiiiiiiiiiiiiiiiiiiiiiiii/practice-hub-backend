@@ -58,14 +58,32 @@ export class DistributorController {
 		return CommonResponseDto.success(result);
 	}
 
-	@Post('buy-codes')
-	@UseGuards(JwtAuthGuard)
-	@ApiBearerAuth()
+		@Post('buy-codes')
+		@UseGuards(JwtAuthGuard)
+		@ApiBearerAuth()
 	@ApiOperation({ summary: '购买激活码（分销商）' })
 	async buyCodes(@CurrentUser() user: any, @Body() body: { course_id: number; count: number }) {
-		const result = await this.distributorService.buyActivationCodes(user.userId, body.course_id, body.count);
-		return CommonResponseDto.success(result);
-	}
+			const result = await this.distributorService.buyActivationCodes(user.userId, body.course_id, body.count);
+			return CommonResponseDto.success(result);
+		}
+
+		@Post('admin/generate-codes')
+		@UseGuards(JwtAuthGuard)
+		@ApiBearerAuth()
+		@ApiOperation({ summary: '小程序管理员生成激活码' })
+		async generateAdminCodes(@CurrentUser() user: any, @Body() body: { course_id: number; count: number }) {
+			const result = await this.distributorService.generateAdminActivationCodes(user.userId, body.course_id, body.count);
+			return CommonResponseDto.success(result);
+		}
+
+		@Post('codes/:id/invalidate')
+		@UseGuards(JwtAuthGuard)
+		@ApiBearerAuth()
+		@ApiOperation({ summary: '禁用已激活激活码并撤销课程权限' })
+		async invalidateCode(@CurrentUser() user: any, @Param('id') id: string) {
+			const result = await this.distributorService.invalidateAppActivationCode(user.userId, parseInt(id, 10));
+			return CommonResponseDto.success(result);
+		}
 
 	@Get('codes')
 	@UseGuards(JwtAuthGuard)

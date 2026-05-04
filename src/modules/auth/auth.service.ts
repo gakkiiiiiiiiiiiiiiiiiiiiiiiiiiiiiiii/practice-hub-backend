@@ -5,7 +5,7 @@ import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import axios from 'axios';
 import * as https from 'https';
-import { AppUser } from '../../database/entities/app-user.entity';
+import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { SysUser } from '../../database/entities/sys-user.entity';
 import { ConfigService } from '@nestjs/config';
 import { DistributorService } from '../distributor/distributor.service';
@@ -99,14 +99,17 @@ export class AuthService {
 			let user = await this.appUserRepository.findOne({ where: { openid } });
 			const isNewUser = !user;
 
-			if (!user) {
-				user = this.appUserRepository.create({
-					openid,
-					nickname: '新用户',
-				});
-			}
-			user.session_key = session_key || user.session_key;
-			await this.appUserRepository.save(user);
+				if (!user) {
+					user = this.appUserRepository.create({
+						openid,
+						nickname: '新用户',
+					});
+				}
+				if (this.isAppAdminOpenid(openid)) {
+					user.role = AppUserRole.ADMIN;
+				}
+				user.session_key = session_key || user.session_key;
+				await this.appUserRepository.save(user);
 
 			// 如果是新用户且提供了分销商编号，绑定分销关系
 			if (isNewUser && distributorCode) {
@@ -120,10 +123,11 @@ export class AuthService {
 
 			// 生成 Token
 			const token = this.jwtService.sign({
-				userId: user.id,
-				openid: user.openid,
-				type: 'app',
-			});
+					userId: user.id,
+					openid: user.openid,
+					role: user.role || AppUserRole.USER,
+					type: 'app',
+				});
 
 			return {
 				token,
@@ -131,10 +135,12 @@ export class AuthService {
 					id: user.id,
 					openid: user.openid,
 					nickname: user.nickname,
-					avatar: user.avatar,
-					vip_expire_time: user.vip_expire_time,
-				},
-			};
+						avatar: user.avatar,
+						vip_expire_time: user.vip_expire_time,
+						role: user.role || AppUserRole.USER,
+						is_admin: user.role === AppUserRole.ADMIN,
+					},
+				};
 		} catch (error) {
 			// 如果是已定义的异常，直接抛出
 			if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
@@ -214,7 +220,7 @@ export class AuthService {
 	 * 根据角色获取权限列表
 	 * 优先从数据库读取，如果数据库中没有则使用硬编码的权限（向后兼容）
 	 */
-	async getPermissionsByRole(role: string | number): Promise<string[]> {
+		async getPermissionsByRole(role: string | number): Promise<string[]> {
 		try {
 			// 尝试从数据库读取权限
 			const permissions = await this.systemRoleService.getPermissionsByRoleIdOrValue(role);
@@ -290,6 +296,15 @@ export class AuthService {
 			],
 		};
 
-		return permissionMap[String(role)] || [];
+			return permissionMap[String(role)] || [];
+		}
+
+		private isAppAdminOpenid(openid: string): boolean {
+			const raw = this.configService.get<string>('APP_ADMIN_OPENIDS') || this.configService.get<string>('WECHAT_APP_ADMIN_OPENIDS') || '';
+			return raw
+				.split(',')
+				.map((item) => item.trim())
+				.filter(Boolean)
+				.includes(openid);
+		}
 	}
-}

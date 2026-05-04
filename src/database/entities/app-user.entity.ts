@@ -6,6 +6,11 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
+export enum AppUserRole {
+  USER = 'user',
+  ADMIN = 'admin',
+}
+
 @Entity('app_user')
 export class AppUser {
   @PrimaryGeneratedColumn()
@@ -25,6 +30,9 @@ export class AppUser {
 
   @Column({ length: 20, nullable: true })
   phone: string;
+
+  @Column({ type: 'varchar', length: 20, default: AppUserRole.USER })
+  role: AppUserRole;
 
   @Column({ type: 'datetime', nullable: true })
   vip_expire_time: Date;

@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Delete,
+  Patch,
   Query,
   Body,
   Param,
@@ -121,5 +122,15 @@ export class AdminActivationCodeController {
     const result = await this.adminActivationCodeService.deleteCode(id, user.adminId, user.role);
     return CommonResponseDto.success(result);
   }
-}
 
+  @Patch(':id/invalidate')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.AGENT)
+  @ApiOperation({ summary: '禁用已激活激活码并撤销课程权限' })
+  async invalidateCode(
+    @CurrentUser() user: any,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    const result = await this.adminActivationCodeService.invalidateUsedCode(id, user.adminId, user.role);
+    return CommonResponseDto.success(result);
+  }
+}

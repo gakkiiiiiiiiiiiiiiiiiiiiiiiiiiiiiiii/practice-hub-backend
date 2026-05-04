@@ -7,6 +7,13 @@ export enum ActivationCodeStatus {
 	INVALID = 2, // 作废
 }
 
+export enum ActivationCodeSourceType {
+	ADMIN = 'admin', // 管理后台超级管理员生成
+	AGENT = 'agent', // 管理后台代理商生成
+	DISTRIBUTOR = 'distributor', // 小程序分销购买生成
+	APP_ADMIN = 'app_admin', // 小程序管理员生成
+}
+
 @Entity('activation_code')
 export class ActivationCode {
 	@PrimaryGeneratedColumn()
@@ -20,6 +27,19 @@ export class ActivationCode {
 
 	@Column({ nullable: true })
 	agent_id: number; // 生成者（代理商ID）
+
+	@Column({
+		type: 'varchar',
+		length: 30,
+		default: ActivationCodeSourceType.ADMIN,
+	})
+	source_type: ActivationCodeSourceType;
+
+	@Column({ nullable: true })
+	source_id: number;
+
+	@Column({ length: 20, nullable: true })
+	batch_prefix: string;
 
 	@Column()
 	course_id: number; // 从 subject_id 改为 course_id
