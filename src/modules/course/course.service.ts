@@ -223,12 +223,18 @@ export class CourseService {
     if (pageNum < 1 || pageNum > maxPages) {
       throw new NotFoundException('页码超出范围');
     }
-    const previewScope =
-      hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
-    const cachePath = this.getPreviewImageCachePath(courseId, pageNum, course.file_url, previewScope);
-    if (fs.existsSync(cachePath)) {
-      return { buffer: fs.readFileSync(cachePath), contentType: 'image/jpeg' };
-    }
+	    const previewScope =
+	      hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
+	    const cachePath = this.getPreviewImageCachePath(courseId, pageNum, course.file_url, previewScope);
+	    if (fs.existsSync(cachePath)) {
+	      const cached = fs.readFileSync(cachePath);
+	      if (cached.length > 8) {
+	        return { buffer: cached, contentType: 'image/jpeg' };
+	      }
+	      try {
+	        fs.unlinkSync(cachePath);
+	      } catch (_) {}
+	    }
 
     let pdfBuffer: Buffer;
     if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
@@ -250,15 +256,18 @@ export class CourseService {
         preserveAspectRatio: true,
         density: 120,
       });
-      const result = await this.withTimeout(
-        convert(pageNum, { responseType: 'buffer' }) as Promise<{ buffer?: Buffer; data?: Buffer }>,
-        8000,
-        'PDF 预览图生成超时，请稍后重试',
-      );
-      const buffer = result?.buffer ?? result?.data;
-      if (!buffer || !Buffer.isBuffer(buffer)) {
-        throw new Error('pdf2pic 未返回图片 buffer，请确认容器已安装 GraphicsMagick 和 Ghostscript');
-      }
+	      const result = await this.withTimeout(
+	        convert(pageNum, { responseType: 'buffer' }) as Promise<{ buffer?: Buffer; data?: Buffer; base64?: string }>,
+	        8000,
+	        'PDF 预览图生成超时，请稍后重试',
+	      );
+	      const buffer =
+	        result?.buffer ??
+	        result?.data ??
+	        (result?.base64 ? Buffer.from(result.base64, 'base64') : undefined);
+	      if (!buffer || !Buffer.isBuffer(buffer) || buffer.length <= 8) {
+	        throw new Error('pdf2pic 未返回图片 buffer，请确认容器已安装 GraphicsMagick 和 Ghostscript');
+	      }
       fs.mkdirSync(path.dirname(cachePath), { recursive: true });
       fs.writeFileSync(cachePath, buffer);
       return { buffer, contentType: 'image/jpeg' };
