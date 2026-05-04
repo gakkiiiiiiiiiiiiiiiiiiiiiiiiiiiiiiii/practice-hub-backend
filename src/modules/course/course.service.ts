@@ -254,7 +254,7 @@ export class CourseService {
 	      fs.writeFileSync(pdfPath, pdfBuffer);
 	      const buffer = await this.renderPdfPageToJpeg(pdfPath, pageNum, tmpDir);
 	      if (!buffer || !Buffer.isBuffer(buffer) || buffer.length <= 8) {
-	        throw new Error('PDF 转图未生成有效图片，请确认容器已安装 Ghostscript');
+	        throw new Error('PDF 转图未生成有效图片，请确认容器已安装 Ghostscript、Poppler，并查看前置转图命令错误日志');
 	      }
 	      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
 	      fs.writeFileSync(cachePath, buffer);
@@ -273,6 +273,9 @@ export class CourseService {
   private async renderPdfPageToJpeg(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
     const gsBuffer = await this.renderPdfPageWithGhostscript(pdfPath, pageNum, tmpDir);
     if (gsBuffer && gsBuffer.length > 8) return gsBuffer;
+
+    const popplerBuffer = await this.renderPdfPageWithPoppler(pdfPath, pageNum, tmpDir);
+    if (popplerBuffer && popplerBuffer.length > 8) return popplerBuffer;
 
     try {
       const { fromPath } = await import('pdf2pic');
@@ -306,6 +309,39 @@ export class CourseService {
     }
   }
 
+  private async renderPdfPageWithPoppler(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
+    const outputPrefix = path.join(tmpDir, `poppler-page-${pageNum}`);
+    const outputPath = `${outputPrefix}.jpg`;
+    try {
+      await this.withTimeout(
+        execFileAsync('pdftoppm', [
+          '-jpeg',
+          '-jpegopt',
+          'quality=82',
+          '-r',
+          '120',
+          '-f',
+          String(pageNum),
+          '-l',
+          String(pageNum),
+          '-singlefile',
+          pdfPath,
+          outputPrefix,
+        ]),
+        12000,
+        'Poppler 预览图生成超时，请稍后重试',
+      );
+      if (!fs.existsSync(outputPath)) return undefined;
+      const buffer = fs.readFileSync(outputPath);
+      return buffer.length > 8 ? buffer : undefined;
+    } catch (error: any) {
+      const stderr = error?.stderr ? String(error.stderr).trim() : '';
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[PDF预览] Poppler 转图失败:', stderr || message);
+      return undefined;
+    }
+  }
+
   private async renderPdfPageWithGhostscript(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
     const outputPath = path.join(tmpDir, `page-${pageNum}.jpg`);
     try {
@@ -328,9 +364,10 @@ export class CourseService {
       if (!fs.existsSync(outputPath)) return undefined;
       const buffer = fs.readFileSync(outputPath);
       return buffer.length > 8 ? buffer : undefined;
-    } catch (error) {
+    } catch (error: any) {
+      const stderr = error?.stderr ? String(error.stderr).trim() : '';
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[PDF预览] Ghostscript 转图失败:', message);
+      console.error('[PDF预览] Ghostscript 转图失败:', stderr || message);
       return undefined;
     }
   }
