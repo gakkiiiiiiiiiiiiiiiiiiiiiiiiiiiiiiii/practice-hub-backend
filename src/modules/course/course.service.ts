@@ -9,10 +9,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { createHash } from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { Course } from '../../database/entities/course.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
 import { CourseRecommendation } from '../../database/entities/course-recommendation.entity';
+
+const execFileAsync = promisify(execFile);
 
 @Injectable()
 export class CourseService {
@@ -245,40 +249,16 @@ export class CourseService {
     }
     const tmpDir = path.join(os.tmpdir(), `course-preview-${courseId}-${Date.now()}`);
     fs.mkdirSync(tmpDir, { recursive: true });
-    const pdfPath = path.join(tmpDir, 'doc.pdf');
-    try {
-      fs.writeFileSync(pdfPath, pdfBuffer);
-	      const { fromPath } = await import('pdf2pic');
-	      const convert = fromPath(pdfPath, {
-	        format: 'jpeg',
-	        quality: 82,
-	        width: 1000,
-	        preserveAspectRatio: true,
-	        density: 120,
-	      });
-	      let result = await this.withTimeout(
-	        convert(pageNum, { responseType: 'buffer' }) as Promise<unknown>,
-	        8000,
-	        'PDF 预览图生成超时，请稍后重试',
-	      );
-	      let buffer = this.readPdf2PicResultBuffer(result);
-	      if (!buffer || buffer.length <= 8) {
-	        try {
-	          convert.setGMClass('imagemagick');
-	          result = await this.withTimeout(
-	            convert(pageNum, { responseType: 'buffer' }) as Promise<unknown>,
-	            8000,
-	            'PDF 预览图生成超时，请稍后重试',
-	          );
-	          buffer = this.readPdf2PicResultBuffer(result);
-	        } catch (_) {}
-	      }
+	    const pdfPath = path.join(tmpDir, 'doc.pdf');
+	    try {
+	      fs.writeFileSync(pdfPath, pdfBuffer);
+	      const buffer = await this.renderPdfPageToJpeg(pdfPath, pageNum, tmpDir);
 	      if (!buffer || !Buffer.isBuffer(buffer) || buffer.length <= 8) {
-	        throw new Error('pdf2pic 未返回图片 buffer，请确认容器已安装 GraphicsMagick 和 Ghostscript');
+	        throw new Error('PDF 转图未生成有效图片，请确认容器已安装 Ghostscript');
 	      }
-      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-      fs.writeFileSync(cachePath, buffer);
-      return { buffer, contentType: 'image/jpeg' };
+	      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+	      fs.writeFileSync(cachePath, buffer);
+	      return { buffer, contentType: 'image/jpeg' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`课程预览页转图失败: ${message}`);
@@ -287,13 +267,78 @@ export class CourseService {
         if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
         if (fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir);
       } catch (_) {}
+	    }
+	  }
+
+  private async renderPdfPageToJpeg(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
+    const gsBuffer = await this.renderPdfPageWithGhostscript(pdfPath, pageNum, tmpDir);
+    if (gsBuffer && gsBuffer.length > 8) return gsBuffer;
+
+    try {
+      const { fromPath } = await import('pdf2pic');
+      const convert = fromPath(pdfPath, {
+        format: 'jpeg',
+        quality: 82,
+        width: 1000,
+        preserveAspectRatio: true,
+        density: 120,
+      });
+      let result = await this.withTimeout(
+        convert(pageNum, { responseType: 'buffer' }) as Promise<unknown>,
+        8000,
+        'PDF 预览图生成超时，请稍后重试',
+      );
+      let buffer = this.readPdf2PicResultBuffer(result);
+      if (!buffer || buffer.length <= 8) {
+        try {
+          convert.setGMClass('imagemagick');
+          result = await this.withTimeout(
+            convert(pageNum, { responseType: 'buffer' }) as Promise<unknown>,
+            8000,
+            'PDF 预览图生成超时，请稍后重试',
+          );
+          buffer = this.readPdf2PicResultBuffer(result);
+        } catch (_) {}
+      }
+      return buffer;
+    } catch (_) {
+      return undefined;
     }
   }
 
-	  private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(message)), ms);
-      promise
+  private async renderPdfPageWithGhostscript(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
+    const outputPath = path.join(tmpDir, `page-${pageNum}.jpg`);
+    try {
+      await this.withTimeout(
+        execFileAsync('gs', [
+          '-dSAFER',
+          '-dBATCH',
+          '-dNOPAUSE',
+          '-sDEVICE=jpeg',
+          '-dJPEGQ=82',
+          '-r120',
+          `-dFirstPage=${pageNum}`,
+          `-dLastPage=${pageNum}`,
+          `-sOutputFile=${outputPath}`,
+          pdfPath,
+        ]),
+        12000,
+        'Ghostscript 预览图生成超时，请稍后重试',
+      );
+      if (!fs.existsSync(outputPath)) return undefined;
+      const buffer = fs.readFileSync(outputPath);
+      return buffer.length > 8 ? buffer : undefined;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[PDF预览] Ghostscript 转图失败:', message);
+      return undefined;
+    }
+  }
+
+  private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+	    return new Promise((resolve, reject) => {
+	      const timer = setTimeout(() => reject(new Error(message)), ms);
+	      promise
         .then((value) => {
           clearTimeout(timer);
           resolve(value);
@@ -301,11 +346,11 @@ export class CourseService {
         .catch((error) => {
           clearTimeout(timer);
           reject(error);
-        });
-    });
-	  }
+	        });
+	    });
+  }
 
-	  private readPdf2PicResultBuffer(result: unknown): Buffer | undefined {
+  private readPdf2PicResultBuffer(result: unknown): Buffer | undefined {
 	    if (!result) return undefined;
 	    if (Buffer.isBuffer(result)) return result;
 	    if (result instanceof Uint8Array) return Buffer.from(result);
