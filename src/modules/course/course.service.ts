@@ -20,6 +20,8 @@ const execFileAsync = promisify(execFile);
 
 @Injectable()
 export class CourseService {
+  private readonly previewRenderTasks = new Map<string, Promise<{ buffer: Buffer; contentType: string }>>();
+
   constructor(
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
@@ -240,6 +242,38 @@ export class CourseService {
 	      } catch (_) {}
 	    }
 
+    const taskKey = `${courseId}:${previewScope}:${this.getPreviewCacheVersion(course.file_url, previewScope)}:${pageNum}`;
+    const existingTask = this.previewRenderTasks.get(taskKey);
+    if (existingTask) {
+      return existingTask;
+    }
+
+    const renderTask = this.renderAndCachePreviewPage({
+      course,
+      hasAuth,
+      courseId,
+      pageNum,
+      cachePath,
+    }).finally(() => {
+      this.previewRenderTasks.delete(taskKey);
+    });
+    this.previewRenderTasks.set(taskKey, renderTask);
+    return renderTask;
+  }
+
+  private async renderAndCachePreviewPage({
+    course,
+    hasAuth,
+    courseId,
+    pageNum,
+    cachePath,
+  }: {
+    course: Course;
+    hasAuth: boolean;
+    courseId: number;
+    pageNum: number;
+    cachePath: string;
+  }): Promise<{ buffer: Buffer; contentType: string }> {
     let pdfBuffer: Buffer;
     if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
       const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
@@ -247,28 +281,40 @@ export class CourseService {
     } else {
       pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 3);
     }
-    const tmpDir = path.join(os.tmpdir(), `course-preview-${courseId}-${Date.now()}`);
+
+    const tmpDir = path.join(os.tmpdir(), `course-preview-${courseId}-${pageNum}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     fs.mkdirSync(tmpDir, { recursive: true });
-	    const pdfPath = path.join(tmpDir, 'doc.pdf');
-	    try {
-	      fs.writeFileSync(pdfPath, pdfBuffer);
-	      const buffer = await this.renderPdfPageToJpeg(pdfPath, pageNum, tmpDir);
-	      if (!buffer || !Buffer.isBuffer(buffer) || buffer.length <= 8) {
-	        throw new Error('PDF 转图未生成有效图片，请确认容器已安装 Ghostscript、Poppler，并查看前置转图命令错误日志');
-	      }
-	      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-	      fs.writeFileSync(cachePath, buffer);
-	      return { buffer, contentType: 'image/jpeg' };
+    const pdfPath = path.join(tmpDir, 'doc.pdf');
+    try {
+      fs.writeFileSync(pdfPath, pdfBuffer);
+      let buffer: Buffer | undefined;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          buffer = await this.renderPdfPageToJpeg(pdfPath, pageNum, tmpDir);
+          if (buffer && Buffer.isBuffer(buffer) && buffer.length > 8) break;
+          lastError = new Error('PDF 转图未生成有效图片');
+        } catch (error) {
+          lastError = error;
+        }
+        await this.sleep(250 * attempt);
+      }
+      if (!buffer || !Buffer.isBuffer(buffer) || buffer.length <= 8) {
+        const message = lastError instanceof Error ? lastError.message : 'PDF 转图未生成有效图片';
+        throw new Error(`${message}，请确认容器已安装 Ghostscript、Poppler，并查看前置转图命令错误日志`);
+      }
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(cachePath, buffer);
+      return { buffer, contentType: 'image/jpeg' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`课程预览页转图失败: ${message}`);
     } finally {
       try {
-        if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
-        if (fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir);
+        fs.rmSync(tmpDir, { recursive: true, force: true });
       } catch (_) {}
-	    }
-	  }
+    }
+  }
 
   private async renderPdfPageToJpeg(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
     const gsBuffer = await this.renderPdfPageWithGhostscript(pdfPath, pageNum, tmpDir);
@@ -385,6 +431,10 @@ export class CourseService {
           reject(error);
 	        });
 	    });
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private readPdf2PicResultBuffer(result: unknown): Buffer | undefined {
