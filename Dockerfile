@@ -29,8 +29,9 @@ FROM node:20-alpine AS production
 
 # PDF 转图 / OCR 依赖：
 # - pdf2pic@3.x 依赖 GraphicsMagick + Ghostscript
+# - ImageMagick 作为线上容器中 GraphicsMagick 返回空结果时的兜底
 # - 缺少 gm 时，课程文件单页预览接口会在云托管中转图失败
-RUN apk add --no-cache graphicsmagick ghostscript
+RUN apk add --no-cache graphicsmagick ghostscript imagemagick
 
 WORKDIR /app
 

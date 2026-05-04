@@ -248,23 +248,31 @@ export class CourseService {
     const pdfPath = path.join(tmpDir, 'doc.pdf');
     try {
       fs.writeFileSync(pdfPath, pdfBuffer);
-      const { fromPath } = await import('pdf2pic');
-      const convert = fromPath(pdfPath, {
-        format: 'jpeg',
-        quality: 82,
-        width: 1000,
-        preserveAspectRatio: true,
-        density: 120,
-      });
-	      const result = await this.withTimeout(
-	        convert(pageNum, { responseType: 'buffer' }) as Promise<{ buffer?: Buffer; data?: Buffer; base64?: string }>,
+	      const { fromPath } = await import('pdf2pic');
+	      const convert = fromPath(pdfPath, {
+	        format: 'jpeg',
+	        quality: 82,
+	        width: 1000,
+	        preserveAspectRatio: true,
+	        density: 120,
+	      });
+	      let result = await this.withTimeout(
+	        convert(pageNum, { responseType: 'buffer' }) as Promise<unknown>,
 	        8000,
 	        'PDF 预览图生成超时，请稍后重试',
 	      );
-	      const buffer =
-	        result?.buffer ??
-	        result?.data ??
-	        (result?.base64 ? Buffer.from(result.base64, 'base64') : undefined);
+	      let buffer = this.readPdf2PicResultBuffer(result);
+	      if (!buffer || buffer.length <= 8) {
+	        try {
+	          convert.setGMClass('imagemagick');
+	          result = await this.withTimeout(
+	            convert(pageNum, { responseType: 'buffer' }) as Promise<unknown>,
+	            8000,
+	            'PDF 预览图生成超时，请稍后重试',
+	          );
+	          buffer = this.readPdf2PicResultBuffer(result);
+	        } catch (_) {}
+	      }
 	      if (!buffer || !Buffer.isBuffer(buffer) || buffer.length <= 8) {
 	        throw new Error('pdf2pic 未返回图片 buffer，请确认容器已安装 GraphicsMagick 和 Ghostscript');
 	      }
@@ -282,7 +290,7 @@ export class CourseService {
     }
   }
 
-  private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+	  private withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(message)), ms);
       promise
@@ -295,7 +303,30 @@ export class CourseService {
           reject(error);
         });
     });
-  }
+	  }
+
+	  private readPdf2PicResultBuffer(result: unknown): Buffer | undefined {
+	    if (!result) return undefined;
+	    if (Buffer.isBuffer(result)) return result;
+	    if (result instanceof Uint8Array) return Buffer.from(result);
+	    if (typeof result === 'string') return Buffer.from(result, 'base64');
+	    if (typeof result !== 'object') return undefined;
+
+	    const value = result as {
+	      buffer?: Buffer | Uint8Array;
+	      data?: Buffer | Uint8Array | string;
+	      base64?: string;
+	      path?: string;
+	    };
+	    if (Buffer.isBuffer(value.buffer)) return value.buffer;
+	    if (value.buffer instanceof Uint8Array) return Buffer.from(value.buffer);
+	    if (Buffer.isBuffer(value.data)) return value.data;
+	    if (value.data instanceof Uint8Array) return Buffer.from(value.data);
+	    if (typeof value.data === 'string') return Buffer.from(value.data, 'base64');
+	    if (value.base64) return Buffer.from(value.base64, 'base64');
+	    if (value.path && fs.existsSync(value.path)) return fs.readFileSync(value.path);
+	    return undefined;
+	  }
 
   private getPreviewImageCachePath(
     courseId: number,
