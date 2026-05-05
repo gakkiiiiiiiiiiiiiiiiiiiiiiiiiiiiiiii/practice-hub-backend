@@ -26,6 +26,12 @@ async function bootstrap() {
 	const uploadsPath = join(process.cwd(), 'uploads');
 	app.useStaticAssets(uploadsPath, {
 		prefix: '/uploads',
+		maxAge: '30d',
+		etag: true,
+		lastModified: true,
+		setHeaders: (res) => {
+			res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+		},
 	});
 	console.log(`[静态文件] 配置上传目录: ${uploadsPath}`);
 
@@ -59,7 +65,7 @@ async function bootstrap() {
 		credentials: true,
 		methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
 		allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
-		exposedHeaders: ['Content-Length', 'Content-Type'],
+		exposedHeaders: ['Content-Length', 'Content-Type', 'ETag', 'Cache-Control'],
 		maxAge: 86400, // 24小时，减少OPTIONS预检请求
 	});
 

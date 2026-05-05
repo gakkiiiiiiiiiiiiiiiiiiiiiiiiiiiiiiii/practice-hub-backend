@@ -12,10 +12,10 @@ import {
   Res,
   Header,
 } from '@nestjs/common';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Request } from 'express';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import { UploadService } from './upload.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -274,15 +274,23 @@ export class ProxyImageController {
   @Get('proxy-image')
   @ApiOperation({ summary: '代理 TCB 图片（避免 CORS）' })
   @Header('Access-Control-Allow-Origin', '*')
-  async proxyImage(@Query('url') url: string, @Res() res: Response) {
+  async proxyImage(@Query('url') url: string, @Req() req: Request, @Res() res: Response) {
     if (!url) {
       throw new BadRequestException('缺少参数 url');
     }
     const decoded = decodeURIComponent(url);
     const { data, contentType } = await this.uploadService.proxyImage(decoded);
+    const etag = `"${createHash('sha1').update(data).digest('base64url')}"`;
+    const ifNoneMatch = req.headers['if-none-match']
+      ?.split(',')
+      .map((value) => value.trim())
+      .includes(etag);
+    if (ifNoneMatch) {
+      return res.status(304).end();
+    }
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
     res.send(data);
   }
 }
-

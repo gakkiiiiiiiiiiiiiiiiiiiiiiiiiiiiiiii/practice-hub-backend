@@ -54,6 +54,9 @@ import { ProcessPdfModule } from './modules/process-pdf/process-pdf.module';
 				const dbPassword = configService.get('DB_PASSWORD', '');
 				const dbDatabase = configService.get('DB_DATABASE', 'practice_hub');
 				const nodeEnv = configService.get('NODE_ENV', 'development');
+				const dbConnectionLimit = configService.get<number>('DB_CONNECTION_LIMIT', 10);
+				const dbMaxIdle = configService.get<number>('DB_MAX_IDLE', Math.max(1, Math.floor(dbConnectionLimit / 2)));
+				const dbIdleTimeout = configService.get<number>('DB_IDLE_TIMEOUT', 60000);
 
 				// 安全：不在日志中打印敏感信息（如密码）
 				console.log(`[数据库配置] 连接地址: ${dbHost}:${dbPort}, 数据库: ${dbDatabase}`);
@@ -76,13 +79,15 @@ import { ProcessPdfModule } from './modules/process-pdf/process-pdf.module';
 					// 连接池配置，防止 ECONNRESET 错误
 					extra: {
 						// mysql2 连接池配置（仅使用 mysql2 支持的选项，避免 invalid configuration 警告）
-						connectionLimit: 10, // 连接池最大连接数
+						waitForConnections: true,
+						connectionLimit: dbConnectionLimit, // 连接池最大连接数
+						maxIdle: dbMaxIdle, // 限制空闲连接数量，避免复用过多陈旧连接
+						idleTimeout: dbIdleTimeout, // 空闲连接更早回收，低于云数据库/网关常见空闲断开时间
+						queueLimit: 0,
 						connectTimeout: 60000, // 连接超时时间（毫秒）
 						// 启用 keep-alive，保持连接活跃
 						enableKeepAlive: true,
-						keepAliveInitialDelay: 0,
-						// 连接最大空闲时间（毫秒），超过此时间未使用的连接会被关闭
-						idleTimeout: 300000, // 5分钟
+						keepAliveInitialDelay: 10000,
 						// 注意：acquireTimeout / timeout / maxLifetime 为 TypeORM 池级选项，mysql2 Connection 不支持，已移除
 					},
 				};

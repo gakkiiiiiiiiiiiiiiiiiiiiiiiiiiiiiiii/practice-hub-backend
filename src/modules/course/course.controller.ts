@@ -1,8 +1,10 @@
-import { Controller, Get, Post, Param, Query, UseGuards, Res } from '@nestjs/common';
+import { Body, Controller, Get, Post, Param, Query, UseGuards, Res, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { Response } from 'express';
+import { Request, Response } from 'express';
+import { createHash } from 'crypto';
 import { CourseService } from './course.service';
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -52,6 +54,7 @@ export class CourseController {
     @Query('maxPages') maxPagesStr: string | undefined,
     @Query('ticket') ticket: string | undefined,
     @CurrentUser() user: any,
+    @Req() req: Request,
     @Res({ passthrough: false }) res: Response,
   ) {
     const courseId = +id;
@@ -75,8 +78,13 @@ export class CourseController {
       return res.status(403).send('仅支持 PDF 试读');
     }
     const buffer = await this.courseService.getCourseFilePreviewPdf(courseId, maxPages);
+    const etag = this.createBufferEtag(buffer);
+    if (this.isFresh(req, etag)) {
+      return res.status(304).end();
+    }
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"');
+    this.setCacheHeaders(res, etag, 86400);
     res.send(buffer);
   }
 
@@ -108,6 +116,7 @@ export class CourseController {
     @Param('pageNum') pageNumStr: string,
     @Query('ticket') ticket: string | undefined,
     @CurrentUser() user: any,
+    @Req() req: Request,
     @Res({ passthrough: false }) res: Response,
   ) {
     const courseId = +id;
@@ -125,9 +134,30 @@ export class CourseController {
       pageNum,
       userId,
     );
+    const etag = this.createBufferEtag(buffer);
+    if (this.isFresh(req, etag)) {
+      return res.status(304).end();
+    }
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'private, max-age=300');
+    this.setCacheHeaders(res, etag, 86400);
     res.send(buffer);
+  }
+
+  private createBufferEtag(buffer: Buffer): string {
+    return `"${createHash('sha1').update(buffer).digest('base64url')}"`;
+  }
+
+  private isFresh(req: Request, etag: string): boolean {
+    return req.headers['if-none-match']
+      ?.split(',')
+      .map((value) => value.trim())
+      .includes(etag) ?? false;
+  }
+
+  private setCacheHeaders(res: Response, etag: string, maxAgeSeconds: number) {
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', `private, max-age=${maxAgeSeconds}`);
+    res.setHeader('Vary', 'Authorization');
   }
 
   @Get(':id/detail')
@@ -140,6 +170,31 @@ export class CourseController {
   ) {
     const userId = user?.userId;
     const result = await this.courseService.getCourseDetail(+id, userId);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get(':id/file-reading-progress')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取文件课程阅读进度' })
+  async getFileCourseProgress(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+  ) {
+    const result = await this.courseService.getFileCourseProgress(user.userId, +id);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post(':id/file-reading-progress')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '记录文件课程阅读进度' })
+  async recordFileCourseProgress(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const result = await this.courseService.recordFileCourseProgress(user.userId, +id, body);
     return CommonResponseDto.success(result);
   }
 

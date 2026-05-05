@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -15,11 +15,13 @@ import { Course } from '../../database/entities/course.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
 import { CourseRecommendation } from '../../database/entities/course-recommendation.entity';
+import { UserFileCourseProgress } from '../../database/entities/user-file-course-progress.entity';
 
 const execFileAsync = promisify(execFile);
 
 @Injectable()
 export class CourseService {
+  private readonly logger = new Logger(CourseService.name);
   private readonly previewRenderTasks = new Map<string, Promise<{ buffer: Buffer; contentType: string }>>();
 
   constructor(
@@ -31,6 +33,8 @@ export class CourseService {
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     @InjectRepository(CourseRecommendation)
     private courseRecommendationRepository: Repository<CourseRecommendation>,
+    @InjectRepository(UserFileCourseProgress)
+    private userFileCourseProgressRepository: Repository<UserFileCourseProgress>,
     private configService: ConfigService,
     private jwtService: JwtService,
   ) {}
@@ -92,14 +96,21 @@ export class CourseService {
    * 获取课程详情
    */
   async getCourseDetail(courseId: number, userId?: number) {
-    const { course, hasAuth, expireTime } = await this.getCourseAccessContext(courseId, userId, true);
+    const { course, hasAuth, expireTime } = await this.queryWithRetry(
+      () => this.getCourseAccessContext(courseId, userId, true),
+      '获取课程访问信息',
+    );
 
     // 获取章节列表
-    const chapters = await this.chapterRepository.find({
-      where: { course_id: courseId },
-      order: { sort: 'ASC' },
-      relations: ['course'],
-    });
+    const chapters = await this.queryWithRetry(
+      () =>
+        this.chapterRepository.find({
+          where: { course_id: courseId },
+          order: { sort: 'ASC' },
+          relations: ['course'],
+        }),
+      '获取课程章节列表',
+    );
 
     const fileType = (course.file_type || '').toLowerCase();
     const isFileCourse = course.content_type === 'file' && course.file_url;
@@ -150,6 +161,124 @@ export class CourseService {
     }
 
     return { course, hasAuth, expireTime };
+  }
+
+  async getFileCourseProgress(userId: number, courseId: number) {
+    await this.assertFileCourse(courseId);
+    const progress = await this.userFileCourseProgressRepository.findOne({
+      where: { user_id: userId, course_id: courseId },
+    });
+
+    return this.formatFileCourseProgress(progress, courseId);
+  }
+
+  async recordFileCourseProgress(
+    userId: number,
+    courseId: number,
+    body: {
+      currentPage?: unknown;
+      totalPages?: unknown;
+      durationSeconds?: unknown;
+    },
+  ) {
+    await this.assertFileCourse(courseId);
+
+    const totalPages = this.parseNonNegativeInteger(body.totalPages, 'totalPages');
+    const rawCurrentPage = this.parseNonNegativeInteger(body.currentPage, 'currentPage');
+    const currentPage = totalPages > 0 ? Math.min(rawCurrentPage, totalPages) : rawCurrentPage;
+    const durationSeconds = Math.min(
+      this.parseNonNegativeInteger(body.durationSeconds, 'durationSeconds'),
+      3600,
+    );
+
+    let progress = await this.userFileCourseProgressRepository.findOne({
+      where: { user_id: userId, course_id: courseId },
+    });
+    if (!progress) {
+      progress = this.userFileCourseProgressRepository.create({
+        user_id: userId,
+        course_id: courseId,
+        current_page: 0,
+        total_pages: 0,
+        total_seconds: 0,
+      });
+    }
+
+    progress.current_page = Math.max(progress.current_page || 0, currentPage);
+    progress.total_pages = Math.max(progress.total_pages || 0, totalPages);
+    progress.total_seconds = Math.max(0, progress.total_seconds || 0) + durationSeconds;
+    progress.last_read_at = new Date();
+
+    const saved = await this.userFileCourseProgressRepository.save(progress);
+    return this.formatFileCourseProgress(saved, courseId);
+  }
+
+  private async assertFileCourse(courseId: number) {
+    const course = await this.courseRepository.findOne({
+      where: { id: courseId },
+      select: ['id', 'content_type', 'file_url'],
+    });
+    if (!course || course.content_type !== 'file' || !course.file_url) {
+      throw new NotFoundException('课程无文件或非文件课程');
+    }
+  }
+
+  private parseNonNegativeInteger(value: unknown, field: string): number {
+    const numberValue = Number(value ?? 0);
+    if (!Number.isInteger(numberValue) || numberValue < 0) {
+      throw new BadRequestException(`${field} 必须是非负整数`);
+    }
+    return numberValue;
+  }
+
+  private formatFileCourseProgress(progress: UserFileCourseProgress | null, courseId: number) {
+    return {
+      courseId,
+      currentPage: progress?.current_page || 0,
+      totalPages: progress?.total_pages || 0,
+      totalSeconds: progress?.total_seconds || 0,
+      lastReadAt: progress?.last_read_at || null,
+    };
+  }
+
+  private async queryWithRetry<T>(
+    queryFn: () => Promise<T>,
+    action: string,
+    retries = 3,
+    delay = 300,
+  ): Promise<T> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= retries; attempt += 1) {
+      try {
+        return await queryFn();
+      } catch (error: any) {
+        lastError = error;
+        if (!this.isTransientDatabaseError(error) || attempt >= retries) {
+          throw error;
+        }
+
+        this.logger.warn(`${action}遇到数据库连接中断，准备重试 (${attempt}/${retries}): ${error.message}`);
+        await new Promise((resolve) => setTimeout(resolve, delay * attempt));
+      }
+    }
+
+    throw lastError;
+  }
+
+  private isTransientDatabaseError(error: any): boolean {
+    const code = error?.code || error?.errno;
+    const message = String(error?.message || '');
+    return (
+      code === 'ECONNRESET' ||
+      code === 'PROTOCOL_CONNECTION_LOST' ||
+      code === 'ETIMEDOUT' ||
+      code === 'ECONNREFUSED' ||
+      message.includes('ECONNRESET') ||
+      message.includes('Connection lost') ||
+      message.includes('read ECONNRESET') ||
+      message.includes('Pool is closed')
+    );
   }
 
   /**
