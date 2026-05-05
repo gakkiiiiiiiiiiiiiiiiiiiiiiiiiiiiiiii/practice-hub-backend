@@ -232,6 +232,31 @@ export class UploadController {
 export class AppUploadController {
   constructor(private readonly uploadService: UploadService) {}
 
+  @Post('image-upload-url')
+  @ApiOperation({ summary: '小程序获取图片直传对象存储凭证' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        fileName: { type: 'string', description: '图片文件名，如 avatar.jpg' },
+        folder: { type: 'string', description: '存储目录，默认 avatars' },
+      },
+    },
+  })
+  async getImageUploadUrl(@Body() body: { fileName?: string; folder?: string }, @CurrentUser() user: any) {
+    const originalName = body?.fileName?.trim() || 'avatar.jpg';
+    const ext = originalName.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/)?.[0] || '.jpg';
+    const folder = (body?.folder || 'avatars').replace(/[^a-zA-Z0-9_-]/g, '') || 'avatars';
+    const userId = Number(user?.userId) || 0;
+    const path = `${folder}/${userId || 'user'}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}${ext}`;
+    const credentials = await this.uploadService.getCourseFileUploadUrl(path);
+    return CommonResponseDto.success({
+      ...credentials,
+      fileName: originalName,
+      fileType: ext.slice(1),
+    });
+  }
+
   @Post('image')
   @ApiOperation({ summary: '小程序上传图片（用于简答题答案）' })
   @ApiConsumes('multipart/form-data')

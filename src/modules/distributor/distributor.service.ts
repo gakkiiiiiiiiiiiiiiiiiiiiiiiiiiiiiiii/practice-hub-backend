@@ -129,8 +129,9 @@ export class DistributorService {
 		}
 
 		// 调用微信小程序生成二维码接口
-		const appid = this.configService.get('WECHAT_APPID');
-		const secret = this.configService.get('WECHAT_SECRET');
+		const appid = this.configService.get('WECHAT_APPID') || this.configService.get('AppID');
+		const secret =
+			this.configService.get('WECHAT_SECRET') || this.configService.get('WECHAT_APPSECRET') || this.configService.get('AppSecret');
 
 		if (!appid || !secret) {
 			throw new BadRequestException('微信配置缺失，无法生成二维码');
@@ -425,13 +426,18 @@ export class DistributorService {
 		const httpsAgent = new https.Agent({
 			rejectUnauthorized: false,
 		});
+		const page = this.configService.get<string>('DISTRIBUTOR_QR_PAGE') || 'pages/index/index';
+		const envVersion = this.configService.get<string>('DISTRIBUTOR_QR_ENV_VERSION') || 'release';
+		const scene = `inviterid=${distributorCode}`;
 
 		// 使用 getUnlimited 接口生成小程序码（数量无限制）
 		const response = await axios.post(
 			`https://api.weixin.qq.com/wxa/getwxacodeunlimit?access_token=${accessToken}`,
 			{
-				scene: distributorCode, // 场景值，传递分销商编号
-				page: 'pages/index/index', // 扫码后跳转的页面（首页）
+				scene, // 场景值，传递分销商编号
+				page, // 扫码后跳转的页面
+				check_path: false, // 页面未发布或体验版路径校验不通过时仍可生成
+				env_version: envVersion,
 				width: 280, // 二维码宽度
 				auto_color: false,
 				line_color: { r: 0, g: 0, b: 0 },
@@ -444,30 +450,30 @@ export class DistributorService {
 
 		// 检查响应是否是错误信息（微信 API 错误时返回 JSON）
 		const contentType = response.headers['content-type'] || '';
-		if (contentType.includes('application/json') || contentType.includes('text/')) {
-			// 尝试解析为 JSON 错误信息
-			try {
-				const errorData = JSON.parse(Buffer.from(response.data).toString('utf-8'));
-				if (errorData.errcode) {
-					this.logger.error('微信生成二维码失败:', errorData);
-					throw new BadRequestException(
-						`生成二维码失败: ${errorData.errmsg || '未知错误'} (错误码: ${errorData.errcode})`,
-					);
-				}
-			} catch (e) {
-				// 如果不是 JSON，继续处理
+		const fileBuffer = Buffer.from(response.data);
+		const responseText = fileBuffer.toString('utf-8').trim();
+		if (contentType.includes('application/json') || contentType.includes('text/') || responseText.startsWith('{')) {
+			const errorData = JSON.parse(responseText);
+			if (errorData.errcode) {
+				this.logger.error('微信生成二维码失败:', errorData);
+				throw new BadRequestException(
+					`生成二维码失败: ${errorData.errmsg || '未知错误'} (错误码: ${errorData.errcode})`,
+				);
 			}
+		}
+		if (!fileBuffer.length || !contentType.startsWith('image/')) {
+			throw new BadRequestException('微信生成二维码失败：未返回有效图片数据');
 		}
 
 		// 将二维码图片上传到 COS 或保存到本地
 		try {
 			// 创建一个模拟的 Multer File 对象用于上传
-			const fileBuffer = Buffer.from(response.data);
+			const ext = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : 'png';
 			const mockFile: Express.Multer.File = {
 				fieldname: 'qrcode',
-				originalname: `qrcode_${distributorCode}_${Date.now()}.png`,
+				originalname: `qrcode_${distributorCode}_${Date.now()}.${ext}`,
 				encoding: '7bit',
-				mimetype: 'image/png',
+				mimetype: contentType,
 				size: fileBuffer.length,
 				buffer: fileBuffer,
 				destination: '',

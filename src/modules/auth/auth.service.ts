@@ -111,10 +111,12 @@ export class AuthService {
 				user.session_key = session_key || user.session_key;
 				await this.appUserRepository.save(user);
 
+			const normalizedDistributorCode = this.normalizeDistributorCode(distributorCode);
+
 			// 如果是新用户且提供了分销商编号，绑定分销关系
-			if (isNewUser && distributorCode) {
+			if (isNewUser && normalizedDistributorCode) {
 				try {
-					await this.distributorService.bindDistributionRelation(user.id, distributorCode);
+					await this.distributorService.bindDistributionRelation(user.id, normalizedDistributorCode);
 				} catch (error) {
 					// 绑定失败不影响登录，只记录日志
 					console.warn('绑定分销关系失败:', error.message);
@@ -165,6 +167,13 @@ export class AuthService {
 
 			throw new UnauthorizedException(error.message || '微信登录失败，请重试');
 		}
+	}
+
+	private normalizeDistributorCode(distributorCode?: string): string {
+		const raw = String(distributorCode || '').trim();
+		if (!raw) return '';
+		const params = new URLSearchParams(raw);
+		return params.get('inviterid') || params.get('distributor_code') || raw;
 	}
 
 	/**
