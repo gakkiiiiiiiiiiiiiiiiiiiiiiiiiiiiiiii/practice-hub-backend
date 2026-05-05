@@ -28,7 +28,7 @@ export class AuthService {
 	/**
 	 * 小程序端 - 微信一键登录
 	 */
-	async appLogin(code: string, distributorCode?: string) {
+	async appLogin(code: string, distributorCode?: string, profile?: { nickname?: string; avatar?: string }) {
 		if (!code) {
 			throw new BadRequestException('code 不能为空');
 		}
@@ -102,11 +102,20 @@ export class AuthService {
 				if (!user) {
 					user = this.appUserRepository.create({
 						openid,
-						nickname: '新用户',
+						nickname: this.normalizeOptionalString(profile?.nickname) || '新用户',
+						avatar: this.normalizeOptionalString(profile?.avatar) || null,
 					});
 				}
 				if (this.isAppAdminOpenid(openid)) {
 					user.role = AppUserRole.ADMIN;
+				}
+				const nickname = this.normalizeOptionalString(profile?.nickname);
+				const avatar = this.normalizeOptionalString(profile?.avatar);
+				if (nickname) {
+					user.nickname = nickname;
+				}
+				if (avatar) {
+					user.avatar = avatar;
 				}
 				user.session_key = session_key || user.session_key;
 				await this.appUserRepository.save(user);
@@ -174,6 +183,10 @@ export class AuthService {
 		if (!raw) return '';
 		const params = new URLSearchParams(raw);
 		return params.get('inviterid') || params.get('distributor_code') || raw;
+	}
+
+	private normalizeOptionalString(value?: string): string {
+		return String(value || '').trim();
 	}
 
 	/**

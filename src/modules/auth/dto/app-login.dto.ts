@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 
 export class AppLoginDto {
   @ApiProperty({ description: '微信登录 code', example: '081abc123def456' })
@@ -11,5 +11,32 @@ export class AppLoginDto {
   @IsOptional()
   @IsString()
   distributor_code?: string;
-}
 
+  @ApiProperty({ description: '微信昵称', required: false })
+  @IsOptional()
+  @IsString()
+  nickname?: string;
+
+  @ApiProperty({ description: '微信昵称（兼容微信字段名）', required: false })
+  @IsOptional()
+  @IsString()
+  nickName?: string;
+
+  @ApiProperty({ description: '微信头像地址', required: false })
+  @IsOptional()
+  @IsString()
+  avatar?: string;
+
+  @ApiProperty({ description: '微信头像地址（兼容微信字段名）', required: false })
+  @IsOptional()
+  @IsString()
+  avatarUrl?: string;
+
+  @ApiProperty({ description: '微信用户资料对象', required: false })
+  @IsOptional()
+  @IsObject()
+  userInfo?: {
+    nickName?: string;
+    avatarUrl?: string;
+  };
+}

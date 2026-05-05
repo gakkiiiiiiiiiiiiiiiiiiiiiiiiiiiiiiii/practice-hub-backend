@@ -94,26 +94,17 @@ export class DistributorService {
 	 * 生成专属小程序二维码
 	 */
 	async generateQRCode(userId: number, refresh = false) {
-		const distributor = await this.distributorRepository.findOne({
+		let distributor = await this.distributorRepository.findOne({
 			where: { user_id: userId },
 		});
 
 		if (!distributor) {
 			const appUser = await this.appUserRepository.findOne({ where: { id: userId } });
 			if (appUser?.role === AppUserRole.ADMIN) {
-				return {
-					id: null,
-					distributor_code: 'APP_ADMIN',
-					qr_code_url: null,
-					status: 1,
-					is_app_admin: true,
-					total_earnings: 0,
-					withdrawable_amount: 0,
-					subordinate_count: 0,
-					total_orders: 0,
-				};
+				distributor = await this.createApprovedDistributorForUser(userId);
+			} else {
+				throw new NotFoundException('您还不是分销用户');
 			}
-			throw new NotFoundException('您还不是分销用户');
 		}
 
 		if (distributor.status !== 1) {
@@ -505,6 +496,15 @@ export class DistributorService {
 		return `D${userId}${timestamp}${random}`;
 	}
 
+	private async createApprovedDistributorForUser(userId: number): Promise<Distributor> {
+		const distributor = this.distributorRepository.create({
+			user_id: userId,
+			distributor_code: this.generateDistributorCode(userId),
+			status: 1,
+		});
+		return this.distributorRepository.save(distributor);
+	}
+
 	/**
 	 * 获取分销配置（如果不存在则创建默认配置）
 	 */
@@ -531,13 +531,22 @@ export class DistributorService {
 	 * 获取分销用户信息
 	 */
 	async getDistributorInfo(userId: number) {
-		const distributor = await this.distributorRepository.findOne({
-			where: { user_id: userId },
-			relations: ['user'],
-		});
+		const [foundDistributor, appUser] = await Promise.all([
+			this.distributorRepository.findOne({
+				where: { user_id: userId },
+				relations: ['user'],
+			}),
+			this.appUserRepository.findOne({ where: { id: userId } }),
+		]);
+		let distributor = foundDistributor;
+		const isAppAdmin = appUser?.role === AppUserRole.ADMIN;
 
 		if (!distributor) {
-			throw new NotFoundException('您还不是分销用户');
+			if (isAppAdmin) {
+				distributor = await this.createApprovedDistributorForUser(userId);
+			} else {
+				throw new NotFoundException('您还不是分销用户');
+			}
 		}
 
 		return {
@@ -549,7 +558,7 @@ export class DistributorService {
 			withdrawable_amount: distributor.withdrawable_amount,
 			subordinate_count: distributor.subordinate_count,
 			total_orders: distributor.total_orders,
-			is_app_admin: false,
+			is_app_admin: isAppAdmin,
 		};
 	}
 
