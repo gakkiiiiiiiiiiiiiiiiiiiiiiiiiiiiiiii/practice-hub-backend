@@ -8,6 +8,7 @@ import { AdminRole } from '../../database/entities/sys-user.entity';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { GetUserListDto } from './dto/get-user-list.dto';
+import { AppUserRole } from '../../database/entities/app-user.entity';
 
 @ApiTags('管理员-小程序用户管理')
 @Controller('admin/users')
@@ -37,5 +38,11 @@ export class AdminController {
 		const result = await this.adminService.updateUserStatus(+id, dto);
 		return CommonResponseDto.success(result);
 	}
-}
 
+	@Put(':id/role')
+	@ApiOperation({ summary: '设置小程序用户角色（普通用户/小程序超级管理员）' })
+	async updateUserRole(@Param('id') id: number, @Body('role') role: AppUserRole) {
+		const result = await this.adminService.updateUserRole(+id, role);
+		return CommonResponseDto.success(result);
+	}
+}

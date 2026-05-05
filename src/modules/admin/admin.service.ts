@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, In } from 'typeorm';
-import { AppUser } from '../../database/entities/app-user.entity';
+import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UserAnswerLog } from '../../database/entities/user-answer-log.entity';
 import { UserWrongBook } from '../../database/entities/user-wrong-book.entity';
 import { UserCollection } from '../../database/entities/user-collection.entity';
@@ -71,6 +71,8 @@ export class AdminService {
 				openId: user.openid,
 				avatar: user.avatar,
 				phone: user.phone,
+				role: user.role || AppUserRole.USER,
+				isAppAdmin: user.role === AppUserRole.ADMIN,
 				vipStatus: isVip,
 				vipExpireTime: user.vip_expire_time,
 				status: (user as any).status !== undefined ? (user as any).status : 1, // 默认正常
@@ -147,6 +149,8 @@ export class AdminService {
 				openId: user.openid,
 				avatar: user.avatar,
 				phone: user.phone,
+				role: user.role || AppUserRole.USER,
+				isAppAdmin: user.role === AppUserRole.ADMIN,
 				vipStatus: isVip,
 				vipExpireTime: user.vip_expire_time,
 				status: (user as any).status !== undefined ? (user as any).status : 1,
@@ -186,5 +190,25 @@ export class AdminService {
 		// 暂时返回成功，实际项目中需要先添加status字段
 		return { success: true, message: '功能暂未实现，需要先添加status字段到数据库' };
 	}
-}
 
+	async updateUserRole(userId: number, role: AppUserRole) {
+		if (![AppUserRole.USER, AppUserRole.ADMIN].includes(role)) {
+			throw new BadRequestException('小程序用户角色无效');
+		}
+
+		const user = await this.appUserRepository.findOne({ where: { id: userId } });
+		if (!user) {
+			throw new NotFoundException('用户不存在');
+		}
+
+		user.role = role;
+		await this.appUserRepository.save(user);
+
+		return {
+			success: true,
+			id: user.id,
+			role: user.role,
+			isAppAdmin: user.role === AppUserRole.ADMIN,
+		};
+	}
+}
