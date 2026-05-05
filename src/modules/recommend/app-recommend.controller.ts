@@ -1,11 +1,16 @@
-import { Controller, Get } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { BadRequestException, Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Response } from 'express';
+import axios from 'axios';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
 import { HomeRecommendCategory } from '../../database/entities/home-recommend-category.entity';
 import { HomeRecommendItem } from '../../database/entities/home-recommend-item.entity';
+import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
+import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @ApiTags('小程序-首页推荐')
 @Controller('app/recommend')
@@ -17,11 +22,15 @@ export class AppRecommendController {
     private itemRepository: Repository<HomeRecommendItem>,
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
+    @InjectRepository(UserCourseAuth)
+    private userCourseAuthRepository: Repository<UserCourseAuth>,
   ) {}
 
   @Get('categories')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: '获取首页推荐版块列表（包含课程详情）' })
-  async getCategories() {
+  async getCategories(@CurrentUser() user?: any) {
     try {
       // 查询所有启用的推荐版块
       const categories = await this.categoryRepository.find({
@@ -33,45 +42,64 @@ export class AppRecommendController {
         return CommonResponseDto.success([]);
       }
 
-      const result = [];
+      const categoryIds = categories.map((category) => category.id);
+      const recommendItems = await this.itemRepository.find({
+        where: { category_id: In(categoryIds) },
+        order: { category_id: 'ASC', sort: 'ASC' },
+      });
+      const courseIds = Array.from(new Set(recommendItems.map((item) => item.course_id).filter(Boolean)));
+      const courses = courseIds.length > 0 ? await this.courseRepository.find({ where: { id: In(courseIds) } }) : [];
+      const courseMap = new Map(courses.map((course) => [course.id, course]));
 
-      for (const category of categories) {
-        // 获取该版块下的所有推荐项
-        const items = await this.itemRepository.find({
-          where: { category_id: category.id },
-          order: { sort: 'ASC' },
+      const authMap = new Map<number, Date | null>();
+      if (user?.userId && courseIds.length > 0) {
+        const auths = await this.userCourseAuthRepository.find({
+          where: {
+            user_id: user.userId,
+            course_id: In(courseIds),
+          },
         });
-
-        if (!items || items.length === 0) {
-          // 如果版块下没有课程，仍然返回版块但 items 为空数组
-          result.push({
-            id: category.id,
-            name: category.name,
-            items: [],
-          });
-          continue;
-        }
-
-        // 获取课程详情
-        const courseIds = items.map((item) => item.course_id);
-        const courses = await this.courseRepository.find({
-          where: { id: In(courseIds) },
+        const now = new Date();
+        auths.forEach((auth) => {
+          if (!auth.expire_time || auth.expire_time > now) {
+            authMap.set(auth.course_id, auth.expire_time || null);
+          }
         });
+      }
 
-        // 按 items 的排序组装课程列表
+      const itemsByCategory = new Map<number, HomeRecommendItem[]>();
+      recommendItems.forEach((item) => {
+        const list = itemsByCategory.get(item.category_id) || [];
+        list.push(item);
+        itemsByCategory.set(item.category_id, list);
+      });
+
+      const result = categories.map((category) => {
+        const items = itemsByCategory.get(category.id) || [];
         const sortedCourses = items
           .map((item) => {
-            const course = courses.find((c) => c.id === item.course_id);
-            return course ? { ...course } : null;
+            const course = courseMap.get(item.course_id);
+            if (!course) return null;
+
+            const price = Number(course.price) || 0;
+            const isFree = course.is_free === 1;
+            const expireTime = authMap.get(course.id) || null;
+            const hasAuth = price === 0 || isFree || authMap.has(course.id);
+
+            return {
+              ...course,
+              hasAuth,
+              expireTime,
+            };
           })
           .filter(Boolean);
 
-        result.push({
+        return {
           id: category.id,
           name: category.name,
           items: sortedCourses,
-        });
-      }
+        };
+      });
 
       return CommonResponseDto.success(result);
     } catch (error) {
@@ -80,5 +108,39 @@ export class AppRecommendController {
     }
   }
 
-}
+  @Get('image-proxy')
+  @ApiOperation({ summary: '首页推荐图片代理（供小程序绕过图片域名/304缓存问题）' })
+  async proxyImage(@Query('url') url: string, @Res() res: Response) {
+    if (!url || !/^https?:\/\//i.test(url)) {
+      throw new BadRequestException('图片地址无效');
+    }
 
+    const target = new URL(url);
+    const allowedHosts = ['tcb.qcloud.la', 'qcloud.la', 'myqcloud.com', 'myqcloud.la'];
+    const allowed = allowedHosts.some((host) => target.hostname === host || target.hostname.endsWith(`.${host}`));
+    if (!allowed) {
+      throw new BadRequestException('图片域名不允许代理');
+    }
+
+    const imageRes = await axios.get(url, {
+      responseType: 'arraybuffer',
+      timeout: 8000,
+      headers: {
+        'Cache-Control': 'no-cache',
+        Pragma: 'no-cache',
+      },
+      validateStatus: (status) => status >= 200 && status < 400,
+    });
+    const contentType = imageRes.headers['content-type'] || 'image/png';
+    if (!String(contentType).startsWith('image/')) {
+      throw new BadRequestException('目标地址不是图片');
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    return res.send(Buffer.from(imageRes.data));
+  }
+
+}

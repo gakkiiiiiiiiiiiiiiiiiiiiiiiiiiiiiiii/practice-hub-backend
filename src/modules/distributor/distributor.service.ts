@@ -93,7 +93,7 @@ export class DistributorService {
 	/**
 	 * 生成专属小程序二维码
 	 */
-	async generateQRCode(userId: number) {
+	async generateQRCode(userId: number, refresh = false) {
 		const distributor = await this.distributorRepository.findOne({
 			where: { user_id: userId },
 		});
@@ -121,7 +121,7 @@ export class DistributorService {
 		}
 
 		// 如果已有二维码，直接返回
-		if (distributor.qr_code_url) {
+		if (distributor.qr_code_url && !refresh) {
 			return {
 				qr_code_url: distributor.qr_code_url,
 				distributor_code: distributor.distributor_code,

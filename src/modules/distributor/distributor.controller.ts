@@ -35,8 +35,8 @@ export class DistributorController {
 	@UseGuards(JwtAuthGuard)
 	@ApiBearerAuth()
 	@ApiOperation({ summary: '生成专属小程序二维码' })
-	async generateQRCode(@CurrentUser() user: any) {
-		const result = await this.distributorService.generateQRCode(user.userId);
+	async generateQRCode(@CurrentUser() user: any, @Query('refresh') refresh?: string) {
+		const result = await this.distributorService.generateQRCode(user.userId, refresh === '1' || refresh === 'true');
 		return CommonResponseDto.success(result);
 	}
 
