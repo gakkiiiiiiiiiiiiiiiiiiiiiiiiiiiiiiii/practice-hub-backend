@@ -13,6 +13,8 @@ import { SystemRoleService } from '../system-role/system-role.service';
 
 @Injectable()
 export class AuthService {
+	private wechatAccessTokenCache: { token: string; expiresAt: number } | null = null;
+
 	constructor(
 		@InjectRepository(AppUser)
 		private appUserRepository: Repository<AppUser>,
@@ -147,6 +149,7 @@ export class AuthService {
 					openid: user.openid,
 					nickname: user.nickname,
 						avatar: user.avatar,
+						phone: user.phone,
 						vip_expire_time: user.vip_expire_time,
 						role: user.role || AppUserRole.USER,
 						is_admin: user.role === AppUserRole.ADMIN,
@@ -176,6 +179,202 @@ export class AuthService {
 
 			throw new UnauthorizedException(error.message || '微信登录失败，请重试');
 		}
+	}
+
+	/**
+	 * 小程序端 - 手机号快捷登录
+	 */
+	async appPhoneLogin(
+		loginCode: string,
+		phoneCode: string,
+		distributorCode?: string,
+		profile?: { nickname?: string; avatar?: string },
+	) {
+		if (!loginCode) {
+			throw new BadRequestException('loginCode 不能为空');
+		}
+		if (!phoneCode) {
+			throw new BadRequestException('phoneCode 不能为空');
+		}
+
+		try {
+			const { openid, session_key } = await this.getWechatSessionByCode(loginCode);
+			const phone = await this.getPhoneNumberByCode(phoneCode);
+
+			let user = await this.appUserRepository.findOne({ where: { openid } });
+			if (!user && phone) {
+				user = await this.appUserRepository.findOne({ where: { phone } });
+			}
+			const isNewUser = !user;
+
+			if (!user) {
+				user = this.appUserRepository.create({
+					openid,
+					phone,
+					nickname: this.normalizeOptionalString(profile?.nickname) || '微信用户',
+					avatar: this.normalizeOptionalString(profile?.avatar) || null,
+				});
+			}
+
+			user.openid = user.openid || openid;
+			user.phone = phone || user.phone;
+			user.session_key = session_key || user.session_key;
+
+			if (this.isAppAdminOpenid(openid)) {
+				user.role = AppUserRole.ADMIN;
+			}
+
+			const nickname = this.normalizeOptionalString(profile?.nickname);
+			const avatar = this.normalizeOptionalString(profile?.avatar);
+			if (nickname) {
+				user.nickname = nickname;
+			}
+			if (avatar) {
+				user.avatar = avatar;
+			}
+			await this.appUserRepository.save(user);
+
+			const normalizedDistributorCode = this.normalizeDistributorCode(distributorCode);
+			if (isNewUser && normalizedDistributorCode) {
+				try {
+					await this.distributorService.bindDistributionRelation(user.id, normalizedDistributorCode);
+				} catch (error) {
+					console.warn('绑定分销关系失败:', error.message);
+				}
+			}
+
+			const token = this.jwtService.sign({
+				userId: user.id,
+				openid: user.openid,
+				role: user.role || AppUserRole.USER,
+				type: 'app',
+			});
+
+			return {
+				token,
+				user: {
+					id: user.id,
+					openid: user.openid,
+					nickname: user.nickname,
+					avatar: user.avatar,
+					phone: user.phone,
+					vip_expire_time: user.vip_expire_time,
+					role: user.role || AppUserRole.USER,
+					is_admin: user.role === AppUserRole.ADMIN,
+				},
+			};
+		} catch (error) {
+			if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
+				throw error;
+			}
+			console.error('手机号快捷登录异常:', {
+				message: error.message,
+				code: error.code,
+				response: error.response?.data,
+				status: error.response?.status,
+			});
+			throw new UnauthorizedException(error.message || '手机号快捷登录失败，请重试');
+		}
+	}
+
+	private getWechatConfig() {
+		const appid = this.configService.get('WECHAT_APPID') || this.configService.get('AppID');
+		const secret =
+			this.configService.get('WECHAT_SECRET') || this.configService.get('WECHAT_APPSECRET') || this.configService.get('AppSecret');
+		if (!appid || !secret) {
+			console.error('微信配置缺失:', {
+				hasAppid: !!appid,
+				hasSecret: !!secret,
+			});
+			throw new UnauthorizedException('微信登录配置错误，请联系管理员');
+		}
+		return { appid, secret };
+	}
+
+	private async getWechatSessionByCode(code: string) {
+		const { appid, secret } = this.getWechatConfig();
+		const httpsAgent = new https.Agent({
+			rejectUnauthorized: false,
+		});
+		const response = await axios.get('https://api.weixin.qq.com/sns/jscode2session', {
+			params: {
+				appid,
+				secret,
+				js_code: code,
+				grant_type: 'authorization_code',
+			},
+			httpsAgent,
+		});
+		const { openid, session_key, errcode, errmsg } = response.data;
+		if (errcode) {
+			throw new UnauthorizedException(this.getWechatLoginErrorMessage(errcode, errmsg));
+		}
+		if (!openid) {
+			throw new UnauthorizedException('微信登录失败：未获取到用户标识');
+		}
+		return { openid, session_key };
+	}
+
+	private getWechatLoginErrorMessage(errcode: number, errmsg?: string) {
+		switch (errcode) {
+			case 40029:
+				return '登录凭证已过期，请重新登录';
+			case 45011:
+				return '登录请求过于频繁，请稍后再试';
+			case 40163:
+				return '登录凭证已被使用，请重新登录';
+			default:
+				return errmsg || `微信登录失败 (${errcode})`;
+		}
+	}
+
+	private async getWechatAccessToken() {
+		const now = Date.now();
+		if (this.wechatAccessTokenCache && this.wechatAccessTokenCache.expiresAt > now + 60_000) {
+			return this.wechatAccessTokenCache.token;
+		}
+		const { appid, secret } = this.getWechatConfig();
+		const httpsAgent = new https.Agent({
+			rejectUnauthorized: false,
+		});
+		const response = await axios.get('https://api.weixin.qq.com/cgi-bin/token', {
+			params: {
+				grant_type: 'client_credential',
+				appid,
+				secret,
+			},
+			httpsAgent,
+		});
+		const { access_token, expires_in, errcode, errmsg } = response.data;
+		if (errcode || !access_token) {
+			throw new UnauthorizedException(errmsg || `获取微信 access_token 失败 (${errcode || 'unknown'})`);
+		}
+		this.wechatAccessTokenCache = {
+			token: access_token,
+			expiresAt: now + Math.max(300, Number(expires_in) || 7200) * 1000,
+		};
+		return access_token;
+	}
+
+	private async getPhoneNumberByCode(phoneCode: string) {
+		const accessToken = await this.getWechatAccessToken();
+		const httpsAgent = new https.Agent({
+			rejectUnauthorized: false,
+		});
+		const response = await axios.post(
+			`https://api.weixin.qq.com/wxa/business/getuserphonenumber?access_token=${accessToken}`,
+			{ code: phoneCode },
+			{ httpsAgent },
+		);
+		const { errcode, errmsg, phone_info } = response.data;
+		if (errcode) {
+			throw new UnauthorizedException(errmsg || `获取手机号失败 (${errcode})`);
+		}
+		const phone = phone_info?.phoneNumber || phone_info?.purePhoneNumber;
+		if (!phone) {
+			throw new UnauthorizedException('获取手机号失败：微信未返回手机号');
+		}
+		return phone;
 	}
 
 	private normalizeDistributorCode(distributorCode?: string): string {

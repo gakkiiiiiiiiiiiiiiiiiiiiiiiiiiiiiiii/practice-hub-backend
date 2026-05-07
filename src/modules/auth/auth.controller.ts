@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { AppLoginDto } from './dto/app-login.dto';
+import { AppPhoneLoginDto } from './dto/app-phone-login.dto';
 import { AdminLoginDto } from './dto/admin-login.dto';
 
 @ApiTags('认证')
@@ -16,6 +17,16 @@ export class AuthController {
   @ApiOperation({ summary: '小程序端 - 微信一键登录' })
   async appLogin(@Body() dto: AppLoginDto) {
     const result = await this.authService.appLogin(dto.code, dto.distributor_code, {
+      nickname: dto.nickname || dto.nickName || dto.userInfo?.nickName,
+      avatar: dto.avatar || dto.avatarUrl || dto.userInfo?.avatarUrl,
+    });
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('app/phone-login')
+  @ApiOperation({ summary: '小程序端 - 手机号快捷登录' })
+  async appPhoneLogin(@Body() dto: AppPhoneLoginDto) {
+    const result = await this.authService.appPhoneLogin(dto.loginCode, dto.phoneCode, dto.distributor_code, {
       nickname: dto.nickname || dto.nickName || dto.userInfo?.nickName,
       avatar: dto.avatar || dto.avatarUrl || dto.userInfo?.avatarUrl,
     });
