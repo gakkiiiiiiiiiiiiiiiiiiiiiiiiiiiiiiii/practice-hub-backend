@@ -50,6 +50,11 @@ class CourseCoverFieldDto {
   @IsNotEmpty()
   color: string;
 
+  @ApiProperty({ description: '文本背景色', required: false, example: 'transparent' })
+  @IsOptional()
+  @IsString()
+  backgroundColor?: string;
+
   @ApiProperty({ description: '字体粗细', required: false, example: '700' })
   @IsOptional()
   @IsString()
@@ -85,7 +90,7 @@ class CourseCoverFieldDto {
   @Type(() => Number)
   @IsInt()
   @Min(10)
-  @Max(200)
+  @Max(300)
   lineHeight?: number;
 }
 
