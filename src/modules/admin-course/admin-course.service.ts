@@ -57,6 +57,12 @@ export class AdminCourseService {
       Object.assign(course, dto);
       return await this.courseRepository.save(course);
     } else {
+      if (dto.price === undefined || dto.price === null) {
+        dto.price = 0.5;
+      }
+      if (dto.agent_price === undefined || dto.agent_price === null) {
+        dto.agent_price = 0.1;
+      }
       if (dto.sort === undefined || dto.sort === null) {
         dto.sort = await this.getNextSortValue();
       }
@@ -74,10 +80,31 @@ export class AdminCourseService {
   /**
    * 获取课程列表
    */
-  async getCourseList() {
-    return await this.courseRepository.find({
-      order: { sort: 'ASC' },
-    });
+  async getCourseList(filters?: {
+    name?: string;
+    subject?: string;
+    category?: string;
+    subCategory?: string;
+  }) {
+    const queryBuilder = this.courseRepository.createQueryBuilder('course');
+
+    if (filters?.name?.trim()) {
+      queryBuilder.andWhere('course.name LIKE :name', { name: `%${filters.name.trim()}%` });
+    }
+    if (filters?.subject?.trim()) {
+      queryBuilder.andWhere('course.subject LIKE :subject', { subject: `%${filters.subject.trim()}%` });
+    }
+    if (filters?.category?.trim()) {
+      queryBuilder.andWhere('course.category = :category', { category: filters.category.trim() });
+    }
+    if (filters?.subCategory?.trim()) {
+      queryBuilder.andWhere('course.sub_category = :subCategory', { subCategory: filters.subCategory.trim() });
+    }
+
+    return await queryBuilder
+      .orderBy('course.sort', 'ASC')
+      .addOrderBy('course.id', 'ASC')
+      .getMany();
   }
 
   /**

@@ -55,8 +55,18 @@ export class AdminCourseController {
 	@Get()
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN, AdminRole.AGENT)
 	@ApiOperation({ summary: '获取课程列表' })
-	async getCourseList() {
-		const result = await this.adminCourseService.getCourseList();
+	async getCourseList(
+		@Query('name') name?: string,
+		@Query('subject') subject?: string,
+		@Query('category') category?: string,
+		@Query('subCategory') subCategory?: string,
+	) {
+		const result = await this.adminCourseService.getCourseList({
+			name,
+			subject,
+			category,
+			subCategory,
+		});
 		return CommonResponseDto.success(result);
 	}
 
