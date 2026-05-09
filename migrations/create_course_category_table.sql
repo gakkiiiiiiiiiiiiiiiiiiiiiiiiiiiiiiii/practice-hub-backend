@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS `course_category` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `name` varchar(100) NOT NULL COMMENT '分类名称',
   `parent_id` int(11) DEFAULT NULL COMMENT '父级分类ID，null表示一级分类',
+  `cover_img` varchar(500) DEFAULT NULL COMMENT '二级分类封面图',
   `sort` int(11) NOT NULL DEFAULT '0' COMMENT '排序',
   `status` tinyint(1) NOT NULL DEFAULT '1' COMMENT '状态（0-禁用，1-启用）',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,

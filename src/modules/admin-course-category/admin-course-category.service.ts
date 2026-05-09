@@ -62,6 +62,7 @@ export class AdminCourseCategoryService {
 		const category = this.courseCategoryRepository.create({
 			name: dto.name,
 			parent_id: dto.parent_id ?? null,
+			cover_img: dto.cover_img ?? null,
 			sort: dto.sort ?? 0,
 			status: dto.status ?? 1,
 		});

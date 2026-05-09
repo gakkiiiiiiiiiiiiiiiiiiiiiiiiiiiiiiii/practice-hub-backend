@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import { IsOptional, IsString, IsNumber, IsIn } from 'class-validator';
 
 export class UpdateCategoryDto {
@@ -7,15 +8,28 @@ export class UpdateCategoryDto {
   @IsString()
   name?: string;
 
+  @ApiProperty({ description: '版块类型', required: false, enum: ['course', 'category'] })
+  @IsOptional()
+  @IsString()
+  @IsIn(['course', 'category'])
+  type?: 'course' | 'category';
+
+  @ApiProperty({ description: '分类板块绑定的一级分类ID', required: false })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  bind_category_id?: number | null;
+
   @ApiProperty({ description: '排序权重', required: false })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   sort?: number;
 
   @ApiProperty({ description: '状态', required: false, enum: [0, 1] })
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @IsIn([0, 1])
   status?: number;
 }
-

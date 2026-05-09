@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { HomeRecommendCategory } from '../../database/entities/home-recommend-category.entity';
 import { HomeRecommendItem } from '../../database/entities/home-recommend-item.entity';
+import { CourseCategory } from '../../database/entities/course-category.entity';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { AddItemDto } from './dto/add-item.dto';
@@ -15,6 +16,8 @@ export class RecommendService {
     private categoryRepository: Repository<HomeRecommendCategory>,
     @InjectRepository(HomeRecommendItem)
     private itemRepository: Repository<HomeRecommendItem>,
+    @InjectRepository(CourseCategory)
+    private courseCategoryRepository: Repository<CourseCategory>,
   ) {}
 
   /**
@@ -26,12 +29,32 @@ export class RecommendService {
       relations: ['items'],
     });
 
+    const bindCategoryIds = categories
+      .filter((category) => category.type === 'category' && category.bind_category_id)
+      .map((category) => category.bind_category_id as number);
+    const childCounts = new Map<number, number>();
+    if (bindCategoryIds.length > 0) {
+      const rows = await this.courseCategoryRepository
+        .createQueryBuilder('category')
+        .select('category.parent_id', 'parent_id')
+        .addSelect('COUNT(category.id)', 'count')
+        .where('category.parent_id IN (:...ids)', { ids: bindCategoryIds })
+        .groupBy('category.parent_id')
+        .getRawMany();
+      rows.forEach((row) => childCounts.set(Number(row.parent_id), Number(row.count) || 0));
+    }
+
     return categories.map((category) => ({
       id: category.id,
       name: category.name,
+      type: category.type || 'course',
+      bind_category_id: category.bind_category_id || null,
       sort: category.sort,
       status: category.status,
-      item_count: category.items?.length || 0,
+      item_count:
+        category.type === 'category'
+          ? childCounts.get(category.bind_category_id || 0) || 0
+          : category.items?.length || 0,
     }));
   }
 
@@ -57,6 +80,8 @@ export class RecommendService {
     return {
       id: category.id,
       name: category.name,
+      type: category.type || 'course',
+      bind_category_id: category.bind_category_id || null,
       sort: category.sort,
       status: category.status,
       items: items.map((item) => ({
@@ -72,8 +97,11 @@ export class RecommendService {
    * 创建版块
    */
   async createCategory(dto: CreateCategoryDto) {
+    await this.validateCategoryBlock(dto.type || 'course', dto.bind_category_id);
     const category = this.categoryRepository.create({
       ...dto,
+      type: dto.type || 'course',
+      bind_category_id: dto.type === 'category' ? dto.bind_category_id : null,
       status: dto.status !== undefined ? dto.status : 1, // 默认 status = 1 (显示)
     });
     await this.categoryRepository.save(category);
@@ -90,7 +118,20 @@ export class RecommendService {
       throw new NotFoundException('版块不存在');
     }
 
-    Object.assign(category, dto);
+    const nextType = dto.type || category.type || 'course';
+    const nextBindCategoryId =
+      nextType === 'category'
+        ? dto.bind_category_id !== undefined
+          ? dto.bind_category_id
+          : category.bind_category_id
+        : null;
+    await this.validateCategoryBlock(nextType, nextBindCategoryId);
+
+    Object.assign(category, {
+      ...dto,
+      type: nextType,
+      bind_category_id: nextBindCategoryId,
+    });
     await this.categoryRepository.save(category);
 
     return category;
@@ -122,6 +163,13 @@ export class RecommendService {
    * 添加题库到版块
    */
   async addItem(dto: AddItemDto) {
+    const category = await this.categoryRepository.findOne({ where: { id: dto.category_id } });
+    if (!category) {
+      throw new NotFoundException('版块不存在');
+    }
+    if (category.type === 'category') {
+      throw new BadRequestException('分类板块不支持手动添加课程');
+    }
     const item = this.itemRepository.create(dto);
     await this.itemRepository.save(item);
     return item;
@@ -153,5 +201,18 @@ export class RecommendService {
     return { success: true };
   }
 
-}
+  private async validateCategoryBlock(type: 'course' | 'category', bindCategoryId?: number | null) {
+    if (type !== 'category') return;
+    if (!bindCategoryId) {
+      throw new BadRequestException('分类板块必须绑定一级分类');
+    }
+    const bindCategory = await this.courseCategoryRepository.findOne({ where: { id: bindCategoryId } });
+    if (!bindCategory) {
+      throw new BadRequestException('绑定的一级分类不存在');
+    }
+    if (bindCategory.parent_id) {
+      throw new BadRequestException('分类板块只能绑定一级分类');
+    }
+  }
 
+}

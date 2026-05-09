@@ -14,6 +14,11 @@ export class CreateCourseCategoryDto {
 	@IsNumber()
 	parent_id?: number | null;
 
+	@ApiProperty({ description: '分类封面图，主要用于二级分类首页展示', required: false })
+	@IsOptional()
+	@IsString()
+	cover_img?: string | null;
+
 	@ApiProperty({ description: '排序', example: 0, required: false })
 	@IsOptional()
 	@Type(() => Number)

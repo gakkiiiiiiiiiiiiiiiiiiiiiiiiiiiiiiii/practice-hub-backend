@@ -17,6 +17,9 @@ export class CourseCategory {
 	@Column({ type: 'int', nullable: true })
 	parent_id: number | null; // 父级分类ID，null表示一级分类
 
+	@Column({ type: 'varchar', length: 500, nullable: true })
+	cover_img: string | null; // 二级分类封面图
+
 	@Column({ type: 'int', default: 0 })
 	sort: number; // 排序
 

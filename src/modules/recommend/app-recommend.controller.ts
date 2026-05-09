@@ -6,6 +6,7 @@ import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
+import { CourseCategory } from '../../database/entities/course-category.entity';
 import { HomeRecommendCategory } from '../../database/entities/home-recommend-category.entity';
 import { HomeRecommendItem } from '../../database/entities/home-recommend-item.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
@@ -22,6 +23,8 @@ export class AppRecommendController {
     private itemRepository: Repository<HomeRecommendItem>,
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
+    @InjectRepository(CourseCategory)
+    private courseCategoryRepository: Repository<CourseCategory>,
     @InjectRepository(UserCourseAuth)
     private userCourseAuthRepository: Repository<UserCourseAuth>,
   ) {}
@@ -50,6 +53,45 @@ export class AppRecommendController {
       const courseIds = Array.from(new Set(recommendItems.map((item) => item.course_id).filter(Boolean)));
       const courses = courseIds.length > 0 ? await this.courseRepository.find({ where: { id: In(courseIds) } }) : [];
       const courseMap = new Map(courses.map((course) => [course.id, course]));
+      const bindCategoryIds = categories
+        .filter((category) => category.type === 'category' && category.bind_category_id)
+        .map((category) => category.bind_category_id as number);
+      const boundPrimaryCategories =
+        bindCategoryIds.length > 0
+          ? await this.courseCategoryRepository.find({ where: { id: In(bindCategoryIds) } })
+          : [];
+      const primaryCategoryMap = new Map(boundPrimaryCategories.map((category) => [category.id, category]));
+      const secondaryCategories =
+        bindCategoryIds.length > 0
+          ? await this.courseCategoryRepository.find({
+              where: { parent_id: In(bindCategoryIds), status: 1 },
+              order: { sort: 'ASC', id: 'ASC' },
+            })
+          : [];
+      const secondaryByParent = new Map<number, CourseCategory[]>();
+      secondaryCategories.forEach((category) => {
+        const list = secondaryByParent.get(category.parent_id || 0) || [];
+        list.push(category);
+        secondaryByParent.set(category.parent_id || 0, list);
+      });
+      const secondaryNames = secondaryCategories.map((category) => category.name).filter(Boolean);
+      const countRows =
+        secondaryNames.length > 0
+          ? await this.courseRepository
+              .createQueryBuilder('course')
+              .select('course.category', 'category')
+              .addSelect('course.sub_category', 'sub_category')
+              .addSelect('COUNT(course.id)', 'count')
+              .where('course.sub_category IN (:...secondaryNames)', { secondaryNames })
+              .andWhere('course.status = :status', { status: 1 })
+              .groupBy('course.category')
+              .addGroupBy('course.sub_category')
+              .getRawMany()
+          : [];
+      const courseCountMap = new Map<string, number>();
+      countRows.forEach((row) => {
+        courseCountMap.set(`${row.category || ''}__${row.sub_category || ''}`, Number(row.count) || 0);
+      });
 
       const authMap = new Map<number, Date | null>();
       if (user?.userId && courseIds.length > 0) {
@@ -75,6 +117,33 @@ export class AppRecommendController {
       });
 
       const result = categories.map((category) => {
+        if (category.type === 'category') {
+          const primaryCategory = category.bind_category_id ? primaryCategoryMap.get(category.bind_category_id) : null;
+          const primaryName = primaryCategory?.name || '';
+          const items = (secondaryByParent.get(category.bind_category_id || 0) || []).map((subCategory) => ({
+            id: subCategory.id,
+            item_type: 'sub_category',
+            name: subCategory.name,
+            title: subCategory.name,
+            category: primaryName,
+            sub_category: subCategory.name,
+            parent_id: subCategory.parent_id,
+            cover: subCategory.cover_img || '',
+            cover_img: subCategory.cover_img || '',
+            course_count: courseCountMap.get(`${primaryName}__${subCategory.name}`) || 0,
+          }));
+
+          return {
+            id: category.id,
+            name: category.name,
+            type: 'category',
+            bind_category_id: category.bind_category_id || null,
+            bind_category_name: primaryName,
+            items,
+            display_type: 'category-grid',
+          };
+        }
+
         const items = itemsByCategory.get(category.id) || [];
         const sortedCourses = items
           .map((item) => {
@@ -97,6 +166,7 @@ export class AppRecommendController {
         return {
           id: category.id,
           name: category.name,
+          type: category.type || 'course',
           items: sortedCourses,
         };
       });

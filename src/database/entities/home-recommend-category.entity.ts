@@ -16,6 +16,12 @@ export class HomeRecommendCategory {
   @Column({ length: 100 })
   name: string; // 版块名称
 
+  @Column({ type: 'varchar', length: 20, default: 'course' })
+  type: 'course' | 'category'; // course-课程板块，category-分类板块
+
+  @Column({ type: 'int', nullable: true })
+  bind_category_id: number | null; // 分类板块绑定的一级分类ID
+
   @Column({ type: 'int', default: 0 })
   sort: number; // 排序权重
 
@@ -31,4 +37,3 @@ export class HomeRecommendCategory {
   @OneToMany(() => HomeRecommendItem, (item) => item.category)
   items: HomeRecommendItem[];
 }
-
