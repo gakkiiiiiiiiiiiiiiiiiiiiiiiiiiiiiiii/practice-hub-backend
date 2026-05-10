@@ -45,6 +45,27 @@ export class CourseController {
     return CommonResponseDto.success({ ticket, viewerUrl });
   }
 
+  @Get(':id/document-preview-url')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取课程文档预览地址（doc/docx 等小程序 openDocument 使用）' })
+  async getDocumentPreviewUrl(
+    @Param('id') id: string,
+    @Query('ticket') ticket: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    const courseId = +id;
+    let userId = user?.userId;
+    if (ticket && !userId) {
+      const verified = this.courseService.verifyPreviewTicket(ticket);
+      if (verified && verified.courseId === courseId) {
+        userId = verified.userId ?? undefined;
+      }
+    }
+    const result = await this.courseService.getCourseDocumentPreviewUrl(courseId, userId);
+    return CommonResponseDto.success(result);
+  }
+
   @Get(':id/file-preview')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()

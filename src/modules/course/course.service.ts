@@ -131,6 +131,36 @@ export class CourseService {
     };
   }
 
+  /**
+   * 获取小程序文档预览地址。
+   * 用于 allow_source_file 关闭时仍允许已购买/免费用户在小程序内打开 doc/docx。
+   */
+  async getCourseDocumentPreviewUrl(
+    courseId: number,
+    userId?: number,
+  ): Promise<{ url: string; fileType: string; fileName: string }> {
+    const { course, hasAuth } = await this.getCourseAccessContext(courseId, userId);
+    if (course.content_type !== 'file' || !course.file_url) {
+      throw new NotFoundException('课程无文件或非文件课程');
+    }
+
+    const fileType = (course.file_type || '').toLowerCase();
+    if (!['doc', 'docx', 'pdf'].includes(fileType)) {
+      throw new BadRequestException('暂不支持该文件类型预览');
+    }
+
+    const canPreview = hasAuth || Number(course.price) === 0 || course.is_free === 1;
+    if (!canPreview) {
+      throw new BadRequestException('请先购买课程');
+    }
+
+    return {
+      url: course.file_url,
+      fileType,
+      fileName: course.file_name || `course.${fileType}`,
+    };
+  }
+
   async getCourseAccessContext(courseId: number, userId?: number, withChapters = false) {
     const course = await this.courseRepository.findOne({
       where: { id: courseId },

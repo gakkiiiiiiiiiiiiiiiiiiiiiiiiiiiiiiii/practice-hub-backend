@@ -27,7 +27,7 @@ SET @has_bind_category_id = (
 
 SET @sql_statement = IF(
   @has_bind_category_id = 0,
-  'ALTER TABLE `home_recommend_category` ADD COLUMN `bind_category_id` INT NULL COMMENT ''分类板块绑定的一级分类ID'' AFTER `type`',
+  'ALTER TABLE `home_recommend_category` ADD COLUMN `bind_category_id` INT COMMENT ''分类板块绑定的一级分类ID'' AFTER `type`',
   'SELECT 1'
 );
 PREPARE stmt FROM @sql_statement;
@@ -44,7 +44,7 @@ SET @has_category_cover = (
 
 SET @sql_statement = IF(
   @has_category_cover = 0,
-  'ALTER TABLE `course_category` ADD COLUMN `cover_img` VARCHAR(500) NULL COMMENT ''二级分类封面图'' AFTER `parent_id`',
+  'ALTER TABLE `course_category` ADD COLUMN `cover_img` VARCHAR(500) COMMENT ''二级分类封面图'' AFTER `parent_id`',
   'SELECT 1'
 );
 PREPARE stmt FROM @sql_statement;
