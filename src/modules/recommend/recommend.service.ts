@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { HomeRecommendCategory } from '../../database/entities/home-recommend-category.entity';
 import { HomeRecommendItem } from '../../database/entities/home-recommend-item.entity';
 import { CourseCategory } from '../../database/entities/course-category.entity';
@@ -11,6 +11,8 @@ import { UpdateItemSortDto } from './dto/update-item-sort.dto';
 
 @Injectable()
 export class RecommendService {
+  private columnsColumnExistsCache: boolean | null = null;
+
   constructor(
     @InjectRepository(HomeRecommendCategory)
     private categoryRepository: Repository<HomeRecommendCategory>,
@@ -18,16 +20,29 @@ export class RecommendService {
     private itemRepository: Repository<HomeRecommendItem>,
     @InjectRepository(CourseCategory)
     private courseCategoryRepository: Repository<CourseCategory>,
+    private dataSource: DataSource,
   ) {}
 
   /**
    * 获取推荐版块列表
    */
   async getCategories() {
-    const categories = await this.categoryRepository.find({
-      order: { sort: 'ASC' },
-      relations: ['items'],
-    });
+    const columnsExists = await this.hasColumnsColumn();
+    const categories = await this.createCategoryQuery('category', columnsExists)
+      .orderBy('category.sort', 'ASC')
+      .getMany();
+    const categoryIds = categories.map((category) => category.id);
+    const itemCounts = new Map<number, number>();
+    if (categoryIds.length > 0) {
+      const itemRows = await this.itemRepository
+        .createQueryBuilder('item')
+        .select('item.category_id', 'category_id')
+        .addSelect('COUNT(item.id)', 'count')
+        .where('item.category_id IN (:...categoryIds)', { categoryIds })
+        .groupBy('item.category_id')
+        .getRawMany();
+      itemRows.forEach((row) => itemCounts.set(Number(row.category_id), Number(row.count) || 0));
+    }
 
     const bindCategoryIds = categories
       .filter((category) => category.type === 'category' && category.bind_category_id)
@@ -55,7 +70,7 @@ export class RecommendService {
       item_count:
         category.type === 'category'
           ? childCounts.get(category.bind_category_id || 0) || 0
-          : category.items?.length || 0,
+          : itemCounts.get(category.id) || 0,
     }));
   }
 
@@ -63,10 +78,7 @@ export class RecommendService {
    * 获取版块详情（包含题库列表）
    */
   async getCategoryDetail(id: number) {
-    const category = await this.categoryRepository.findOne({
-      where: { id },
-      relations: ['items'],
-    });
+    const category = await this.getCategoryById(id);
 
     if (!category) {
       throw new NotFoundException('版块不存在');
@@ -100,22 +112,27 @@ export class RecommendService {
    */
   async createCategory(dto: CreateCategoryDto) {
     await this.validateCategoryBlock(dto.type || 'course', dto.bind_category_id);
-    const category = this.categoryRepository.create({
-      ...dto,
+    const columnsExists = await this.hasColumnsColumn();
+    const payload: Partial<HomeRecommendCategory> = {
+      name: dto.name,
+      sort: dto.sort,
       type: dto.type || 'course',
       bind_category_id: dto.type === 'category' ? dto.bind_category_id : null,
-      columns: this.normalizeColumns(dto.columns),
       status: dto.status !== undefined ? dto.status : 1, // 默认 status = 1 (显示)
-    });
-    await this.categoryRepository.save(category);
-    return category;
+    };
+    if (columnsExists) {
+      payload.columns = this.normalizeColumns(dto.columns);
+    }
+    const result = await this.categoryRepository.insert(payload);
+    const id = Number(result.identifiers?.[0]?.id);
+    return id ? this.getCategoryById(id) : payload;
   }
 
   /**
    * 更新版块
    */
   async updateCategory(id: number, dto: UpdateCategoryDto) {
-    const category = await this.categoryRepository.findOne({ where: { id } });
+    const category = await this.getCategoryById(id);
 
     if (!category) {
       throw new NotFoundException('版块不存在');
@@ -130,36 +147,44 @@ export class RecommendService {
         : null;
     await this.validateCategoryBlock(nextType, nextBindCategoryId);
 
-    Object.assign(category, {
-      ...dto,
+    const columnsExists = await this.hasColumnsColumn();
+    const payload: Partial<HomeRecommendCategory> = {
+      name: dto.name,
+      sort: dto.sort,
+      status: dto.status,
       type: nextType,
       bind_category_id: nextBindCategoryId,
-      columns: dto.columns !== undefined ? this.normalizeColumns(dto.columns) : this.normalizeColumns(category.columns),
+    };
+    Object.keys(payload).forEach((key) => {
+      if ((payload as Record<string, unknown>)[key] === undefined) {
+        delete (payload as Record<string, unknown>)[key];
+      }
     });
-    await this.categoryRepository.save(category);
+    if (columnsExists && dto.columns !== undefined) {
+      payload.columns = this.normalizeColumns(dto.columns);
+    }
+    await this.categoryRepository.update({ id }, payload);
 
-    return category;
+    return this.getCategoryById(id);
   }
 
   /**
    * 删除版块
    */
   async deleteCategory(id: number) {
-    const category = await this.categoryRepository.findOne({
-      where: { id },
-      relations: ['items'],
-    });
+    const category = await this.getCategoryById(id);
 
     if (!category) {
       throw new NotFoundException('版块不存在');
     }
 
     // 检查是否有关联题库
-    if (category.items && category.items.length > 0) {
+    const itemCount = await this.itemRepository.count({ where: { category_id: id } });
+    if (itemCount > 0) {
       throw new BadRequestException('该版块下还有关联题库，无法删除');
     }
 
-    await this.categoryRepository.remove(category);
+    await this.categoryRepository.delete({ id });
     return { success: true };
   }
 
@@ -167,7 +192,7 @@ export class RecommendService {
    * 添加题库到版块
    */
   async addItem(dto: AddItemDto) {
-    const category = await this.categoryRepository.findOne({ where: { id: dto.category_id } });
+    const category = await this.getCategoryById(dto.category_id);
     if (!category) {
       throw new NotFoundException('版块不存在');
     }
@@ -223,6 +248,45 @@ export class RecommendService {
     const value = Number(columns || 3);
     if (!Number.isFinite(value)) return 3;
     return Math.min(4, Math.max(1, Math.round(value)));
+  }
+
+  private async getCategoryById(id: number) {
+    const columnsExists = await this.hasColumnsColumn();
+    return this.createCategoryQuery('category', columnsExists)
+      .where('category.id = :id', { id })
+      .getOne();
+  }
+
+  private createCategoryQuery(alias: string, includeColumns: boolean) {
+    const fields = [
+      `${alias}.id`,
+      `${alias}.name`,
+      `${alias}.type`,
+      `${alias}.bind_category_id`,
+      `${alias}.sort`,
+      `${alias}.status`,
+      `${alias}.create_time`,
+      `${alias}.update_time`,
+    ];
+    if (includeColumns) {
+      fields.splice(5, 0, `${alias}.columns`);
+    }
+    return this.categoryRepository.createQueryBuilder(alias).select(fields);
+  }
+
+  private async hasColumnsColumn() {
+    if (this.columnsColumnExistsCache !== null) {
+      return this.columnsColumnExistsCache;
+    }
+    const rows = await this.dataSource.query(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'home_recommend_category'
+         AND COLUMN_NAME = 'columns'`,
+    );
+    this.columnsColumnExistsCache = Number(rows?.[0]?.count || 0) > 0;
+    return this.columnsColumnExistsCache;
   }
 
 }

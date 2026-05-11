@@ -4,7 +4,7 @@ import { Response } from 'express';
 import axios from 'axios';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { DataSource, Repository, In } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
 import { CourseCategory } from '../../database/entities/course-category.entity';
 import { HomeRecommendCategory } from '../../database/entities/home-recommend-category.entity';
@@ -16,6 +16,8 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @ApiTags('小程序-首页推荐')
 @Controller('app/recommend')
 export class AppRecommendController {
+  private columnsColumnExistsCache: boolean | null = null;
+
   constructor(
     @InjectRepository(HomeRecommendCategory)
     private categoryRepository: Repository<HomeRecommendCategory>,
@@ -27,6 +29,7 @@ export class AppRecommendController {
     private courseCategoryRepository: Repository<CourseCategory>,
     @InjectRepository(UserCourseAuth)
     private userCourseAuthRepository: Repository<UserCourseAuth>,
+    private dataSource: DataSource,
   ) {}
 
   @Get('categories')
@@ -36,10 +39,11 @@ export class AppRecommendController {
   async getCategories(@CurrentUser() user?: any) {
     try {
       // 查询所有启用的推荐版块
-      const categories = await this.categoryRepository.find({
-        where: { status: 1 },
-        order: { sort: 'ASC' },
-      });
+      const columnsExists = await this.hasColumnsColumn();
+      const categories = await this.createCategoryQuery('category', columnsExists)
+        .where('category.status = :status', { status: 1 })
+        .orderBy('category.sort', 'ASC')
+        .getMany();
 
       if (!categories || categories.length === 0) {
         return CommonResponseDto.success([]);
@@ -219,6 +223,38 @@ export class AppRecommendController {
     const value = Number(columns || 3);
     if (!Number.isFinite(value)) return 3;
     return Math.min(4, Math.max(1, Math.round(value)));
+  }
+
+  private createCategoryQuery(alias: string, includeColumns: boolean) {
+    const fields = [
+      `${alias}.id`,
+      `${alias}.name`,
+      `${alias}.type`,
+      `${alias}.bind_category_id`,
+      `${alias}.sort`,
+      `${alias}.status`,
+      `${alias}.create_time`,
+      `${alias}.update_time`,
+    ];
+    if (includeColumns) {
+      fields.splice(5, 0, `${alias}.columns`);
+    }
+    return this.categoryRepository.createQueryBuilder(alias).select(fields);
+  }
+
+  private async hasColumnsColumn() {
+    if (this.columnsColumnExistsCache !== null) {
+      return this.columnsColumnExistsCache;
+    }
+    const rows = await this.dataSource.query(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'home_recommend_category'
+         AND COLUMN_NAME = 'columns'`,
+    );
+    this.columnsColumnExistsCache = Number(rows?.[0]?.count || 0) > 0;
+    return this.columnsColumnExistsCache;
   }
 
 }
