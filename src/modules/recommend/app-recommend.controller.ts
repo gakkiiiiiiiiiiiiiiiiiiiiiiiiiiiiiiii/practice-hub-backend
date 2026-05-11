@@ -55,7 +55,41 @@ export class AppRecommendController {
         order: { category_id: 'ASC', sort: 'ASC' },
       });
       const courseIds = Array.from(new Set(recommendItems.map((item) => item.course_id).filter(Boolean)));
-      const courses = courseIds.length > 0 ? await this.courseRepository.find({ where: { id: In(courseIds) } }) : [];
+      const courses =
+        courseIds.length > 0
+          ? await this.courseRepository
+              .createQueryBuilder('course')
+              .select([
+                'course.id',
+                'course.name',
+                'course.subject',
+                'course.category',
+                'course.sub_category',
+                'course.school',
+                'course.major',
+                'course.exam_year',
+                'course.answer_year',
+                'course.cover_img',
+                'course.price',
+                'course.agent_price',
+                'course.is_free',
+                'course.validity_days',
+                'course.student_count',
+                'course.sort',
+                'course.status',
+                'course.introduction',
+                'course.content_type',
+                'course.file_url',
+                'course.file_name',
+                'course.file_type',
+                'course.allow_source_file',
+                'course.recommended_course_ids',
+                'course.create_time',
+                'course.update_time',
+              ])
+              .where('course.id IN (:...courseIds)', { courseIds })
+              .getMany()
+          : [];
       const courseMap = new Map(courses.map((course) => [course.id, course]));
       const bindCategoryIds = categories
         .filter((category) => category.type === 'category' && category.bind_category_id)
