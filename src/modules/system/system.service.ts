@@ -218,6 +218,54 @@ export class SystemService {
     };
   }
 
+  private getDefaultCourseIntroTemplate() {
+    return [
+      '<h3>课程介绍</h3>',
+      '<p>本课程包含系统整理的复习资料与配套练习内容，适合用于日常复习、考前冲刺和查漏补缺。</p>',
+      '<p>购买或激活后，可在小程序内查看课程内容，并根据课程类型进行在线练习或文件学习。</p>',
+    ].join('');
+  }
+
+  async getCourseIntroTemplate() {
+    return this.getJsonConfig('course_intro_template', this.getDefaultCourseIntroTemplate());
+  }
+
+  async setCourseIntroTemplate(template: string) {
+    const safeTemplate = String(template || '').trim();
+    await this.setJsonConfig('course_intro_template', '课程介绍默认模板', safeTemplate);
+    return {
+      success: true,
+      template: safeTemplate,
+    };
+  }
+
+  async getFaqConfig() {
+    return this.getJsonConfig('faq_config', [
+      {
+        question: '激活码如何使用？',
+        answer: '在首页快捷入口或“我的-使用激活码”中输入激活码，激活成功后即可解锁对应课程。',
+      },
+      {
+        question: '购买后在哪里查看课程？',
+        answer: '购买或激活成功后，可在“练习”页面切换并查看已解锁课程。',
+      },
+    ]);
+  }
+
+  async setFaqConfig(items: Array<{ question: string; answer: string }>) {
+    const safeItems = (Array.isArray(items) ? items : [])
+      .map((item) => ({
+        question: String(item?.question || '').trim(),
+        answer: String(item?.answer || '').trim(),
+      }))
+      .filter((item) => item.question && item.answer);
+    await this.setJsonConfig('faq_config', '小程序常见问题配置', safeItems);
+    return {
+      success: true,
+      items: safeItems,
+    };
+  }
+
   /**
    * 获取操作日志列表（支持搜索和筛选）
    */

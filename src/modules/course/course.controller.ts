@@ -24,14 +24,17 @@ export class CourseController {
   ) {}
 
   @Get()
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: '所有课程列表' })
   async getAllCourses(
     @Query('keyword') keyword?: string,
     @Query('category') category?: string,
     @Query('subCategory') subCategory?: string,
     @Query('sortBy') sortBy?: string,
+    @CurrentUser() user?: any,
   ) {
-    const result = await this.courseService.getAllCourses(keyword, category, subCategory, sortBy);
+    const result = await this.courseService.getAllCourses(keyword, category, subCategory, sortBy, user?.userId);
     return CommonResponseDto.success(result);
   }
 

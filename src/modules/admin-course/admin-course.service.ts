@@ -15,6 +15,7 @@ import { UpdateCourseDto } from './dto/update-course.dto';
 import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.dto';
 import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
+import { SystemService } from '../system/system.service';
 
 @Injectable()
 export class AdminCourseService {
@@ -37,12 +38,14 @@ export class AdminCourseService {
     private userCollectionRepository: Repository<UserCollection>,
     @InjectRepository(CourseRecommendation)
     private courseRecommendationRepository: Repository<CourseRecommendation>,
+    private systemService: SystemService,
   ) {}
 
   /**
    * 新增/编辑课程
    */
   async saveCourse(dto: CreateCourseDto | UpdateCourseDto, id?: number) {
+    await this.applyDefaultIntroduction(dto, Boolean(id));
     if (id) {
       const course = await this.courseRepository.findOne({ where: { id } });
       if (!course) {
@@ -75,6 +78,30 @@ export class AdminCourseService {
       const course = this.courseRepository.create(dto);
       return await this.courseRepository.save(course);
     }
+  }
+
+  private async applyDefaultIntroduction(dto: CreateCourseDto | UpdateCourseDto, isUpdate: boolean) {
+    const hasIntroductionField = Object.prototype.hasOwnProperty.call(dto, 'introduction');
+    if (isUpdate && !hasIntroductionField) {
+      return;
+    }
+    if (!this.isBlankRichText(dto.introduction)) {
+      return;
+    }
+    const template = await this.systemService.getCourseIntroTemplate();
+    dto.introduction = template || '';
+  }
+
+  private isBlankRichText(value?: string | null) {
+    const text = String(value || '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&#160;/g, ' ')
+      .replace(/\s+/g, '')
+      .trim();
+    return text.length === 0;
   }
 
   /**

@@ -82,4 +82,36 @@ export class SystemController {
     const result = await this.systemService.setCourseCoverConfig(dto);
     return CommonResponseDto.success(result);
   }
+
+  @Get('settings/course-intro-template')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+  @ApiOperation({ summary: '获取课程介绍默认模板' })
+  async getCourseIntroTemplate() {
+    const result = await this.systemService.getCourseIntroTemplate();
+    return CommonResponseDto.success({ template: result });
+  }
+
+  @Put('settings/course-intro-template')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+  @ApiOperation({ summary: '设置课程介绍默认模板' })
+  async setCourseIntroTemplate(@Body() body: { template?: string }) {
+    const result = await this.systemService.setCourseIntroTemplate(body?.template || '');
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('settings/faqs')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+  @ApiOperation({ summary: '获取小程序常见问题配置' })
+  async getFaqConfig() {
+    const result = await this.systemService.getFaqConfig();
+    return CommonResponseDto.success(result);
+  }
+
+  @Put('settings/faqs')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+  @ApiOperation({ summary: '设置小程序常见问题配置' })
+  async setFaqConfig(@Body() body: { items?: Array<{ question: string; answer: string }> }) {
+    const result = await this.systemService.setFaqConfig(body?.items || []);
+    return CommonResponseDto.success(result);
+  }
 }

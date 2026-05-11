@@ -42,5 +42,8 @@ export class HomeService {
     // 返回所有广播消息，由前端进行轮播
     return { quotes };
   }
-}
 
+  async getFaqs() {
+    return this.systemService.getFaqConfig();
+  }
+}

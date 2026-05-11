@@ -21,5 +21,11 @@ export class HomeController {
     const result = await this.homeService.getDailyQuote();
     return CommonResponseDto.success(result);
   }
-}
 
+  @Get('faqs')
+  @ApiOperation({ summary: '获取常见问题列表' })
+  async getFaqs() {
+    const result = await this.homeService.getFaqs();
+    return CommonResponseDto.success(result);
+  }
+}

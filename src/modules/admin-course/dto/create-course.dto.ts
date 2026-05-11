@@ -103,6 +103,12 @@ export class CreateCourseDto {
 	@IsString()
 	file_type?: string;
 
+	@ApiProperty({ description: '文件课程：文件大小（字节）', required: false })
+	@IsOptional()
+	@Type(() => Number)
+	@IsNumber()
+	file_size?: number;
+
 	@ApiProperty({ description: '文件课程：是否允许用户查看源文件，0=否，1=是', example: 0, required: false })
 	@IsOptional()
 	@Type(() => Number)

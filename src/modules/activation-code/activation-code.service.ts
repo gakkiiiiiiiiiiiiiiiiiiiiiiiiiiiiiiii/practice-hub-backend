@@ -15,6 +15,36 @@ export class ActivationCodeService {
   ) {}
 
   /**
+   * 激活前预览课程信息，不消耗激活码
+   */
+  async previewCode(code: string) {
+    const activationCode = await this.activationCodeRepository.findOne({
+      where: { code, status: ActivationCodeStatus.PENDING },
+      relations: ['course'],
+    });
+
+    if (!activationCode) {
+      throw new BadRequestException('激活码无效或已使用');
+    }
+    if (!activationCode.course) {
+      throw new NotFoundException('激活码对应课程不存在');
+    }
+
+    return {
+      code: activationCode.code,
+      course_id: activationCode.course_id,
+      course_name: activationCode.course.name,
+      course: {
+        id: activationCode.course.id,
+        name: activationCode.course.name,
+        category: activationCode.course.category,
+        sub_category: activationCode.course.sub_category,
+        cover_img: activationCode.course.cover_img,
+      },
+    };
+  }
+
+  /**
    * 激活码核销（并发安全）
    */
   async redeemCode(userId: number, code: string) {
@@ -27,6 +57,7 @@ export class ActivationCodeService {
       // 1. 查询激活码
       const activationCode = await queryRunner.manager.findOne(ActivationCode, {
         where: { code, status: ActivationCodeStatus.PENDING },
+        relations: ['course'],
       });
 
       if (!activationCode) {
@@ -73,6 +104,7 @@ export class ActivationCodeService {
       return {
         success: true,
         course_id: activationCode.course_id,
+        course_name: activationCode.course?.name || '',
       };
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -82,4 +114,3 @@ export class ActivationCodeService {
     }
   }
 }
-

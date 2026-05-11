@@ -139,6 +139,7 @@ export class AppRecommendController {
             type: 'category',
             bind_category_id: category.bind_category_id || null,
             bind_category_name: primaryName,
+            columns: this.normalizeColumns(category.columns),
             items,
             display_type: 'category-grid',
           };
@@ -167,6 +168,7 @@ export class AppRecommendController {
           id: category.id,
           name: category.name,
           type: category.type || 'course',
+          columns: this.normalizeColumns(category.columns),
           items: sortedCourses,
         };
       });
@@ -211,6 +213,12 @@ export class AppRecommendController {
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     return res.send(Buffer.from(imageRes.data));
+  }
+
+  private normalizeColumns(columns?: number | null) {
+    const value = Number(columns || 3);
+    if (!Number.isFinite(value)) return 3;
+    return Math.min(4, Math.max(1, Math.round(value)));
   }
 
 }

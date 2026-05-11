@@ -6,6 +6,7 @@ import { ExamRecord } from '../../database/entities/exam-record.entity';
 import { Question } from '../../database/entities/question.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { Course } from '../../database/entities/course.entity';
+import { UserFileCourseProgress } from '../../database/entities/user-file-course-progress.entity';
 import { GetTrajectoryDto } from './dto/get-trajectory.dto';
 
 @Injectable()
@@ -21,6 +22,8 @@ export class TrajectoryService {
 		private chapterRepository: Repository<Chapter>,
 		@InjectRepository(Course)
 		private courseRepository: Repository<Course>,
+		@InjectRepository(UserFileCourseProgress)
+		private fileProgressRepository: Repository<UserFileCourseProgress>,
 	) {}
 
 	/**
@@ -68,6 +71,30 @@ export class TrajectoryService {
 		}
 
 		const examRecords = await examRecordQuery.getMany();
+
+		const fileProgressQuery = this.fileProgressRepository
+			.createQueryBuilder('progress')
+			.leftJoin(Course, 'course', 'course.id = progress.course_id')
+			.where('progress.user_id = :userId', { userId })
+			.andWhere('progress.last_read_at IS NOT NULL')
+			.orderBy('progress.last_read_at', 'DESC');
+
+		if (startDate) {
+			fileProgressQuery.andWhere('progress.last_read_at >= :startDate', { startDate });
+		}
+
+		const fileProgressRows = await fileProgressQuery
+			.select([
+				'progress.id AS id',
+				'progress.course_id AS courseId',
+				'progress.current_page AS currentPage',
+				'progress.total_pages AS totalPages',
+				'progress.total_seconds AS totalSeconds',
+				'progress.last_read_at AS lastReadAt',
+				'course.name AS courseName',
+				'course.file_name AS fileName',
+			])
+			.getRawMany();
 
 		// 合并并格式化数据
 		const trajectoryList = [];
@@ -134,13 +161,32 @@ export class TrajectoryService {
 			});
 		}
 
+		for (const progress of fileProgressRows) {
+			const currentPage = Number(progress.currentPage) || 0;
+			const totalPages = Number(progress.totalPages) || 0;
+			const totalSeconds = Number(progress.totalSeconds) || 0;
+			const minutes = Math.max(1, Math.round(totalSeconds / 60));
+			trajectoryList.push({
+				id: `file_${progress.id}`,
+				type: 'file',
+				action: '查看文件课程',
+				description: `${progress.courseName || '文件课程'} - ${progress.fileName || '课程资料'}（${currentPage}/${totalPages || 0}页，累计${minutes}分钟）`,
+				createTime: progress.lastReadAt,
+				date: progress.lastReadAt,
+				courseId: Number(progress.courseId),
+				currentPage,
+				totalPages,
+				totalSeconds,
+			});
+		}
+
 		// 按时间倒序排序
 		trajectoryList.sort((a, b) => {
 			return new Date(b.createTime).getTime() - new Date(a.createTime).getTime();
 		});
 
 		// 计算统计数据
-		const stats = this.calculateStats(answerLogs, examRecords, startDate);
+		const stats = this.calculateStats(answerLogs, examRecords, fileProgressRows, startDate);
 
 		return {
 			list: trajectoryList,
@@ -154,6 +200,7 @@ export class TrajectoryService {
 	private calculateStats(
 		answerLogs: UserAnswerLog[],
 		examRecords: ExamRecord[],
+		fileProgressRows: any[],
 		startDate: Date | null,
 	) {
 		const totalAnswers = answerLogs.length;
@@ -173,6 +220,12 @@ export class TrajectoryService {
 			const date = new Date(exam.create_time);
 			studyDays.add(`${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`);
 		});
+		fileProgressRows.forEach((progress) => {
+			const date = new Date(progress.lastReadAt);
+			if (!Number.isNaN(date.getTime())) {
+				studyDays.add(`${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`);
+			}
+		});
 
 		return {
 			totalAnswers,
@@ -180,6 +233,8 @@ export class TrajectoryService {
 			accuracy: Number(accuracy.toFixed(2)),
 			totalExams,
 			passedExams,
+			totalFileReads: fileProgressRows.length,
+			totalFileSeconds: fileProgressRows.reduce((sum, item) => sum + (Number(item.totalSeconds) || 0), 0),
 			studyDays: studyDays.size,
 		};
 	}

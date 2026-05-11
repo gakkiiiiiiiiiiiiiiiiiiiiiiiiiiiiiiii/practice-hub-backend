@@ -13,6 +13,13 @@ import { RedeemCodeDto } from './dto/redeem-code.dto';
 export class ActivationCodeController {
   constructor(private readonly activationCodeService: ActivationCodeService) {}
 
+  @Post('preview')
+  @ApiOperation({ summary: '预览激活码对应课程' })
+  async previewCode(@Body() dto: RedeemCodeDto) {
+    const result = await this.activationCodeService.previewCode(dto.code);
+    return CommonResponseDto.success(result);
+  }
+
   @Post('redeem')
   @ApiOperation({ summary: '使用激活码' })
   async redeemCode(@CurrentUser() user: any, @Body() dto: RedeemCodeDto) {
@@ -20,4 +27,3 @@ export class ActivationCodeController {
     return CommonResponseDto.success(result);
   }
 }
-

@@ -30,6 +30,8 @@ export class UploadService {
 	private authExpireTime: number = 0;
 	private uploadDir: string;
 	private baseUrl: string;
+	private uploadCredentialInternalSkipUntil = 0;
+	private wechatTlsCompatWarned = false;
 
 	constructor(private configService: ConfigService) {
 		this.bucket = this.configService.get<string>('COS_BUCKET', '7072-prod-6g7tpqs40c5a758b-1392943725');
@@ -463,6 +465,53 @@ export class UploadService {
 		}
 		const pathNorm = cloudPath.replace(/^\//, '');
 		const inCloudRun = process.env.WX_CLOUD_RUN_ENV === 'true' || this.isWeChatCloudBase();
+		const uploadMode = String(this.configService.get<string>('WECHAT_TCB_UPLOAD_MODE') || 'auto').toLowerCase();
+		const forcePublicUploadApi = uploadMode === 'public';
+		const shouldSkipInternalApi = forcePublicUploadApi || Date.now() < this.uploadCredentialInternalSkipUntil;
+		const buildUploadCredential = (data: any) => {
+			if (!data.url || !data.authorization || !data.token || !data.cos_file_id) {
+				throw new Error('获取上传链接返回数据不完整');
+			}
+			const finalFileUrl = `https://${this.bucket}.tcb.qcloud.la/${pathNorm}`;
+			return {
+				url: data.url,
+				token: data.token,
+				authorization: data.authorization,
+				cos_file_id: data.cos_file_id,
+				file_id: data.file_id || '',
+				path: pathNorm,
+				finalFileUrl,
+			};
+		};
+		const requestPublicUploadCredential = async (successLog: string) => {
+			try {
+				const token = await this.getWeChatAccessToken();
+				const publicRes = await this.requestWechatPublicApi(
+					`https://api.weixin.qq.com/tcb/uploadfile?access_token=${token}`,
+					{ env: envId, path: pathNorm },
+				);
+				const data = publicRes.data;
+				if (data.errcode && data.errcode !== 0) {
+					throw new Error(data.errmsg || `公网接口失败: ${data.errcode}`);
+				}
+				const credential = buildUploadCredential(data);
+				console.log(successLog);
+				return credential;
+			} catch (fallbackErr: any) {
+				const fbMsg = fallbackErr?.response?.data?.errmsg || fallbackErr.message;
+				console.error('[直传凭证] 公网接口失败:', fbMsg);
+				const configHint = fbMsg?.includes('未配置') ? '请确认已配置 WECHAT_APPID、WECHAT_SECRET：' : '公网接口错误：';
+				throw new BadRequestException('获取上传凭证失败。' + configHint + (fbMsg || ''));
+			}
+		};
+
+		if (shouldSkipInternalApi) {
+			return requestPublicUploadCredential(
+				forcePublicUploadApi
+					? '[直传凭证] 已按 WECHAT_TCB_UPLOAD_MODE=public 使用公网 tcb/uploadfile 获取成功'
+					: '[直传凭证] 已跳过临时不可用的内网接口，通过公网 tcb/uploadfile 获取成功',
+			);
+		}
 
 		// 先尝试云托管内网 _/tcb/uploadfile（无需 access_token）；若返回 85107 再走公网 + access_token
 		try {
@@ -478,62 +527,25 @@ export class UploadService {
 			if (data.errcode && data.errcode !== 0) {
 				throw new Error(data.errmsg || `获取上传链接失败: ${data.errcode}`);
 			}
-			if (!data.url || !data.authorization || !data.token || !data.cos_file_id) {
-				throw new Error('获取上传链接返回数据不完整');
-			}
-			const finalFileUrl = `https://${this.bucket}.tcb.qcloud.la/${pathNorm}`;
-			return {
-				url: data.url,
-				token: data.token,
-				authorization: data.authorization,
-				cos_file_id: data.cos_file_id,
-				file_id: data.file_id || '',
-				path: pathNorm,
-				finalFileUrl,
-			};
+			return buildUploadCredential(data);
 		} catch (error: any) {
 			const body = error?.response?.data;
 			const code = body?.error_code ?? body?.errcode;
 			const status = error?.response?.status;
 			const msg = body?.error_message ?? body?.errmsg ?? error.message;
-			console.error('[直传凭证] 获取失败:', status || '', body || error.message);
+			const isWhitelistError = this.isWechatSafeLinkWhitelistError(body) || code === '85107' || code === 85107;
+			if (isWhitelistError) {
+				this.uploadCredentialInternalSkipUntil = Date.now() + 30 * 60 * 1000;
+				console.warn(
+					'[直传凭证] 内网云调用未配置微信令牌白名单，30分钟内直接使用公网接口兜底。建议在环境变量设置 WECHAT_TCB_UPLOAD_MODE=public，或到云托管控制台配置 /_/tcb/uploadfile 白名单。',
+				);
+			} else {
+				console.error('[直传凭证] 获取失败:', status || '', body || error.message);
+			}
 
 			// 云托管内：内网 404/85107 等失败时，统一尝试公网 tcb/uploadfile + access_token
 			if (inCloudRun) {
-				try {
-					const token = await this.getWeChatAccessToken();
-					const publicRes = await this.requestWechatPublicApi(
-						`https://api.weixin.qq.com/tcb/uploadfile?access_token=${token}`,
-						{ env: envId, path: pathNorm },
-					);
-					const data = publicRes.data;
-					if (data.errcode && data.errcode !== 0) {
-						throw new Error(data.errmsg || `公网接口失败: ${data.errcode}`);
-					}
-					if (!data.url || !data.authorization || !data.token || !data.cos_file_id) {
-						throw new Error('获取上传链接返回数据不完整');
-					}
-					const finalFileUrl = `https://${this.bucket}.tcb.qcloud.la/${pathNorm}`;
-					console.log('[直传凭证] 已通过公网 tcb/uploadfile + access_token 获取成功');
-					return {
-						url: data.url,
-						token: data.token,
-						authorization: data.authorization,
-						cos_file_id: data.cos_file_id,
-						file_id: data.file_id || '',
-						path: pathNorm,
-						finalFileUrl,
-					};
-					} catch (fallbackErr: any) {
-						const fbMsg = fallbackErr?.response?.data?.errmsg || fallbackErr.message;
-						console.error('[直传凭证] 公网 fallback 失败:', fbMsg);
-						const configHint = fbMsg?.includes('未配置') ? '请确认已配置 WECHAT_APPID、WECHAT_SECRET：' : '公网回退错误：';
-						throw new BadRequestException(
-							'获取上传凭证失败（内网接口不可用且公网回退失败）。' +
-								configHint +
-								(fbMsg || ''),
-						);
-					}
+				return requestPublicUploadCredential('[直传凭证] 已通过公网 tcb/uploadfile + access_token 获取成功');
 			}
 
 			if (code === '85107' || code === 85107) {
@@ -577,7 +589,10 @@ export class UploadService {
 				throw error;
 			}
 
-			console.warn('[微信公网接口] TLS 证书校验失败，使用兼容模式重试:', error.message);
+			if (!this.wechatTlsCompatWarned) {
+				this.wechatTlsCompatWarned = true;
+				console.warn('[微信公网接口] TLS 证书校验失败，使用兼容模式重试:', error.message);
+			}
 			const requestConfig = {
 				params,
 				timeout: 10000,
@@ -600,6 +615,12 @@ export class UploadService {
 			message.includes('self-signed certificate') ||
 			message.includes('unable to verify the first certificate')
 		);
+	}
+
+	private isWechatSafeLinkWhitelistError(body: any): boolean {
+		const errorType = String(body?.error_type || '');
+		const message = String(body?.error_message || body?.errmsg || '');
+		return errorType === 'SafeLinkError' || message.includes('URL不在白名单内') || message.includes('URL 未加入白名单');
 	}
 
 	private getEnvIdFromBucket(): string {

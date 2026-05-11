@@ -42,7 +42,7 @@ export class CourseService {
   /**
    * 获取所有课程列表
    */
-  async getAllCourses(keyword?: string, category?: string, subCategory?: string, sortBy?: string) {
+  async getAllCourses(keyword?: string, category?: string, subCategory?: string, sortBy?: string, userId?: number) {
     const queryBuilder = this.courseRepository.createQueryBuilder('course');
 
     // 关键词搜索
@@ -89,7 +89,33 @@ export class CourseService {
       queryBuilder.orderBy('course.sort', 'ASC');
     }
 
-    return await queryBuilder.getMany();
+    const courses = await queryBuilder.getMany();
+    if (!userId || courses.length === 0) {
+      return courses.map((course) => ({
+        ...course,
+        hasAuth: Number(course.price) === 0 || course.is_free === 1,
+      }));
+    }
+
+    const courseIds = courses.map((course) => course.id);
+    const auths = await this.userCourseAuthRepository.find({
+      where: {
+        user_id: userId,
+        course_id: In(courseIds),
+      },
+    });
+    const now = Date.now();
+    const authMap = new Map(
+      auths
+        .filter((auth) => !auth.expire_time || new Date(auth.expire_time).getTime() > now)
+        .map((auth) => [auth.course_id, auth]),
+    );
+
+    return courses.map((course) => ({
+      ...course,
+      hasAuth: Number(course.price) === 0 || course.is_free === 1 || authMap.has(course.id),
+      expireTime: authMap.get(course.id)?.expire_time || null,
+    }));
   }
 
   /**

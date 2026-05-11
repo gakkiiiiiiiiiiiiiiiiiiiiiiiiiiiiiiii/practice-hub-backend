@@ -50,6 +50,7 @@ export class RecommendService {
       type: category.type || 'course',
       bind_category_id: category.bind_category_id || null,
       sort: category.sort,
+      columns: this.normalizeColumns(category.columns),
       status: category.status,
       item_count:
         category.type === 'category'
@@ -83,6 +84,7 @@ export class RecommendService {
       type: category.type || 'course',
       bind_category_id: category.bind_category_id || null,
       sort: category.sort,
+      columns: this.normalizeColumns(category.columns),
       status: category.status,
       items: items.map((item) => ({
         id: item.id,
@@ -102,6 +104,7 @@ export class RecommendService {
       ...dto,
       type: dto.type || 'course',
       bind_category_id: dto.type === 'category' ? dto.bind_category_id : null,
+      columns: this.normalizeColumns(dto.columns),
       status: dto.status !== undefined ? dto.status : 1, // 默认 status = 1 (显示)
     });
     await this.categoryRepository.save(category);
@@ -131,6 +134,7 @@ export class RecommendService {
       ...dto,
       type: nextType,
       bind_category_id: nextBindCategoryId,
+      columns: dto.columns !== undefined ? this.normalizeColumns(dto.columns) : this.normalizeColumns(category.columns),
     });
     await this.categoryRepository.save(category);
 
@@ -213,6 +217,12 @@ export class RecommendService {
     if (bindCategory.parent_id) {
       throw new BadRequestException('分类板块只能绑定一级分类');
     }
+  }
+
+  private normalizeColumns(columns?: number | null) {
+    const value = Number(columns || 3);
+    if (!Number.isFinite(value)) return 3;
+    return Math.min(4, Math.max(1, Math.round(value)));
   }
 
 }

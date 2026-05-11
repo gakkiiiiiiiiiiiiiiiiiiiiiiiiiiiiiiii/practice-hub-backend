@@ -25,6 +25,9 @@ export class HomeRecommendCategory {
   @Column({ type: 'int', default: 0 })
   sort: number; // 排序权重
 
+  @Column({ type: 'int', default: 3 })
+  columns: number; // 小程序端每行显示列数
+
   @Column({ type: 'tinyint', default: 1 })
   status: number; // 0-隐藏, 1-显示
 

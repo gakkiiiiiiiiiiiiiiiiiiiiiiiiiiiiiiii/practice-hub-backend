@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsOptional, IsString, IsNumber, IsIn } from 'class-validator';
+import { IsOptional, IsString, IsNumber, IsIn, Min, Max } from 'class-validator';
 
 export class UpdateCategoryDto {
   @ApiProperty({ description: '版块名称', required: false })
@@ -25,6 +25,14 @@ export class UpdateCategoryDto {
   @Type(() => Number)
   @IsNumber()
   sort?: number;
+
+  @ApiProperty({ description: '小程序端每行显示列数', required: false })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(4)
+  columns?: number;
 
   @ApiProperty({ description: '状态', required: false, enum: [0, 1] })
   @IsOptional()
