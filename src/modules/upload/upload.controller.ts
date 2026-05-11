@@ -24,6 +24,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { AdminRole } from '../../database/entities/sys-user.entity';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { UploadImageBase64Dto } from './dto/upload-image-base64.dto';
 
 @ApiTags('文件上传')
 @Controller('admin/upload')
@@ -257,6 +258,19 @@ export class AppUploadController {
     });
   }
 
+  @Post('image-base64')
+  @ApiOperation({ summary: '小程序 Base64 上传图片（JSON，配合云调用，无需 uploadFile 公网地址）' })
+  async uploadImageBase64(@Body() dto: UploadImageBase64Dto, @CurrentUser() user: any) {
+    const file = this.buildMulterFileFromBase64(dto);
+    const openid = user?.openid || '';
+    const folder = (dto.folder || 'avatars').replace(/[^a-zA-Z0-9_-]/g, '') || 'avatars';
+    const imageUrl = await this.uploadService.uploadImage(file, folder, openid);
+    return CommonResponseDto.success({
+      url: imageUrl,
+      imageUrl,
+    });
+  }
+
   @Post('image')
   @ApiOperation({ summary: '小程序上传图片（用于简答题答案）' })
   @ApiConsumes('multipart/form-data')
@@ -285,6 +299,64 @@ export class AppUploadController {
       url: imageUrl,
       imageUrl, // 兼容前端可能使用的字段名
     });
+  }
+
+  private buildMulterFileFromBase64(dto: UploadImageBase64Dto): Express.Multer.File {
+    let raw = dto.imageBase64.trim();
+    let mime = 'image/jpeg';
+    const dataUri = raw.match(/^data:([^;]+);base64,(.+)$/i);
+    if (dataUri) {
+      mime = dataUri[1].trim();
+      raw = dataUri[2].replace(/\s/g, '');
+    } else {
+      raw = raw.replace(/\s/g, '');
+    }
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(raw, 'base64');
+    } catch {
+      throw new BadRequestException('无效的 Base64 数据');
+    }
+    if (!buffer.length) {
+      throw new BadRequestException('图片内容为空');
+    }
+    const maxBytes = 2 * 1024 * 1024;
+    if (buffer.length > maxBytes) {
+      throw new BadRequestException('图片不能超过 2MB');
+    }
+    const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
+    let mimetype = mime.split(';')[0].trim().toLowerCase();
+    if (!allowedMimeTypes.includes(mimetype)) {
+      mimetype = this.sniffImageMime(buffer) || 'image/jpeg';
+    }
+    if (!allowedMimeTypes.includes(mimetype)) {
+      throw new BadRequestException('不支持的图片类型');
+    }
+    const originalname = (dto.fileName?.trim() || 'avatar.jpg').replace(/[\\/]/g, '') || 'avatar.jpg';
+    return {
+      fieldname: 'file',
+      originalname,
+      encoding: '7bit',
+      mimetype,
+      buffer,
+      size: buffer.length,
+    } as Express.Multer.File;
+  }
+
+  private sniffImageMime(buf: Buffer): string | null {
+    if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+      return 'image/jpeg';
+    }
+    if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+      return 'image/png';
+    }
+    if (buf.length >= 6 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) {
+      return 'image/gif';
+    }
+    if (buf.length >= 12 && buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) {
+      return 'image/webp';
+    }
+    return null;
   }
 }
 
