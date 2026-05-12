@@ -205,6 +205,51 @@ export class SystemService {
     };
   }
 
+  private getDefaultCategoryCoverConfig() {
+    return {
+      width: 1200,
+      height: 1200,
+      backgroundImage: '',
+      backgroundColor: '#F4F7FB',
+      fields: [
+        {
+          id: 'category',
+          label: '一级分类',
+          type: 'courseField',
+          sourceKey: 'category',
+          x: 600,
+          y: 460,
+          fontSize: 112,
+          color: '#8A9AB3',
+          backgroundColor: 'transparent',
+          fontWeight: '800',
+          fontFamily: 'serif',
+          maxWidth: 920,
+          align: 'center',
+          maxLines: 1,
+          lineHeight: 122,
+        },
+        {
+          id: 'sub_category',
+          label: '二级分类',
+          type: 'courseField',
+          sourceKey: 'sub_category',
+          x: 600,
+          y: 735,
+          fontSize: 148,
+          color: '#6F7F99',
+          backgroundColor: 'transparent',
+          fontWeight: '900',
+          fontFamily: 'serif',
+          maxWidth: 980,
+          align: 'center',
+          maxLines: 1,
+          lineHeight: 158,
+        },
+      ],
+    };
+  }
+
   async getCourseCoverConfig() {
     return this.getJsonConfig('course_cover_config', this.getDefaultCourseCoverConfig());
   }
@@ -214,6 +259,19 @@ export class SystemService {
     return {
       success: true,
       message: '课程封面配置已更新',
+      config: dto,
+    };
+  }
+
+  async getCategoryCoverConfig() {
+    return this.getJsonConfig('category_cover_config', this.getDefaultCategoryCoverConfig());
+  }
+
+  async setCategoryCoverConfig(dto: SetCourseCoverConfigDto) {
+    await this.setJsonConfig('category_cover_config', '分类自动生成封面配置', dto);
+    return {
+      success: true,
+      message: '分类封面配置已更新',
       config: dto,
     };
   }

@@ -83,6 +83,22 @@ export class SystemController {
     return CommonResponseDto.success(result);
   }
 
+  @Get('settings/category-cover')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取分类自动生成封面配置' })
+  async getCategoryCoverConfig() {
+    const result = await this.systemService.getCategoryCoverConfig();
+    return CommonResponseDto.success(result);
+  }
+
+  @Put('settings/category-cover')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '设置分类自动生成封面配置' })
+  async setCategoryCoverConfig(@Body() dto: SetCourseCoverConfigDto) {
+    const result = await this.systemService.setCategoryCoverConfig(dto);
+    return CommonResponseDto.success(result);
+  }
+
   @Get('settings/course-intro-template')
   @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
   @ApiOperation({ summary: '获取课程介绍默认模板' })
