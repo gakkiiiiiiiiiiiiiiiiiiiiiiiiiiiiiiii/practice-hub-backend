@@ -868,6 +868,17 @@ export class UploadService {
 		}
 	}
 
+	async readCosUrlBuffer(url: string): Promise<Buffer | null> {
+		if (!this.isAllowedProxyUrl(url)) {
+			return null;
+		}
+		const key = this.extractKeyFromUrl(url);
+		if (!key) {
+			return null;
+		}
+		return this.readCosObjectBuffer(key);
+	}
+
 	getCosPublicUrl(key: string): string {
 		return `https://${this.bucket}.tcb.qcloud.la/${this.normalizeCosKey(key)}`;
 	}

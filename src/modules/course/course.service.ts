@@ -369,6 +369,23 @@ export class CourseService {
     return PDFDocument.load(input, { ignoreEncryption: true });
   }
 
+  private async downloadCourseFileBuffer(fileUrl: string, timeout = 30000): Promise<Buffer> {
+    const cosBuffer = await this.uploadService.readCosUrlBuffer(fileUrl);
+    if (cosBuffer && cosBuffer.length > 0) {
+      return cosBuffer;
+    }
+
+    const res = await axios.get(fileUrl, {
+      responseType: 'arraybuffer',
+      timeout,
+      headers: {
+        Accept: 'application/pdf,application/octet-stream,*/*',
+        'User-Agent': 'Mozilla/5.0 (compatible; PracticeHub/1.0)',
+      },
+    });
+    return Buffer.from(res.data as ArrayBuffer);
+  }
+
   /**
    * 获取课程文件预览 PDF（前 maxPages 页），仅支持 PDF 类型
    */
@@ -384,8 +401,7 @@ export class CourseService {
     if (fileType !== 'pdf') {
       throw new NotFoundException('仅支持 PDF 试读');
     }
-    const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
-    const bytes = res.data as ArrayBuffer;
+    const bytes = await this.downloadCourseFileBuffer(course.file_url, 30000);
     const donorDoc = await this.loadPdfDocument(bytes);
     const pageCount = donorDoc.getPageCount();
     const pagesToCopy = Math.min(maxPages, Math.max(1, pageCount));
@@ -411,8 +427,7 @@ export class CourseService {
     if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
       throw new NotFoundException('课程无 PDF 文件');
     }
-    const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
-    const bytes = res.data as ArrayBuffer;
+    const bytes = await this.downloadCourseFileBuffer(course.file_url, 30000);
     const doc = await this.loadPdfDocument(bytes);
     const fullCount = doc.getPageCount();
     const totalPages =
@@ -581,8 +596,7 @@ export class CourseService {
     });
     await this.notifyPreviewWarmupProgress(courseId, onProgress);
 
-    const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 60000 });
-    const pdfBuffer = Buffer.from(res.data as ArrayBuffer);
+    const pdfBuffer = await this.downloadCourseFileBuffer(course.file_url, 60000);
     const doc = await this.loadPdfDocument(pdfBuffer);
     const totalPages = doc.getPageCount();
     const previewScope: 'full' = 'full';
@@ -688,8 +702,7 @@ export class CourseService {
     if (pdfBufferOverride) {
       pdfBuffer = pdfBufferOverride;
     } else if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
-      const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
-      pdfBuffer = Buffer.from(res.data as ArrayBuffer);
+      pdfBuffer = await this.downloadCourseFileBuffer(course.file_url, 30000);
     } else {
       pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 3);
     }
