@@ -365,6 +365,10 @@ export class CourseService {
     );
   }
 
+  private async loadPdfDocument(input: string | Uint8Array | ArrayBuffer): Promise<PDFDocument> {
+    return PDFDocument.load(input, { ignoreEncryption: true });
+  }
+
   /**
    * 获取课程文件预览 PDF（前 maxPages 页），仅支持 PDF 类型
    */
@@ -382,7 +386,7 @@ export class CourseService {
     }
     const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
     const bytes = res.data as ArrayBuffer;
-    const donorDoc = await PDFDocument.load(bytes);
+    const donorDoc = await this.loadPdfDocument(bytes);
     const pageCount = donorDoc.getPageCount();
     const pagesToCopy = Math.min(maxPages, Math.max(1, pageCount));
     if (pagesToCopy < 1) {
@@ -409,7 +413,7 @@ export class CourseService {
     }
     const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
     const bytes = res.data as ArrayBuffer;
-    const doc = await PDFDocument.load(bytes);
+    const doc = await this.loadPdfDocument(bytes);
     const fullCount = doc.getPageCount();
     const totalPages =
       hasAuth || Number(course.price) === 0 || course.is_free === 1 ? fullCount : Math.min(3, fullCount);
@@ -579,7 +583,7 @@ export class CourseService {
 
     const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 60000 });
     const pdfBuffer = Buffer.from(res.data as ArrayBuffer);
-    const doc = await PDFDocument.load(pdfBuffer);
+    const doc = await this.loadPdfDocument(pdfBuffer);
     const totalPages = doc.getPageCount();
     const previewScope: 'full' = 'full';
     const result: PreviewWarmupResult = {
@@ -729,7 +733,7 @@ export class CourseService {
   }
 
   private async extractSinglePagePdf(pdfBuffer: Buffer, pageNum: number, outputPath: string): Promise<string> {
-    const sourceDoc = await PDFDocument.load(pdfBuffer);
+    const sourceDoc = await this.loadPdfDocument(pdfBuffer);
     const pageCount = sourceDoc.getPageCount();
     if (pageNum < 1 || pageNum > pageCount) {
       throw new NotFoundException('页码超出范围');

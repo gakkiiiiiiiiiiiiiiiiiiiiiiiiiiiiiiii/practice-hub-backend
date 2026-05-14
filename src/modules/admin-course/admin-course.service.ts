@@ -210,6 +210,73 @@ export class AdminCourseService {
     };
   }
 
+  async warmupFailedPreviewCaches(taskId?: number) {
+    const runningTask = await this.findRunningPreviewCacheTask();
+    if (runningTask) {
+      return {
+        ...this.formatPreviewCacheTask(runningTask),
+        total: runningTask.total_courses,
+        started: 0,
+        running: 1,
+        alreadyRunning: true,
+      };
+    }
+
+    const failedTask = taskId
+      ? await this.previewCacheTaskRepository.findOne({ where: { id: taskId } })
+      : await this.previewCacheTaskRepository.findOne({
+          where: { status: PreviewCacheTaskStatus.FAILED },
+          order: { id: 'DESC' },
+        });
+
+    if (!failedTask) {
+      throw new BadRequestException('暂无失败的图片缓存生成任务');
+    }
+
+    const failedDetails = this.parsePreviewCacheFailedDetails(failedTask.failed_details);
+    const courseIds = Array.from(new Set(failedDetails.map((item) => item.courseId).filter((id) => id > 0)));
+    if (courseIds.length === 0) {
+      throw new BadRequestException('失败任务没有可重试的课程明细，请重新生成全部缺失缓存');
+    }
+
+    const courses = await this.courseRepository.find({
+      where: { id: In(courseIds) },
+      select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
+      order: { id: 'ASC' },
+    });
+    const targets = courses.filter(
+      (course) =>
+        course.content_type === 'file' &&
+        (course.file_type || '').toLowerCase() === 'pdf' &&
+        !!course.file_url,
+    );
+    if (targets.length === 0) {
+      throw new BadRequestException('失败明细中的课程已不存在或不是文件类 PDF 课程');
+    }
+
+    const task = await this.previewCacheTaskRepository.save(
+      this.previewCacheTaskRepository.create({
+        task_no: this.createPreviewCacheTaskNo(),
+        trigger_type: 'retry',
+        status: PreviewCacheTaskStatus.PENDING,
+        total_courses: targets.length,
+        message: `任务已创建，准备重新生成 ${targets.length} 个失败课程的图片缓存`,
+        failed_details: JSON.stringify([]),
+      }),
+    );
+
+    void this.runPreviewCacheTask(task.id, targets, false);
+
+    return {
+      total: targets.length,
+      started: targets.length,
+      running: 0,
+      alreadyRunning: false,
+      retryFromTaskNo: failedTask.task_no,
+      ...this.formatPreviewCacheTask(task),
+    };
+  }
+
   private async findRunningPreviewCacheTask() {
     const runningTask = await this.previewCacheTaskRepository.findOne({
       where: {

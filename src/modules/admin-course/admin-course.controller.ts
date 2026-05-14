@@ -120,6 +120,18 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Post('preview-cache/retry-failed')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '重新生成失败课程的文件图片预览缓存' })
+	async retryFailedPreviewCacheTask(@Body() body: { taskId?: number } = {}) {
+		const taskId = body?.taskId === undefined || body?.taskId === null ? undefined : Number(body.taskId);
+		if (taskId !== undefined && (!Number.isInteger(taskId) || taskId <= 0)) {
+			throw new BadRequestException('taskId 必须是大于 0 的整数');
+		}
+		const result = await this.adminCourseService.warmupFailedPreviewCaches(taskId);
+		return CommonResponseDto.success(result);
+	}
+
 	private parseOptionalCourseId(value: unknown): number | null {
 		if (value === undefined || value === null || value === '') {
 			return null;
