@@ -26,6 +26,14 @@ class PreviewCacheTaskInterruptedError extends Error {
   }
 }
 
+type PreviewCacheFailureDetail = {
+  courseId: number;
+  courseName: string;
+  pageNum: number;
+  message: string;
+  time: string;
+};
+
 @Injectable()
 export class AdminCourseService {
   constructor(
@@ -231,12 +239,14 @@ export class AdminCourseService {
       skipped: 0,
       failed: 0,
     };
+    const failedDetails: PreviewCacheFailureDetail[] = [];
     let processedCourses = 0;
 
     await this.previewCacheTaskRepository.update(taskId, {
       status: PreviewCacheTaskStatus.RUNNING,
       started_at: new Date(),
       message: '正在生成图片缓存',
+      failed_details: JSON.stringify(failedDetails),
     });
 
     for (const course of courses) {
@@ -260,17 +270,20 @@ export class AdminCourseService {
             throw new PreviewCacheTaskInterruptedError();
           }
           const processedPages = (progress.generated || 0) + (progress.skipped || 0) + (progress.failed || 0);
+          const pageTotal = totals.totalPages + (progress.totalPages || 0);
+          const pageProcessed = Math.min(pageTotal, totals.generated + totals.skipped + totals.failed + processedPages);
           await this.previewCacheTaskRepository.update(taskId, {
             status: PreviewCacheTaskStatus.RUNNING,
             current_course_id: course.id,
             current_course_name: course.name,
             current_page: progress.currentPage || 0,
-            total_pages: totals.totalPages + (progress.totalPages || 0),
-            processed_pages: totals.generated + totals.skipped + totals.failed + processedPages,
+            total_pages: pageTotal,
+            processed_pages: pageProcessed,
             generated_pages: totals.generated + (progress.generated || 0),
             skipped_pages: totals.skipped + (progress.skipped || 0),
             failed_pages: totals.failed + (progress.failed || 0),
             message: progress.message || `正在生成：${course.name}`,
+            failed_details: JSON.stringify(failedDetails),
           });
         });
 
@@ -278,6 +291,20 @@ export class AdminCourseService {
         totals.generated += result.generated || 0;
         totals.skipped += result.skipped || 0;
         totals.failed += result.failed || 0;
+        if (Array.isArray(result.errors) && result.errors.length > 0) {
+          result.errors.forEach((item) => {
+            failedDetails.push({
+              courseId: course.id,
+              courseName: course.name,
+              pageNum: item.pageNum,
+              message: item.message,
+              time: new Date().toISOString(),
+            });
+          });
+          await this.previewCacheTaskRepository.update(taskId, {
+            failed_details: JSON.stringify(failedDetails),
+          });
+        }
       } catch (error) {
         if (error instanceof PreviewCacheTaskInterruptedError) {
           interrupted = true;
@@ -286,9 +313,17 @@ export class AdminCourseService {
         }
         const message = error instanceof Error ? error.message : String(error);
         totals.failed += 1;
+        failedDetails.push({
+          courseId: course.id,
+          courseName: course.name,
+          pageNum: 0,
+          message,
+          time: new Date().toISOString(),
+        });
         await this.previewCacheTaskRepository.update(taskId, {
           failed_pages: totals.failed,
           message: `课程 ${course.name} 生成失败：${message}`,
+          failed_details: JSON.stringify(failedDetails),
         });
       } finally {
         if (interrupted) {
@@ -302,6 +337,7 @@ export class AdminCourseService {
           generated_pages: totals.generated,
           skipped_pages: totals.skipped,
           failed_pages: totals.failed,
+          failed_details: JSON.stringify(failedDetails),
         });
       }
     }
@@ -313,6 +349,7 @@ export class AdminCourseService {
       current_page: 0,
       message: totals.failed > 0 ? '图片缓存生成完成，但存在失败页面' : '图片缓存生成完成',
       finished_at: new Date(),
+      failed_details: JSON.stringify(failedDetails),
     });
   }
 
@@ -365,6 +402,7 @@ export class AdminCourseService {
       generated: task.generated_pages || 0,
       skipped: task.skipped_pages || 0,
       failed: task.failed_pages || 0,
+      failedDetails: this.parsePreviewCacheFailedDetails(task.failed_details),
       startedAt: task.started_at,
       finishedAt: task.finished_at,
       updatedAt: task.update_time,
@@ -386,6 +424,7 @@ export class AdminCourseService {
       skipped: task.skipped_pages || 0,
       failed: task.failed_pages || 0,
       message: task.message,
+      failedDetails: this.parsePreviewCacheFailedDetails(task.failed_details),
       createTime: task.create_time,
       updateTime: task.update_time,
       finishedAt: task.finished_at,
@@ -411,9 +450,29 @@ export class AdminCourseService {
       generated: 0,
       skipped: 0,
       failed: 0,
+      failedDetails: [],
       courses: [],
       records: [],
     };
+  }
+
+  private parsePreviewCacheFailedDetails(raw?: string | null): PreviewCacheFailureDetail[] {
+    if (!raw) return [];
+    try {
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) return [];
+      return list
+        .map((item) => ({
+          courseId: Number(item?.courseId) || 0,
+          courseName: String(item?.courseName || ''),
+          pageNum: Number(item?.pageNum) || 0,
+          message: String(item?.message || ''),
+          time: String(item?.time || ''),
+        }))
+        .filter((item) => item.courseId > 0 && item.message);
+    } catch (_) {
+      return [];
+    }
   }
 
   private warmupPreviewCacheIfNeeded(course: Course) {

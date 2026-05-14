@@ -56,6 +56,9 @@ export class PreviewCacheTask {
   @Column({ type: 'text', nullable: true, comment: '任务消息或错误信息' })
   message: string | null;
 
+  @Column({ type: 'longtext', nullable: true, comment: '失败明细(JSON)' })
+  failed_details: string | null;
+
   @Column({ type: 'datetime', nullable: true, comment: '开始时间' })
   started_at: Date | null;
 
