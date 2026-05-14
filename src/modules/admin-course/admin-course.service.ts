@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull, Equal } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
@@ -16,6 +16,7 @@ import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.d
 import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 import { SystemService } from '../system/system.service';
+import { CourseService } from '../course/course.service';
 
 @Injectable()
 export class AdminCourseService {
@@ -39,6 +40,7 @@ export class AdminCourseService {
     @InjectRepository(CourseRecommendation)
     private courseRecommendationRepository: Repository<CourseRecommendation>,
     private systemService: SystemService,
+    private courseService: CourseService,
   ) {}
 
   /**
@@ -58,7 +60,9 @@ export class AdminCourseService {
         dto.validity_days = null;
       }
       Object.assign(course, dto);
-      return await this.courseRepository.save(course);
+      const saved = await this.courseRepository.save(course);
+      this.warmupPreviewCacheIfNeeded(saved);
+      return saved;
     } else {
       if (dto.price === undefined || dto.price === null) {
         dto.price = 0.5;
@@ -76,8 +80,55 @@ export class AdminCourseService {
         dto.validity_days = null;
       }
       const course = this.courseRepository.create(dto);
-      return await this.courseRepository.save(course);
+      const saved = await this.courseRepository.save(course);
+      this.warmupPreviewCacheIfNeeded(saved);
+      return saved;
     }
+  }
+
+  async warmupPreviewCache(courseId: number, force = false) {
+    const course = await this.courseRepository.findOne({ where: { id: courseId } });
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+    if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
+      throw new BadRequestException('仅文件类 PDF 课程支持生成图片缓存');
+    }
+    return this.courseService.warmupCoursePreviewCacheInBackground(courseId, force);
+  }
+
+  async warmupAllMissingPreviewCaches() {
+    const courses = await this.courseRepository.find({
+      where: {
+        content_type: 'file',
+        file_type: 'pdf',
+      },
+      select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
+      order: { id: 'ASC' },
+    });
+    const targets = courses.filter((course) => !!course.file_url);
+    const results = targets.map((course) => ({
+      courseId: course.id,
+      courseName: course.name,
+      ...this.courseService.warmupCoursePreviewCacheInBackground(course.id, false),
+    }));
+    return {
+      total: targets.length,
+      started: results.filter((item) => item.started).length,
+      running: results.filter((item) => item.running).length,
+      courses: results,
+    };
+  }
+
+  getPreviewCacheProgress() {
+    return this.courseService.getPreviewWarmupProgress();
+  }
+
+  private warmupPreviewCacheIfNeeded(course: Course) {
+    if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
+      return;
+    }
+    this.courseService.warmupCoursePreviewCacheInBackground(course.id, true);
   }
 
   private async applyDefaultIntroduction(dto: CreateCourseDto | UpdateCourseDto, isUpdate: boolean) {

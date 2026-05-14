@@ -104,6 +104,14 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Get('preview-cache/progress')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '查询课程文件图片预览缓存生成进度' })
+	async getPreviewCacheProgress() {
+		const result = this.adminCourseService.getPreviewCacheProgress();
+		return CommonResponseDto.success(result);
+	}
+
 	private parseOptionalCourseId(value: unknown): number | null {
 		if (value === undefined || value === null || value === '') {
 			return null;
@@ -163,6 +171,25 @@ export class AdminCourseController {
 	@ApiOperation({ summary: '批量更新课程状态（启用/禁用）' })
 	async batchUpdateStatus(@Body() dto: BatchUpdateStatusDto) {
 		const result = await this.adminCourseService.batchUpdateStatus(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('preview-cache/missing')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '生成所有未缓存的课程文件图片预览缓存' })
+	async warmupMissingPreviewCaches() {
+		const result = await this.adminCourseService.warmupAllMissingPreviewCaches();
+		return CommonResponseDto.success(result);
+	}
+
+	@Post(':id/preview-cache')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '生成课程文件图片预览缓存' })
+	async warmupPreviewCache(
+		@Param('id') id: number,
+		@Body() body: { force?: boolean } = {},
+	) {
+		const result = await this.adminCourseService.warmupPreviewCache(+id, body?.force === true);
 		return CommonResponseDto.success(result);
 	}
 }

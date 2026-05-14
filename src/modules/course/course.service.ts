@@ -22,10 +22,31 @@ const PREVIEW_IMAGE_WIDTH = 900;
 const PREVIEW_IMAGE_DENSITY = 100;
 const PREVIEW_IMAGE_QUALITY = 72;
 
+export interface PreviewWarmupResult {
+  courseId: number;
+  totalPages: number;
+  generated: number;
+  skipped: number;
+  failed: number;
+  errors: Array<{ pageNum: number; message: string }>;
+}
+
+export interface PreviewWarmupProgress extends PreviewWarmupResult {
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  courseName?: string;
+  currentPage: number;
+  startedAt: number;
+  updatedAt: number;
+  finishedAt?: number;
+  message?: string;
+}
+
 @Injectable()
 export class CourseService {
   private readonly logger = new Logger(CourseService.name);
   private readonly previewRenderTasks = new Map<string, Promise<{ buffer: Buffer; contentType: string }>>();
+  private readonly previewWarmupTasks = new Map<string, Promise<PreviewWarmupResult>>();
+  private readonly previewWarmupProgress = new Map<number, PreviewWarmupProgress>();
 
   constructor(
     @InjectRepository(Course)
@@ -449,21 +470,202 @@ export class CourseService {
     return renderTask;
   }
 
+  warmupCoursePreviewCacheInBackground(courseId: number, force = false): { started: boolean; running: boolean; progress: PreviewWarmupProgress | null } {
+    const taskKey = `${courseId}:${force ? 'force' : 'reuse'}`;
+    if (this.hasRunningPreviewWarmupTask(courseId)) {
+      return { started: false, running: true, progress: this.previewWarmupProgress.get(courseId) || null };
+    }
+
+    const task = this.generateCoursePreviewCache(courseId, force)
+      .then((result) => {
+        this.logger.log(
+          `课程预览缓存生成完成 course=${courseId} generated=${result.generated} skipped=${result.skipped} failed=${result.failed} total=${result.totalPages}`,
+        );
+        return result;
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const previous = this.previewWarmupProgress.get(courseId);
+        if (previous) {
+          this.updatePreviewWarmupProgress(courseId, {
+            status: 'failed',
+            failed: previous.failed || 1,
+            errors: previous.errors?.length ? previous.errors : [{ pageNum: previous.currentPage || 0, message }],
+            message,
+            finishedAt: Date.now(),
+          });
+        }
+        this.logger.error(`课程预览缓存生成失败 course=${courseId}: ${message}`);
+        return {
+          courseId,
+          totalPages: previous?.totalPages || 0,
+          generated: previous?.generated || 0,
+          skipped: previous?.skipped || 0,
+          failed: previous?.failed || 1,
+          errors: previous?.errors?.length ? previous.errors : [{ pageNum: previous?.currentPage || 0, message }],
+        };
+      })
+      .finally(() => {
+        this.previewWarmupTasks.delete(taskKey);
+      });
+
+    this.previewWarmupTasks.set(taskKey, task);
+    return { started: true, running: false, progress: this.previewWarmupProgress.get(courseId) || null };
+  }
+
+  private hasRunningPreviewWarmupTask(courseId: number) {
+    return Array.from(this.previewWarmupTasks.keys()).some((key) => key.startsWith(`${courseId}:`));
+  }
+
+  getPreviewWarmupProgress(courseIds?: number[]) {
+    const list = Array.from(this.previewWarmupProgress.values())
+      .filter((item) => !courseIds?.length || courseIds.includes(item.courseId))
+      .sort((a, b) => a.courseId - b.courseId);
+    const totals = list.reduce(
+      (acc, item) => {
+        acc.totalCourses += 1;
+        acc.totalPages += item.totalPages || 0;
+        acc.generated += item.generated || 0;
+        acc.skipped += item.skipped || 0;
+        acc.failed += item.failed || 0;
+        acc.processed += (item.generated || 0) + (item.skipped || 0) + (item.failed || 0);
+        if (item.status === 'running' || item.status === 'pending') acc.runningCourses += 1;
+        if (item.status === 'completed') acc.completedCourses += 1;
+        if (item.status === 'failed') acc.failedCourses += 1;
+        return acc;
+      },
+      {
+        totalCourses: 0,
+        runningCourses: 0,
+        completedCourses: 0,
+        failedCourses: 0,
+        totalPages: 0,
+        processed: 0,
+        generated: 0,
+        skipped: 0,
+        failed: 0,
+      },
+    );
+    return { ...totals, courses: list };
+  }
+
+  async generateCoursePreviewCache(courseId: number, force = false): Promise<PreviewWarmupResult> {
+    const course = await this.courseRepository.findOne({ where: { id: courseId } });
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+    if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
+      throw new BadRequestException('仅文件类 PDF 课程支持生成图片缓存');
+    }
+
+    const now = Date.now();
+    this.previewWarmupProgress.set(courseId, {
+      courseId,
+      courseName: course.name,
+      totalPages: 0,
+      generated: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+      status: 'pending',
+      currentPage: 0,
+      startedAt: now,
+      updatedAt: now,
+    });
+
+    const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 60000 });
+    const pdfBuffer = Buffer.from(res.data as ArrayBuffer);
+    const doc = await PDFDocument.load(pdfBuffer);
+    const totalPages = doc.getPageCount();
+    const previewScope: 'full' = 'full';
+    const result: PreviewWarmupResult = {
+      courseId,
+      totalPages,
+      generated: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+    };
+    this.updatePreviewWarmupProgress(courseId, {
+      ...result,
+      status: 'running',
+    });
+
+    for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
+      this.updatePreviewWarmupProgress(courseId, {
+        currentPage: pageNum,
+        status: 'running',
+      });
+      const cachePath = this.getPreviewImageCachePath(courseId, pageNum, course.file_url, previewScope);
+      if (!force && this.isValidPreviewCacheFile(cachePath)) {
+        result.skipped += 1;
+        this.updatePreviewWarmupProgress(courseId, { skipped: result.skipped });
+        continue;
+      }
+      try {
+        await this.renderAndCachePreviewPage({
+          course,
+          hasAuth: true,
+          courseId,
+          pageNum,
+          cachePath,
+          pdfBufferOverride: pdfBuffer,
+        });
+        result.generated += 1;
+        this.updatePreviewWarmupProgress(courseId, { generated: result.generated });
+      } catch (error) {
+        result.failed += 1;
+        const message = error instanceof Error ? error.message : String(error);
+        result.errors.push({ pageNum, message });
+        this.updatePreviewWarmupProgress(courseId, {
+          failed: result.failed,
+          errors: result.errors,
+          message,
+        });
+        this.logger.warn(`课程预览缓存页生成失败 course=${courseId} page=${pageNum}: ${message}`);
+      }
+      // 让出事件循环，避免长任务持续占满容器。
+      await this.sleep(20);
+    }
+
+    this.updatePreviewWarmupProgress(courseId, {
+      ...result,
+      currentPage: totalPages,
+      status: result.failed > 0 ? 'failed' : 'completed',
+      finishedAt: Date.now(),
+    });
+    return result;
+  }
+
+  private updatePreviewWarmupProgress(courseId: number, patch: Partial<PreviewWarmupProgress>) {
+    const previous = this.previewWarmupProgress.get(courseId);
+    if (!previous) return;
+    this.previewWarmupProgress.set(courseId, {
+      ...previous,
+      ...patch,
+      updatedAt: Date.now(),
+    });
+  }
+
   private async renderAndCachePreviewPage({
     course,
     hasAuth,
     courseId,
     pageNum,
     cachePath,
+    pdfBufferOverride,
   }: {
     course: Course;
     hasAuth: boolean;
     courseId: number;
     pageNum: number;
     cachePath: string;
+    pdfBufferOverride?: Buffer;
   }): Promise<{ buffer: Buffer; contentType: string }> {
     let pdfBuffer: Buffer;
-    if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
+    if (pdfBufferOverride) {
+      pdfBuffer = pdfBufferOverride;
+    } else if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
       const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 30000 });
       pdfBuffer = Buffer.from(res.data as ArrayBuffer);
     } else {
@@ -473,13 +675,15 @@ export class CourseService {
     const tmpDir = path.join(os.tmpdir(), `course-preview-${courseId}-${pageNum}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     fs.mkdirSync(tmpDir, { recursive: true });
     const pdfPath = path.join(tmpDir, 'doc.pdf');
+    const pagePdfPath = path.join(tmpDir, 'page.pdf');
     try {
       fs.writeFileSync(pdfPath, pdfBuffer);
+      const renderPdfPath = await this.extractSinglePagePdf(pdfBuffer, pageNum, pagePdfPath);
       let buffer: Buffer | undefined;
       let lastError: unknown;
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          buffer = await this.renderPdfPageToJpeg(pdfPath, pageNum, tmpDir);
+          buffer = await this.renderPdfPageToJpeg(renderPdfPath, 1, tmpDir);
           if (buffer && Buffer.isBuffer(buffer) && buffer.length > 8) break;
           lastError = new Error('PDF 转图未生成有效图片');
         } catch (error) {
@@ -505,6 +709,20 @@ export class CourseService {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       } catch (_) {}
     }
+  }
+
+  private async extractSinglePagePdf(pdfBuffer: Buffer, pageNum: number, outputPath: string): Promise<string> {
+    const sourceDoc = await PDFDocument.load(pdfBuffer);
+    const pageCount = sourceDoc.getPageCount();
+    if (pageNum < 1 || pageNum > pageCount) {
+      throw new NotFoundException('页码超出范围');
+    }
+    const singleDoc = await PDFDocument.create();
+    const [page] = await singleDoc.copyPages(sourceDoc, [pageNum - 1]);
+    singleDoc.addPage(page);
+    const bytes = await singleDoc.save();
+    fs.writeFileSync(outputPath, Buffer.from(bytes));
+    return outputPath;
   }
 
   private async renderPdfPageToJpeg(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
@@ -661,9 +879,19 @@ export class CourseService {
     return path.join(os.tmpdir(), 'course-preview-cache', String(courseId), version, `${pageNum}.jpg`);
   }
 
+  private isValidPreviewCacheFile(cachePath: string): boolean {
+    if (!fs.existsSync(cachePath)) return false;
+    const buffer = fs.readFileSync(cachePath);
+    return this.isJpegBuffer(buffer);
+  }
+
+  private isJpegBuffer(buffer: Buffer): boolean {
+    return buffer.length > 8 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+
   private getPreviewCacheVersion(fileUrl: string, scope: 'full' | 'trial'): string {
     return createHash('md5')
-      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|v2`)
+      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|single-page-v3`)
       .digest('hex')
       .slice(0, 12);
   }
