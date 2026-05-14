@@ -10,6 +10,7 @@ import { UserWrongBook } from '../../database/entities/user-wrong-book.entity';
 import { UserAnswerLog } from '../../database/entities/user-answer-log.entity';
 import { UserCollection } from '../../database/entities/user-collection.entity';
 import { CourseRecommendation } from '../../database/entities/course-recommendation.entity';
+import { PreviewCacheTask, PreviewCacheTaskStatus } from '../../database/entities/preview-cache-task.entity';
 import { CreateCourseDto } from './dto/create-course.dto';
 import { UpdateCourseDto } from './dto/update-course.dto';
 import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.dto';
@@ -39,6 +40,8 @@ export class AdminCourseService {
     private userCollectionRepository: Repository<UserCollection>,
     @InjectRepository(CourseRecommendation)
     private courseRecommendationRepository: Repository<CourseRecommendation>,
+    @InjectRepository(PreviewCacheTask)
+    private previewCacheTaskRepository: Repository<PreviewCacheTask>,
     private systemService: SystemService,
     private courseService: CourseService,
   ) {}
@@ -98,6 +101,17 @@ export class AdminCourseService {
   }
 
   async warmupAllMissingPreviewCaches() {
+    const runningTask = await this.findRunningPreviewCacheTask();
+    if (runningTask) {
+      return {
+        ...this.formatPreviewCacheTask(runningTask),
+        total: runningTask.total_courses,
+        started: 0,
+        running: 1,
+        alreadyRunning: true,
+      };
+    }
+
     const courses = await this.courseRepository.find({
       where: {
         content_type: 'file',
@@ -107,21 +121,225 @@ export class AdminCourseService {
       order: { id: 'ASC' },
     });
     const targets = courses.filter((course) => !!course.file_url);
-    const results = targets.map((course) => ({
-      courseId: course.id,
-      courseName: course.name,
-      ...this.courseService.warmupCoursePreviewCacheInBackground(course.id, false),
-    }));
+    if (targets.length === 0) {
+      return {
+        total: 0,
+        started: 0,
+        running: 0,
+        alreadyRunning: false,
+        ...this.emptyPreviewCacheProgress(),
+      };
+    }
+
+    const task = await this.previewCacheTaskRepository.save(
+      this.previewCacheTaskRepository.create({
+        task_no: this.createPreviewCacheTaskNo(),
+        trigger_type: 'manual',
+        status: PreviewCacheTaskStatus.PENDING,
+        total_courses: targets.length,
+        message: '任务已创建，等待开始生成',
+      }),
+    );
+
+    void this.runPreviewCacheTask(task.id, targets, false);
+
     return {
       total: targets.length,
-      started: results.filter((item) => item.started).length,
-      running: results.filter((item) => item.running).length,
-      courses: results,
+      started: targets.length,
+      running: 0,
+      alreadyRunning: false,
+      ...this.formatPreviewCacheTask(task),
     };
   }
 
-  getPreviewCacheProgress() {
-    return this.courseService.getPreviewWarmupProgress();
+  async getPreviewCacheProgress() {
+    const latest = await this.previewCacheTaskRepository.findOne({
+      where: {},
+      order: { id: 'DESC' },
+    });
+    const records = await this.previewCacheTaskRepository.find({
+      order: { id: 'DESC' },
+      take: 10,
+    });
+    return this.formatPreviewCacheTask(latest, records);
+  }
+
+  private async findRunningPreviewCacheTask() {
+    const runningTask = await this.previewCacheTaskRepository.findOne({
+      where: {
+        status: In([PreviewCacheTaskStatus.PENDING, PreviewCacheTaskStatus.RUNNING]),
+      },
+      order: { update_time: 'DESC' },
+    });
+    if (!runningTask) return null;
+
+    const updatedAt = runningTask.update_time ? new Date(runningTask.update_time).getTime() : 0;
+    const staleMs = 60 * 60 * 1000;
+    if (updatedAt > 0 && Date.now() - updatedAt > staleMs) {
+      await this.previewCacheTaskRepository.update(runningTask.id, {
+        status: PreviewCacheTaskStatus.FAILED,
+        message: '任务长时间无进度，已自动标记为失败，可重新生成',
+        finished_at: new Date(),
+      });
+      return null;
+    }
+    return runningTask;
+  }
+
+  private async runPreviewCacheTask(taskId: number, courses: Course[], force: boolean) {
+    const totals = {
+      totalPages: 0,
+      generated: 0,
+      skipped: 0,
+      failed: 0,
+    };
+    let processedCourses = 0;
+
+    await this.previewCacheTaskRepository.update(taskId, {
+      status: PreviewCacheTaskStatus.RUNNING,
+      started_at: new Date(),
+      message: '正在生成图片缓存',
+    });
+
+    for (const course of courses) {
+      await this.previewCacheTaskRepository.update(taskId, {
+        status: PreviewCacheTaskStatus.RUNNING,
+        current_course_id: course.id,
+        current_course_name: course.name,
+        current_page: 0,
+        message: `正在生成：${course.name}`,
+      });
+
+      try {
+        const result = await this.courseService.generateCoursePreviewCache(course.id, force, async (progress) => {
+          const processedPages = (progress.generated || 0) + (progress.skipped || 0) + (progress.failed || 0);
+          await this.previewCacheTaskRepository.update(taskId, {
+            status: PreviewCacheTaskStatus.RUNNING,
+            current_course_id: course.id,
+            current_course_name: course.name,
+            current_page: progress.currentPage || 0,
+            total_pages: totals.totalPages + (progress.totalPages || 0),
+            processed_pages: totals.generated + totals.skipped + totals.failed + processedPages,
+            generated_pages: totals.generated + (progress.generated || 0),
+            skipped_pages: totals.skipped + (progress.skipped || 0),
+            failed_pages: totals.failed + (progress.failed || 0),
+            message: progress.message || `正在生成：${course.name}`,
+          });
+        });
+
+        totals.totalPages += result.totalPages || 0;
+        totals.generated += result.generated || 0;
+        totals.skipped += result.skipped || 0;
+        totals.failed += result.failed || 0;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        totals.failed += 1;
+        await this.previewCacheTaskRepository.update(taskId, {
+          failed_pages: totals.failed,
+          message: `课程 ${course.name} 生成失败：${message}`,
+        });
+      } finally {
+        processedCourses += 1;
+        await this.previewCacheTaskRepository.update(taskId, {
+          processed_courses: processedCourses,
+          total_pages: totals.totalPages,
+          processed_pages: totals.generated + totals.skipped + totals.failed,
+          generated_pages: totals.generated,
+          skipped_pages: totals.skipped,
+          failed_pages: totals.failed,
+        });
+      }
+    }
+
+    await this.previewCacheTaskRepository.update(taskId, {
+      status: totals.failed > 0 ? PreviewCacheTaskStatus.FAILED : PreviewCacheTaskStatus.COMPLETED,
+      current_course_id: null,
+      current_course_name: null,
+      current_page: 0,
+      message: totals.failed > 0 ? '图片缓存生成完成，但存在失败页面' : '图片缓存生成完成',
+      finished_at: new Date(),
+    });
+  }
+
+  private createPreviewCacheTaskNo() {
+    return `PCT${Date.now()}${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  }
+
+  private formatPreviewCacheTask(task: PreviewCacheTask | null, records: PreviewCacheTask[] = []) {
+    if (!task) {
+      return {
+        ...this.emptyPreviewCacheProgress(),
+        records: records.map((item) => this.formatPreviewCacheRecord(item)),
+      };
+    }
+    const running = [PreviewCacheTaskStatus.PENDING, PreviewCacheTaskStatus.RUNNING].includes(task.status);
+    return {
+      taskId: task.id,
+      taskNo: task.task_no,
+      status: task.status,
+      message: task.message,
+      totalCourses: task.total_courses || 0,
+      processedCourses: task.processed_courses || 0,
+      runningCourses: running ? 1 : 0,
+      completedCourses: task.status === PreviewCacheTaskStatus.COMPLETED ? 1 : 0,
+      failedCourses: task.status === PreviewCacheTaskStatus.FAILED ? 1 : 0,
+      currentCourseId: task.current_course_id,
+      currentCourseName: task.current_course_name,
+      currentPage: task.current_page || 0,
+      totalPages: task.total_pages || 0,
+      processed: task.processed_pages || 0,
+      generated: task.generated_pages || 0,
+      skipped: task.skipped_pages || 0,
+      failed: task.failed_pages || 0,
+      startedAt: task.started_at,
+      finishedAt: task.finished_at,
+      updatedAt: task.update_time,
+      courses: [],
+      records: (records.length ? records : [task]).map((item) => this.formatPreviewCacheRecord(item)),
+    };
+  }
+
+  private formatPreviewCacheRecord(task: PreviewCacheTask) {
+    return {
+      id: task.id,
+      taskNo: task.task_no,
+      status: task.status,
+      totalCourses: task.total_courses || 0,
+      processedCourses: task.processed_courses || 0,
+      totalPages: task.total_pages || 0,
+      processed: task.processed_pages || 0,
+      generated: task.generated_pages || 0,
+      skipped: task.skipped_pages || 0,
+      failed: task.failed_pages || 0,
+      message: task.message,
+      createTime: task.create_time,
+      updateTime: task.update_time,
+      finishedAt: task.finished_at,
+    };
+  }
+
+  private emptyPreviewCacheProgress() {
+    return {
+      taskId: null,
+      taskNo: '',
+      status: 'idle',
+      message: '',
+      totalCourses: 0,
+      processedCourses: 0,
+      runningCourses: 0,
+      completedCourses: 0,
+      failedCourses: 0,
+      currentCourseId: null,
+      currentCourseName: '',
+      currentPage: 0,
+      totalPages: 0,
+      processed: 0,
+      generated: 0,
+      skipped: 0,
+      failed: 0,
+      courses: [],
+      records: [],
+    };
   }
 
   private warmupPreviewCacheIfNeeded(course: Course) {

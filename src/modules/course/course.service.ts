@@ -16,6 +16,7 @@ import { Chapter } from '../../database/entities/chapter.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
 import { CourseRecommendation } from '../../database/entities/course-recommendation.entity';
 import { UserFileCourseProgress } from '../../database/entities/user-file-course-progress.entity';
+import { UploadService } from '../upload/upload.service';
 
 const execFileAsync = promisify(execFile);
 const PREVIEW_IMAGE_WIDTH = 900;
@@ -41,6 +42,8 @@ export interface PreviewWarmupProgress extends PreviewWarmupResult {
   message?: string;
 }
 
+export type PreviewWarmupProgressListener = (progress: PreviewWarmupProgress) => void | Promise<void>;
+
 @Injectable()
 export class CourseService {
   private readonly logger = new Logger(CourseService.name);
@@ -61,6 +64,7 @@ export class CourseService {
     private userFileCourseProgressRepository: Repository<UserFileCourseProgress>,
     private configService: ConfigService,
     private jwtService: JwtService,
+    private uploadService: UploadService,
   ) {}
 
   /**
@@ -440,15 +444,10 @@ export class CourseService {
     }
 	    const previewScope =
 	      hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
-	    const cachePath = this.getPreviewImageCachePath(courseId, pageNum, course.file_url, previewScope);
-	    if (fs.existsSync(cachePath)) {
-	      const cached = fs.readFileSync(cachePath);
-	      if (cached.length > 8) {
-	        return { buffer: cached, contentType: 'image/jpeg' };
-	      }
-	      try {
-	        fs.unlinkSync(cachePath);
-	      } catch (_) {}
+	    const cacheKey = this.getPreviewImageCacheKey(courseId, pageNum, course.file_url, previewScope);
+	    const cached = await this.uploadService.readCosObjectBuffer(cacheKey);
+	    if (cached && this.isJpegBuffer(cached)) {
+	      return { buffer: cached, contentType: 'image/jpeg' };
 	    }
 
     const taskKey = `${courseId}:${previewScope}:${this.getPreviewCacheVersion(course.file_url, previewScope)}:${pageNum}`;
@@ -462,7 +461,7 @@ export class CourseService {
       hasAuth,
       courseId,
       pageNum,
-      cachePath,
+      cacheKey,
     }).finally(() => {
       this.previewRenderTasks.delete(taskKey);
     });
@@ -549,7 +548,11 @@ export class CourseService {
     return { ...totals, courses: list };
   }
 
-  async generateCoursePreviewCache(courseId: number, force = false): Promise<PreviewWarmupResult> {
+  async generateCoursePreviewCache(
+    courseId: number,
+    force = false,
+    onProgress?: PreviewWarmupProgressListener,
+  ): Promise<PreviewWarmupResult> {
     const course = await this.courseRepository.findOne({ where: { id: courseId } });
     if (!course) {
       throw new NotFoundException('课程不存在');
@@ -572,6 +575,7 @@ export class CourseService {
       startedAt: now,
       updatedAt: now,
     });
+    await this.notifyPreviewWarmupProgress(courseId, onProgress);
 
     const res = await axios.get(course.file_url, { responseType: 'arraybuffer', timeout: 60000 });
     const pdfBuffer = Buffer.from(res.data as ArrayBuffer);
@@ -590,16 +594,19 @@ export class CourseService {
       ...result,
       status: 'running',
     });
+    await this.notifyPreviewWarmupProgress(courseId, onProgress);
 
     for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
       this.updatePreviewWarmupProgress(courseId, {
         currentPage: pageNum,
         status: 'running',
       });
-      const cachePath = this.getPreviewImageCachePath(courseId, pageNum, course.file_url, previewScope);
-      if (!force && this.isValidPreviewCacheFile(cachePath)) {
+      await this.notifyPreviewWarmupProgress(courseId, onProgress);
+      const cacheKey = this.getPreviewImageCacheKey(courseId, pageNum, course.file_url, previewScope);
+      if (!force && await this.uploadService.cosObjectExists(cacheKey)) {
         result.skipped += 1;
         this.updatePreviewWarmupProgress(courseId, { skipped: result.skipped });
+        await this.notifyPreviewWarmupProgress(courseId, onProgress);
         continue;
       }
       try {
@@ -608,11 +615,12 @@ export class CourseService {
           hasAuth: true,
           courseId,
           pageNum,
-          cachePath,
+          cacheKey,
           pdfBufferOverride: pdfBuffer,
         });
         result.generated += 1;
         this.updatePreviewWarmupProgress(courseId, { generated: result.generated });
+        await this.notifyPreviewWarmupProgress(courseId, onProgress);
       } catch (error) {
         result.failed += 1;
         const message = error instanceof Error ? error.message : String(error);
@@ -622,6 +630,7 @@ export class CourseService {
           errors: result.errors,
           message,
         });
+        await this.notifyPreviewWarmupProgress(courseId, onProgress);
         this.logger.warn(`课程预览缓存页生成失败 course=${courseId} page=${pageNum}: ${message}`);
       }
       // 让出事件循环，避免长任务持续占满容器。
@@ -634,7 +643,16 @@ export class CourseService {
       status: result.failed > 0 ? 'failed' : 'completed',
       finishedAt: Date.now(),
     });
+    await this.notifyPreviewWarmupProgress(courseId, onProgress);
     return result;
+  }
+
+  private async notifyPreviewWarmupProgress(courseId: number, listener?: PreviewWarmupProgressListener) {
+    if (!listener) return;
+    const progress = this.previewWarmupProgress.get(courseId);
+    if (progress) {
+      await listener(progress);
+    }
   }
 
   private updatePreviewWarmupProgress(courseId: number, patch: Partial<PreviewWarmupProgress>) {
@@ -652,14 +670,14 @@ export class CourseService {
     hasAuth,
     courseId,
     pageNum,
-    cachePath,
+    cacheKey,
     pdfBufferOverride,
   }: {
     course: Course;
     hasAuth: boolean;
     courseId: number;
     pageNum: number;
-    cachePath: string;
+    cacheKey: string;
     pdfBufferOverride?: Buffer;
   }): Promise<{ buffer: Buffer; contentType: string }> {
     let pdfBuffer: Buffer;
@@ -695,10 +713,9 @@ export class CourseService {
         const message = lastError instanceof Error ? lastError.message : 'PDF 转图未生成有效图片';
         throw new Error(`${message}，请确认容器已安装 Ghostscript、Poppler，并查看前置转图命令错误日志`);
       }
-      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-      fs.writeFileSync(cachePath, buffer);
+      await this.uploadService.uploadBufferToCOS(cacheKey, buffer, 'image/jpeg');
       this.logger.log(
-        `PDF预览页生成成功 course=${courseId} page=${pageNum} size=${buffer.length} bytes`,
+        `PDF预览页生成并上传成功 course=${courseId} page=${pageNum} key=${cacheKey} size=${buffer.length} bytes`,
       );
       return { buffer, contentType: 'image/jpeg' };
     } catch (error) {
@@ -869,20 +886,14 @@ export class CourseService {
 	    return undefined;
 	  }
 
-  private getPreviewImageCachePath(
+  private getPreviewImageCacheKey(
     courseId: number,
     pageNum: number,
     fileUrl: string,
     scope: 'full' | 'trial',
   ): string {
     const version = this.getPreviewCacheVersion(fileUrl, scope);
-    return path.join(os.tmpdir(), 'course-preview-cache', String(courseId), version, `${pageNum}.jpg`);
-  }
-
-  private isValidPreviewCacheFile(cachePath: string): boolean {
-    if (!fs.existsSync(cachePath)) return false;
-    const buffer = fs.readFileSync(cachePath);
-    return this.isJpegBuffer(buffer);
+    return ['course-preview-cache', String(courseId), version, `${pageNum}.jpg`].join('/');
   }
 
   private isJpegBuffer(buffer: Buffer): boolean {

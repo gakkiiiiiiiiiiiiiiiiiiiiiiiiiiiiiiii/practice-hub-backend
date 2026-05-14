@@ -5,10 +5,12 @@ import { CourseService } from './course.service';
 import { CourseController } from './course.controller';
 import { AppPdfViewerController } from './app-pdf-viewer.controller';
 import { DatabaseModule } from '../../database/database.module';
+import { UploadModule } from '../upload/upload.module';
 
 @Module({
   imports: [
     DatabaseModule,
+    UploadModule,
     ConfigModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -24,4 +26,3 @@ import { DatabaseModule } from '../../database/database.module';
   exports: [CourseService],
 })
 export class CourseModule {}
-

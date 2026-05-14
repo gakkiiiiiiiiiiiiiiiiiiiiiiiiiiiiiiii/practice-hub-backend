@@ -808,6 +808,78 @@ export class UploadService {
 		return `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
 	}
 
+	/**
+	 * 上传 Buffer 到当前对象存储桶，供服务端生成的缓存文件复用。
+	 */
+	async uploadBufferToCOS(
+		key: string,
+		buffer: Buffer,
+		contentType = 'application/octet-stream',
+		openid = '',
+	): Promise<string> {
+		const safeKey = this.normalizeCosKey(key);
+		const cloudPath = `/${safeKey}`;
+		const metaFileId = await this.getFileMetaData(cloudPath, openid);
+		const uploadOptions: any = {
+			Bucket: this.bucket,
+			Region: this.region,
+			Key: safeKey,
+			Body: buffer,
+			ContentType: contentType,
+			ContentLength: buffer.length,
+			StorageClass: 'STANDARD',
+		};
+		if (metaFileId) {
+			uploadOptions.Headers = { 'x-cos-meta-fileid': metaFileId };
+		}
+		await this.cos.putObject(uploadOptions);
+		return this.getCosPublicUrl(safeKey);
+	}
+
+	async cosObjectExists(key: string): Promise<boolean> {
+		const safeKey = this.normalizeCosKey(key);
+		try {
+			await this.cos.headObject({
+				Bucket: this.bucket,
+				Region: this.region,
+				Key: safeKey,
+			});
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	async readCosObjectBuffer(key: string): Promise<Buffer | null> {
+		const safeKey = this.normalizeCosKey(key);
+		try {
+			const result = await this.cos.getObject({
+				Bucket: this.bucket,
+				Region: this.region,
+				Key: safeKey,
+			});
+			const body = (result as any)?.Body;
+			if (Buffer.isBuffer(body)) return body;
+			if (body instanceof Uint8Array) return Buffer.from(body);
+			if (typeof body === 'string') return Buffer.from(body);
+			return null;
+		} catch {
+			return null;
+		}
+	}
+
+	getCosPublicUrl(key: string): string {
+		return `https://${this.bucket}.tcb.qcloud.la/${this.normalizeCosKey(key)}`;
+	}
+
+	private normalizeCosKey(key: string): string {
+		const safeKey = String(key || '').replace(/^\/+/, '');
+		if (!safeKey || safeKey.includes('..') || safeKey.includes('\\')) {
+			throw new BadRequestException('对象存储路径不安全');
+		}
+		return safeKey;
+	}
+
 	/** 分片临时目录：uploads/temp/{uploadId}/ */
 	private getChunkTempDir(uploadId: string): string {
 		const safe = (uploadId || '').replace(/[^a-zA-Z0-9-_]/g, '');

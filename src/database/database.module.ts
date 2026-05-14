@@ -32,6 +32,7 @@ import { OrderAfterSale } from './entities/order-after-sale.entity';
 import { CourseCategory } from './entities/course-category.entity';
 import { UserCheckin } from './entities/user-checkin.entity';
 import { UserFileCourseProgress } from './entities/user-file-course-progress.entity';
+import { PreviewCacheTask } from './entities/preview-cache-task.entity';
 
 @Module({
 	imports: [
@@ -68,6 +69,7 @@ import { UserFileCourseProgress } from './entities/user-file-course-progress.ent
 			CourseCategory,
 			UserCheckin,
 			UserFileCourseProgress,
+			PreviewCacheTask,
 		]),
 	],
 	exports: [TypeOrmModule],

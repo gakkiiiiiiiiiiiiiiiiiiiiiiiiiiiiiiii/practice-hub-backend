@@ -108,7 +108,7 @@ export class AdminCourseController {
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 	@ApiOperation({ summary: '查询课程文件图片预览缓存生成进度' })
 	async getPreviewCacheProgress() {
-		const result = this.adminCourseService.getPreviewCacheProgress();
+		const result = await this.adminCourseService.getPreviewCacheProgress();
 		return CommonResponseDto.success(result);
 	}
 
