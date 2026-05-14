@@ -19,6 +19,13 @@ import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 import { SystemService } from '../system/system.service';
 import { CourseService } from '../course/course.service';
 
+class PreviewCacheTaskInterruptedError extends Error {
+  constructor() {
+    super('图片缓存生成任务已中断');
+    this.name = 'PreviewCacheTaskInterruptedError';
+  }
+}
+
 @Injectable()
 export class AdminCourseService {
   constructor(
@@ -164,6 +171,37 @@ export class AdminCourseService {
     return this.formatPreviewCacheTask(latest, records);
   }
 
+  async interruptPreviewCacheTask() {
+    const runningTask = await this.findRunningPreviewCacheTask();
+    if (!runningTask) {
+      const latest = await this.previewCacheTaskRepository.findOne({
+        where: {},
+        order: { id: 'DESC' },
+      });
+      return {
+        interrupted: false,
+        message: '当前没有正在生成的图片缓存任务',
+        ...this.formatPreviewCacheTask(latest),
+      };
+    }
+
+    await this.previewCacheTaskRepository.update(runningTask.id, {
+      status: PreviewCacheTaskStatus.INTERRUPTED,
+      current_course_id: null,
+      current_course_name: null,
+      current_page: 0,
+      message: '任务已手动中断',
+      finished_at: new Date(),
+    });
+
+    const task = await this.previewCacheTaskRepository.findOne({ where: { id: runningTask.id } });
+    return {
+      interrupted: true,
+      message: '已中断图片缓存生成任务',
+      ...this.formatPreviewCacheTask(task),
+    };
+  }
+
   private async findRunningPreviewCacheTask() {
     const runningTask = await this.previewCacheTaskRepository.findOne({
       where: {
@@ -202,6 +240,11 @@ export class AdminCourseService {
     });
 
     for (const course of courses) {
+      if (await this.isPreviewCacheTaskInterrupted(taskId)) {
+        await this.markPreviewCacheTaskInterrupted(taskId);
+        return;
+      }
+
       await this.previewCacheTaskRepository.update(taskId, {
         status: PreviewCacheTaskStatus.RUNNING,
         current_course_id: course.id,
@@ -210,8 +253,12 @@ export class AdminCourseService {
         message: `正在生成：${course.name}`,
       });
 
+      let interrupted = false;
       try {
         const result = await this.courseService.generateCoursePreviewCache(course.id, force, async (progress) => {
+          if (await this.isPreviewCacheTaskInterrupted(taskId)) {
+            throw new PreviewCacheTaskInterruptedError();
+          }
           const processedPages = (progress.generated || 0) + (progress.skipped || 0) + (progress.failed || 0);
           await this.previewCacheTaskRepository.update(taskId, {
             status: PreviewCacheTaskStatus.RUNNING,
@@ -232,6 +279,11 @@ export class AdminCourseService {
         totals.skipped += result.skipped || 0;
         totals.failed += result.failed || 0;
       } catch (error) {
+        if (error instanceof PreviewCacheTaskInterruptedError) {
+          interrupted = true;
+          await this.markPreviewCacheTaskInterrupted(taskId);
+          return;
+        }
         const message = error instanceof Error ? error.message : String(error);
         totals.failed += 1;
         await this.previewCacheTaskRepository.update(taskId, {
@@ -239,6 +291,9 @@ export class AdminCourseService {
           message: `课程 ${course.name} 生成失败：${message}`,
         });
       } finally {
+        if (interrupted) {
+          return;
+        }
         processedCourses += 1;
         await this.previewCacheTaskRepository.update(taskId, {
           processed_courses: processedCourses,
@@ -257,6 +312,25 @@ export class AdminCourseService {
       current_course_name: null,
       current_page: 0,
       message: totals.failed > 0 ? '图片缓存生成完成，但存在失败页面' : '图片缓存生成完成',
+      finished_at: new Date(),
+    });
+  }
+
+  private async isPreviewCacheTaskInterrupted(taskId: number) {
+    const task = await this.previewCacheTaskRepository.findOne({
+      where: { id: taskId },
+      select: ['id', 'status'],
+    });
+    return task?.status === PreviewCacheTaskStatus.INTERRUPTED;
+  }
+
+  private async markPreviewCacheTaskInterrupted(taskId: number) {
+    await this.previewCacheTaskRepository.update(taskId, {
+      status: PreviewCacheTaskStatus.INTERRUPTED,
+      current_course_id: null,
+      current_course_name: null,
+      current_page: 0,
+      message: '任务已手动中断',
       finished_at: new Date(),
     });
   }

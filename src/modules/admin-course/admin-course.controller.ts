@@ -112,6 +112,14 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Post('preview-cache/interrupt')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '中断正在生成的课程文件图片预览缓存任务' })
+	async interruptPreviewCacheTask() {
+		const result = await this.adminCourseService.interruptPreviewCacheTask();
+		return CommonResponseDto.success(result);
+	}
+
 	private parseOptionalCourseId(value: unknown): number | null {
 		if (value === undefined || value === null || value === '') {
 			return null;

@@ -5,6 +5,7 @@ export enum PreviewCacheTaskStatus {
   RUNNING = 'running',
   COMPLETED = 'completed',
   FAILED = 'failed',
+  INTERRUPTED = 'interrupted',
 }
 
 @Entity('preview_cache_task')
