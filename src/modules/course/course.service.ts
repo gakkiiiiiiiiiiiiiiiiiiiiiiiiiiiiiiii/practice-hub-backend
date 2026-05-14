@@ -19,9 +19,9 @@ import { UserFileCourseProgress } from '../../database/entities/user-file-course
 import { UploadService } from '../upload/upload.service';
 
 const execFileAsync = promisify(execFile);
-const PREVIEW_IMAGE_WIDTH = 900;
-const PREVIEW_IMAGE_DENSITY = 100;
-const PREVIEW_IMAGE_QUALITY = 72;
+const PREVIEW_IMAGE_WIDTH = 1440;
+const PREVIEW_IMAGE_DENSITY = 160;
+const PREVIEW_IMAGE_QUALITY = 90;
 
 export interface PreviewWarmupResult {
   courseId: number;
@@ -902,7 +902,7 @@ export class CourseService {
 
   private getPreviewCacheVersion(fileUrl: string, scope: 'full' | 'trial'): string {
     return createHash('md5')
-      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|single-page-v3`)
+      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|single-page-v4`)
       .digest('hex')
       .slice(0, 12);
   }
