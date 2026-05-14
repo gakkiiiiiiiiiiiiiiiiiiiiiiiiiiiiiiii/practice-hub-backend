@@ -163,6 +163,7 @@ export class CourseController {
       return res.status(304).end();
     }
     res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Length', String(buffer.length));
     this.setCacheHeaders(res, etag, 86400);
     res.send(buffer);
   }

@@ -18,6 +18,9 @@ import { CourseRecommendation } from '../../database/entities/course-recommendat
 import { UserFileCourseProgress } from '../../database/entities/user-file-course-progress.entity';
 
 const execFileAsync = promisify(execFile);
+const PREVIEW_IMAGE_WIDTH = 900;
+const PREVIEW_IMAGE_DENSITY = 100;
+const PREVIEW_IMAGE_QUALITY = 72;
 
 @Injectable()
 export class CourseService {
@@ -490,6 +493,9 @@ export class CourseService {
       }
       fs.mkdirSync(path.dirname(cachePath), { recursive: true });
       fs.writeFileSync(cachePath, buffer);
+      this.logger.log(
+        `PDF预览页生成成功 course=${courseId} page=${pageNum} size=${buffer.length} bytes`,
+      );
       return { buffer, contentType: 'image/jpeg' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -512,10 +518,10 @@ export class CourseService {
       const { fromPath } = await import('pdf2pic');
       const convert = fromPath(pdfPath, {
         format: 'jpeg',
-        quality: 82,
-        width: 1000,
+        quality: PREVIEW_IMAGE_QUALITY,
+        width: PREVIEW_IMAGE_WIDTH,
         preserveAspectRatio: true,
-        density: 120,
+        density: PREVIEW_IMAGE_DENSITY,
       });
       let result = await this.withTimeout(
         convert(pageNum, { responseType: 'buffer' }) as Promise<unknown>,
@@ -548,9 +554,9 @@ export class CourseService {
         execFileAsync('pdftoppm', [
           '-jpeg',
           '-jpegopt',
-          'quality=82',
+          `quality=${PREVIEW_IMAGE_QUALITY}`,
           '-r',
-          '120',
+          String(PREVIEW_IMAGE_DENSITY),
           '-f',
           String(pageNum),
           '-l',
@@ -582,8 +588,8 @@ export class CourseService {
           '-dBATCH',
           '-dNOPAUSE',
           '-sDEVICE=jpeg',
-          '-dJPEGQ=82',
-          '-r120',
+          `-dJPEGQ=${PREVIEW_IMAGE_QUALITY}`,
+          `-r${PREVIEW_IMAGE_DENSITY}`,
           `-dFirstPage=${pageNum}`,
           `-dLastPage=${pageNum}`,
           `-sOutputFile=${outputPath}`,
@@ -656,7 +662,10 @@ export class CourseService {
   }
 
   private getPreviewCacheVersion(fileUrl: string, scope: 'full' | 'trial'): string {
-    return createHash('md5').update(`${fileUrl}|${scope}|jpeg|1000|120|82`).digest('hex').slice(0, 12);
+    return createHash('md5')
+      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|v2`)
+      .digest('hex')
+      .slice(0, 12);
   }
 
   /**
