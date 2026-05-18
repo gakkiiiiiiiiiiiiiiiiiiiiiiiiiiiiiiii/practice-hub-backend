@@ -11,8 +11,11 @@ import {
 	UseInterceptors,
 	UseFilters,
 	BadRequestException,
+	ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { AdminCourseService } from './admin-course.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -26,6 +29,8 @@ import { UpdateCourseDto } from './dto/update-course.dto';
 import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.dto';
 import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 
 @ApiTags('管理后台-课程管理')
 @Controller('admin/courses')
@@ -211,5 +216,87 @@ export class AdminCourseController {
 	) {
 		const result = await this.adminCourseService.warmupPreviewCache(+id, body?.force === true);
 		return CommonResponseDto.success(result);
+	}
+}
+
+@ApiTags('小程序端-课程管理')
+@Controller('app/course-admin')
+@UseGuards(JwtAuthGuard)
+@UseFilters(HttpExceptionFilter)
+@ApiBearerAuth()
+export class AppCourseAdminController {
+	constructor(
+		private readonly adminCourseService: AdminCourseService,
+		@InjectRepository(AppUser)
+		private readonly appUserRepository: Repository<AppUser>,
+	) {}
+
+	@Post('file-course')
+	@ApiOperation({ summary: '小程序管理员创建文件类课程' })
+	async createFileCourse(@Body() body: Record<string, any>, @CurrentUser() user: any) {
+		await this.assertAppAdmin(user);
+		const name = String(body?.name || '').trim();
+		const fileUrl = String(body?.file_url || body?.fileUrl || '').trim();
+		const fileName = String(body?.file_name || body?.fileName || name || '').trim();
+		const fileType = String(body?.file_type || body?.fileType || '').trim().toLowerCase();
+		if (!name) {
+			throw new BadRequestException('课程名称不能为空');
+		}
+		if (!fileUrl) {
+			throw new BadRequestException('课程文件地址不能为空');
+		}
+		if (!['pdf', 'doc', 'docx'].includes(fileType)) {
+			throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
+		}
+
+		const dto: CreateCourseDto = {
+			name,
+			subject: this.optionalText(body?.subject),
+			category: this.optionalText(body?.category),
+			sub_category: this.optionalText(body?.sub_category || body?.subCategory),
+			school: this.optionalText(body?.school),
+			major: this.optionalText(body?.major),
+			exam_year: this.optionalText(body?.exam_year || body?.examYear),
+			answer_year: this.optionalText(body?.answer_year || body?.answerYear),
+			price: this.optionalNumber(body?.price, 0.5),
+			agent_price: this.optionalNumber(body?.agent_price ?? body?.agentPrice, 0.1),
+			is_free: this.optionalNumber(body?.is_free ?? body?.isFree, 0),
+			validity_days: this.optionalNumber(body?.validity_days ?? body?.validityDays, 365),
+			introduction: this.optionalText(body?.introduction),
+			content_type: 'file',
+			file_url: fileUrl,
+			file_name: fileName || name,
+			file_type: fileType,
+			file_size: this.optionalNumber(body?.file_size ?? body?.fileSize, 0),
+			allow_source_file: this.optionalNumber(body?.allow_source_file ?? body?.allowSourceFile, 0),
+		};
+		const result = await this.adminCourseService.saveCourse(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	private async assertAppAdmin(user: any) {
+		const userId = Number(user?.userId || user?.id);
+		if (userId) {
+			const dbUser = await this.appUserRepository.findOne({ where: { id: userId }, select: ['id', 'role'] });
+			if ([AppUserRole.ADMIN, AppUserRole.BANK_ADMIN].includes(dbUser?.role)) {
+				return;
+			}
+		} else if ([AppUserRole.ADMIN, AppUserRole.BANK_ADMIN].includes(user?.role) || user?.is_admin === true || user?.is_bank_admin === true) {
+			return;
+		}
+		throw new ForbiddenException('仅小程序管理员可上传课程');
+	}
+
+	private optionalText(value: unknown): string | undefined {
+		const text = String(value ?? '').trim();
+		return text || undefined;
+	}
+
+	private optionalNumber(value: unknown, fallback: number): number {
+		if (value === undefined || value === null || value === '') {
+			return fallback;
+		}
+		const num = Number(value);
+		return Number.isFinite(num) ? num : fallback;
 	}
 }

@@ -40,7 +40,7 @@ export class AdminController {
 	}
 
 	@Put(':id/role')
-	@ApiOperation({ summary: '设置小程序用户角色（普通用户/小程序超级管理员）' })
+	@ApiOperation({ summary: '设置小程序用户角色（普通用户/题库管理员/小程序超级管理员）' })
 	async updateUserRole(@Param('id') id: number, @Body('role') role: AppUserRole) {
 		const result = await this.adminService.updateUserRole(+id, role);
 		return CommonResponseDto.success(result);

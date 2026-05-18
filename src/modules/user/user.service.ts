@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { AppUser } from '../../database/entities/app-user.entity';
+import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { BindPhoneDto } from './dto/bind-phone.dto';
 
@@ -30,8 +30,9 @@ export class UserService {
       nickname: user.nickname,
       avatar: user.avatar,
       phone: user.phone,
-      role: user.role || 'user',
-      is_admin: user.role === 'admin',
+      role: user.role || AppUserRole.USER,
+      is_admin: user.role === AppUserRole.ADMIN,
+      is_bank_admin: user.role === AppUserRole.BANK_ADMIN,
       isVip,
       vip_expire_time: user.vip_expire_time,
     };

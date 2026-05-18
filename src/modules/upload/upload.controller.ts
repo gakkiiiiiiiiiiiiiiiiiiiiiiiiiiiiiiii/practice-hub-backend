@@ -7,6 +7,7 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  ForbiddenException,
   UseGuards,
   Req,
   Res,
@@ -15,6 +16,8 @@ import {
 import { Request, Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import { UploadService } from './upload.service';
@@ -25,6 +28,7 @@ import { AdminRole } from '../../database/entities/sys-user.entity';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UploadImageBase64Dto } from './dto/upload-image-base64.dto';
+import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 
 @ApiTags('文件上传')
 @Controller('admin/upload')
@@ -231,7 +235,56 @@ export class UploadController {
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class AppUploadController {
-  constructor(private readonly uploadService: UploadService) {}
+  constructor(
+    private readonly uploadService: UploadService,
+    @InjectRepository(AppUser)
+    private readonly appUserRepository: Repository<AppUser>,
+  ) {}
+
+  private async assertAppAdmin(user: any) {
+    const userId = Number(user?.userId || user?.id);
+    if (userId) {
+      const dbUser = await this.appUserRepository.findOne({ where: { id: userId }, select: ['id', 'role'] });
+      if ([AppUserRole.ADMIN, AppUserRole.BANK_ADMIN].includes(dbUser?.role)) {
+        return;
+      }
+    } else if ([AppUserRole.ADMIN, AppUserRole.BANK_ADMIN].includes(user?.role) || user?.is_admin === true || user?.is_bank_admin === true) {
+      return;
+    }
+    throw new ForbiddenException('仅小程序管理员可上传课程');
+  }
+
+  @Post('course-file-cloud-path')
+  @ApiOperation({ summary: '小程序管理员获取课程文件云存储路径（配合 wx.cloud.uploadFile）' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['fileName'],
+      properties: {
+        fileName: { type: 'string', description: '原始文件名，如 xxx.pdf' },
+      },
+    },
+  })
+  async getCourseFileCloudPath(@Body() body: { fileName?: string }, @CurrentUser() user: any) {
+    await this.assertAppAdmin(user);
+    const fileName = body?.fileName?.trim();
+    if (!fileName) {
+      throw new BadRequestException('请传入 fileName');
+    }
+    const safeFileName = fileName.replace(/[\\/]/g, '').slice(0, 120);
+    const ext = safeFileName.toLowerCase().match(/\.(pdf|doc|docx)$/)?.[0] || '';
+    if (!ext) {
+      throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
+    }
+    const userId = Number(user?.userId || user?.id) || 0;
+    const cloudPath = `course-files/app-${userId || 'admin'}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}${ext}`;
+    return CommonResponseDto.success({
+      cloudPath,
+      fileUrl: this.uploadService.getCosPublicUrl(cloudPath),
+      fileName: safeFileName,
+      fileType: ext.slice(1),
+    });
+  }
 
   @Post('image-upload-url')
   @ApiOperation({ summary: '小程序获取图片直传对象存储凭证' })

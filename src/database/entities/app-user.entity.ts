@@ -8,6 +8,7 @@ import {
 
 export enum AppUserRole {
   USER = 'user',
+  BANK_ADMIN = 'bank_admin',
   ADMIN = 'admin',
 }
 

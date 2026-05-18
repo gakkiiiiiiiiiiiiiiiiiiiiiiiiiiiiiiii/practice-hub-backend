@@ -153,6 +153,7 @@ export class AuthService {
 						vip_expire_time: user.vip_expire_time,
 						role: user.role || AppUserRole.USER,
 						is_admin: user.role === AppUserRole.ADMIN,
+						is_bank_admin: user.role === AppUserRole.BANK_ADMIN,
 					},
 				};
 		} catch (error) {
@@ -261,6 +262,7 @@ export class AuthService {
 					vip_expire_time: user.vip_expire_time,
 					role: user.role || AppUserRole.USER,
 					is_admin: user.role === AppUserRole.ADMIN,
+					is_bank_admin: user.role === AppUserRole.BANK_ADMIN,
 				},
 			};
 		} catch (error) {

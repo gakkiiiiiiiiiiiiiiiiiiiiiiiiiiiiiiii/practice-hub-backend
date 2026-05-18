@@ -73,6 +73,7 @@ export class AdminService {
 				phone: user.phone,
 				role: user.role || AppUserRole.USER,
 				isAppAdmin: user.role === AppUserRole.ADMIN,
+				isBankAdmin: user.role === AppUserRole.BANK_ADMIN,
 				vipStatus: isVip,
 				vipExpireTime: user.vip_expire_time,
 				status: (user as any).status !== undefined ? (user as any).status : 1, // 默认正常
@@ -151,6 +152,7 @@ export class AdminService {
 				phone: user.phone,
 				role: user.role || AppUserRole.USER,
 				isAppAdmin: user.role === AppUserRole.ADMIN,
+				isBankAdmin: user.role === AppUserRole.BANK_ADMIN,
 				vipStatus: isVip,
 				vipExpireTime: user.vip_expire_time,
 				status: (user as any).status !== undefined ? (user as any).status : 1,
@@ -192,7 +194,7 @@ export class AdminService {
 	}
 
 	async updateUserRole(userId: number, role: AppUserRole) {
-		if (![AppUserRole.USER, AppUserRole.ADMIN].includes(role)) {
+		if (![AppUserRole.USER, AppUserRole.BANK_ADMIN, AppUserRole.ADMIN].includes(role)) {
 			throw new BadRequestException('小程序用户角色无效');
 		}
 
@@ -209,6 +211,7 @@ export class AdminService {
 			id: user.id,
 			role: user.role,
 			isAppAdmin: user.role === AppUserRole.ADMIN,
+			isBankAdmin: user.role === AppUserRole.BANK_ADMIN,
 		};
 	}
 }

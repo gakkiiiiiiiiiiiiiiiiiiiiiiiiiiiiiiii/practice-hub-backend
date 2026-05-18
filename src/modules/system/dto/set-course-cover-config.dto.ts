@@ -94,7 +94,42 @@ class CourseCoverFieldDto {
   lineHeight?: number;
 }
 
+class CourseCoverTemplateItemDto {
+  @ApiProperty({ description: '模板ID', example: 'default' })
+  @IsString()
+  @IsNotEmpty()
+  id: string;
+
+  @ApiProperty({ description: '模板名称', example: '默认课程封面' })
+  @IsString()
+  @IsNotEmpty()
+  name: string;
+
+  @ApiProperty({ description: '绑定分类路径', required: false, example: ['考研专业课', '心理学'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  bindCategory?: string[];
+
+  @ApiProperty({ description: '封面配置' })
+  @ValidateNested()
+  @Type(() => SetCourseCoverConfigDto)
+  config: SetCourseCoverConfigDto;
+}
+
 export class SetCourseCoverConfigDto {
+  @ApiProperty({ description: '当前默认模板ID', required: false })
+  @IsOptional()
+  @IsString()
+  activeTemplateId?: string;
+
+  @ApiProperty({ description: '多套封面模板', required: false, type: [CourseCoverTemplateItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CourseCoverTemplateItemDto)
+  templates?: CourseCoverTemplateItemDto[];
+
   @ApiProperty({ description: '背景图 URL', required: false })
   @IsOptional()
   @IsString()
@@ -106,6 +141,7 @@ export class SetCourseCoverConfigDto {
   backgroundColor?: string;
 
   @ApiProperty({ description: '画布宽度', example: 1200 })
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(200)
@@ -113,6 +149,7 @@ export class SetCourseCoverConfigDto {
   width: number;
 
   @ApiProperty({ description: '画布高度', example: 1200 })
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(200)
@@ -120,6 +157,7 @@ export class SetCourseCoverConfigDto {
   height: number;
 
   @ApiProperty({ description: '字段配置列表', type: [CourseCoverFieldDto] })
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CourseCoverFieldDto)
