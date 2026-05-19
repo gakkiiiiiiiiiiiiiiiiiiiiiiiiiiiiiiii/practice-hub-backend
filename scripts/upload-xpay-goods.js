@@ -54,9 +54,37 @@ function toCents(value) {
 	return Number.isFinite(cents) ? cents : 0;
 }
 
-function truncateText(value, maxLength) {
+const WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES = 40;
+const WECHAT_VIRTUAL_PAY_REMARK_MAX_BYTES = 128;
+
+function truncateUtf8Bytes(value, maxBytes) {
 	const text = String(value || '').trim();
-	return text.length > maxLength ? text.slice(0, maxLength) : text;
+	if (!text || maxBytes <= 0) return '';
+	let used = 0;
+	let result = '';
+	for (const char of text) {
+		const size = Buffer.byteLength(char, 'utf8');
+		if (used + size > maxBytes) break;
+		used += size;
+		result += char;
+	}
+	return result || text.slice(0, 1);
+}
+
+function buildVirtualPayGoodsName(courseName, suffix = '') {
+	const suffixText = suffix ? ` ${suffix}` : '';
+	const suffixBytes = Buffer.byteLength(suffixText, 'utf8');
+	const maxBaseBytes = Math.max(1, WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES - suffixBytes);
+	const base = truncateUtf8Bytes(String(courseName || '').trim(), maxBaseBytes);
+	return truncateUtf8Bytes(`${base}${suffixText}`, WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES);
+}
+
+function buildVirtualPayGoodsRemark(prefix, courseName) {
+	const label = `${prefix}：`;
+	const labelBytes = Buffer.byteLength(label, 'utf8');
+	const maxNameBytes = Math.max(1, WECHAT_VIRTUAL_PAY_REMARK_MAX_BYTES - labelBytes);
+	const namePart = truncateUtf8Bytes(String(courseName || '').trim(), maxNameBytes);
+	return truncateUtf8Bytes(`${label}${namePart}`, WECHAT_VIRTUAL_PAY_REMARK_MAX_BYTES);
 }
 
 function normalizeUrl(url) {
@@ -152,18 +180,18 @@ function buildGoodsItems(course, type, defaultItemUrl) {
 	if (type === 'activation') {
 		return {
 			id: `activation_code_${course.id}`,
-			name: truncateText(`${course.name} 激活码`, 32),
+			name: buildVirtualPayGoodsName(course.name, '激活码'),
 			price: Math.max(1, agentPrice),
-			remark: truncateText(`激活码：${course.name}`, 128),
+			remark: buildVirtualPayGoodsRemark('激活码', course.name),
 			item_url: itemUrl,
 		};
 	}
 
 	return {
 		id: `course_${course.id}`,
-		name: truncateText(course.name, 32),
+		name: buildVirtualPayGoodsName(course.name),
 		price: Math.max(1, coursePrice),
-		remark: truncateText(`课程：${course.name}`, 128),
+		remark: buildVirtualPayGoodsRemark('课程', course.name),
 		item_url: itemUrl,
 	};
 }

@@ -13,6 +13,11 @@ export type VirtualPayConfig = {
   mode: string;
 };
 
+/** 微信 xpay 道具名称：长度 (0, 40]，按 UTF-8 字节计 */
+const WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES = 40;
+/** 微信 xpay 道具备注：按 UTF-8 字节截断 */
+const WECHAT_VIRTUAL_PAY_REMARK_MAX_BYTES = 128;
+
 @Injectable()
 export class VirtualPayGoodsService {
   private readonly logger = new Logger(VirtualPayGoodsService.name);
@@ -131,17 +136,17 @@ export class VirtualPayGoodsService {
     await this.ensureGoodsPublished({
       config,
       productId: this.getVirtualPayProductId('course', course.id),
-      name: courseName,
+      name: this.buildVirtualPayGoodsName(courseName),
       price: coursePriceCents,
-      remark: `课程：${courseName}`,
+      remark: this.buildVirtualPayGoodsRemark('课程', courseName),
     });
 
     await this.ensureGoodsPublished({
       config,
       productId: this.getVirtualPayProductId('activation_code', course.id),
-      name: `${courseName} 激活码`,
+      name: this.buildVirtualPayGoodsName(courseName, '激活码'),
       price: agentPriceCents,
-      remark: `激活码：${courseName}`,
+      remark: this.buildVirtualPayGoodsRemark('激活码', courseName),
     });
 
     this.logger.log(`课程 ${course.id} 虚拟支付道具已提交同步`);
@@ -218,9 +223,9 @@ export class VirtualPayGoodsService {
     const itemUrl = await this.uploadService.resolveVirtualPayItemUrl();
     const item = {
       id: productId,
-      name: this.truncateText(name, 32),
+      name: this.truncateUtf8Bytes(name, WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES),
       price: Math.max(1, Math.round(Number(price || 0))),
-      remark: this.truncateText(remark, 128),
+      remark: this.truncateUtf8Bytes(remark, WECHAT_VIRTUAL_PAY_REMARK_MAX_BYTES),
       item_url: itemUrl,
     };
 
@@ -438,9 +443,39 @@ export class VirtualPayGoodsService {
     );
   }
 
-  private truncateText(value: string, maxLength: number) {
+  /** 微信道具名/备注按 UTF-8 字节上限截断 */
+  private truncateUtf8Bytes(value: string, maxBytes: number) {
     const text = String(value || '').trim();
-    return text.length > maxLength ? text.slice(0, maxLength) : text;
+    if (!text || maxBytes <= 0) {
+      return '';
+    }
+    let used = 0;
+    let result = '';
+    for (const char of text) {
+      const size = Buffer.byteLength(char, 'utf8');
+      if (used + size > maxBytes) {
+        break;
+      }
+      used += size;
+      result += char;
+    }
+    return result || text.slice(0, 1);
+  }
+
+  private buildVirtualPayGoodsName(courseName: string, suffix?: string) {
+    const suffixText = suffix ? ` ${suffix}` : '';
+    const suffixBytes = Buffer.byteLength(suffixText, 'utf8');
+    const maxBaseBytes = Math.max(1, WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES - suffixBytes);
+    const base = this.truncateUtf8Bytes(String(courseName || '').trim(), maxBaseBytes);
+    return this.truncateUtf8Bytes(`${base}${suffixText}`, WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES);
+  }
+
+  private buildVirtualPayGoodsRemark(prefix: string, courseName: string) {
+    const label = `${prefix}：`;
+    const labelBytes = Buffer.byteLength(label, 'utf8');
+    const maxNameBytes = Math.max(1, WECHAT_VIRTUAL_PAY_REMARK_MAX_BYTES - labelBytes);
+    const namePart = this.truncateUtf8Bytes(String(courseName || '').trim(), maxNameBytes);
+    return this.truncateUtf8Bytes(`${label}${namePart}`, WECHAT_VIRTUAL_PAY_REMARK_MAX_BYTES);
   }
 
   private createHmacSha256(secret: string, data: string) {
