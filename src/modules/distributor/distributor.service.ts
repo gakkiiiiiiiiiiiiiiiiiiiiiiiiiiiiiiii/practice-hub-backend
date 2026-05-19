@@ -779,7 +779,7 @@ export class DistributorService {
 			course_id: courseId,
 			amount: totalPrice,
 			status: OrderStatus.PENDING,
-			pay_provider: 'wechat_pay',
+			pay_provider: 'virtual_payment',
 			pay_payload: {
 				activation_code_purchase: {
 					distributor_id: distributor.id,
@@ -798,7 +798,11 @@ export class DistributorService {
 		});
 		await this.orderRepository.save(order);
 
-		const payment = await this.orderService.createWechatPayParamsForExistingOrder(userId, order.order_no);
+		const payment = await this.orderService.createVirtualPaymentParamsForExistingOrder(userId, order.order_no, {
+			buyQuantity: normalizedCount,
+			productId: `activation_code_${courseId}`,
+			attachType: 'activation_code',
+		});
 
 		return {
 			order_no: order.order_no,

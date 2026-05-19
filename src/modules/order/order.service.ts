@@ -76,19 +76,22 @@ export class OrderService {
       course_id: dto.course_id,
       amount,
       status: OrderStatus.PENDING,
-      pay_provider: 'wechat_pay',
+      pay_provider: 'virtual_payment',
     });
 
     await this.orderRepository.save(order);
 
-    const paymentParams = await this.createWechatPayParams({
+    const paymentParams = await this.createVirtualPaymentParams({
       user,
       course,
       order,
+      buyQuantity: 1,
+      productId: `course_${course.id}`,
+      attachType: 'course',
     });
 
     order.pay_payload = {
-      prepay_id: paymentParams.prepay_id,
+      virtual_payment: paymentParams.virtual_payment,
       payment_params: paymentParams.payment_params,
     };
     await this.orderRepository.save(order);
@@ -111,63 +114,101 @@ export class OrderService {
     return `ORDER${timestamp}${random}`;
   }
 
-  private async createWechatPayParams({
+  private async createVirtualPaymentParams({
     user,
     course,
     order,
+    buyQuantity,
+    productId,
+    attachType = 'course',
   }: {
     user: AppUser;
     course: Course;
     order: Order;
+    buyQuantity: number;
+    productId: string;
+    attachType?: string;
   }) {
-    const config = this.getCloudPayConfig();
+    const config = this.getVirtualPayConfig();
     const amountInCents = Math.max(1, Math.round(Number(order.amount || 0) * 100));
     const attach = JSON.stringify({
+      type: attachType,
       order_no: order.order_no,
       user_id: order.user_id,
       course_id: order.course_id,
     });
-    const requestBody = {
-      openid: user.openid,
-      sub_openid: user.openid,
-      body: course.name.slice(0, 127),
-      out_trade_no: order.order_no,
-      spbill_create_ip: config.spbillCreateIp,
-      sub_mch_id: config.subMchId,
-      sub_appid: config.subAppid,
-      total_fee: amountInCents,
-      fee_type: 'CNY',
-      trade_type: 'JSAPI',
-      nonce_str: this.generateNonceStr(),
+    const normalizedBuyQuantity = Math.max(1, Math.floor(Number(buyQuantity || 1)));
+    const unitPriceInCents = Math.max(1, Math.round(amountInCents / normalizedBuyQuantity));
+    const signDataObject = {
+      offerId: config.offerId,
+      buyQuantity: normalizedBuyQuantity,
+      env: config.env,
+      currencyType: 'CNY',
+      productId,
+      goodsPrice: unitPriceInCents,
+      outTradeNo: order.order_no,
       attach,
-      env_id: config.callbackEnvId,
-      callback_type: 2,
-      container: {
-        service: config.callbackService,
-        path: config.callbackPath,
-      },
+    };
+    const signData = JSON.stringify(signDataObject);
+    const paymentParams = {
+      signData,
+      mode: config.mode,
+      paySig: this.createHmacSha256(config.appKey, `requestVirtualPayment&${signData}`),
+      signature: this.createHmacSha256(user.session_key, signData),
     };
 
-    const result = await this.callWechatPayOpenApi('unifiedOrder', requestBody);
-    const payment = result?.payment;
-    if (!payment) {
-      this.logger.error('微信支付统一下单未返回 payment', {
-        result,
-        request: this.maskWechatPayRequest(requestBody),
-      });
-      throw new BadRequestException(this.getWechatPayErrorMessage(result, '微信支付统一下单失败'));
-    }
-
     return {
-      prepay_id: result.prepay_id || result.prepayId || '',
-      payment_params: {
-        provider: 'wxpay',
-        ...payment,
+      virtual_payment: {
+        signData: signDataObject,
+        mode: config.mode,
+        env: config.env,
+        offerId: config.offerId,
+        productId,
+        buyQuantity: normalizedBuyQuantity,
+        goodsPrice: unitPriceInCents,
       },
+      payment_params: paymentParams,
     };
   }
 
-  async createWechatPayParamsForExistingOrder(userId: number, orderNo: string) {
+  private getVirtualPayConfig() {
+    const env = Number(this.configService.get<string>('WECHAT_VIRTUAL_PAY_ENV') ?? 0);
+    const appKey =
+      (env === 1
+        ? this.configService.get<string>('WECHAT_VIRTUAL_PAY_SANDBOX_APPKEY')
+        : this.configService.get<string>('WECHAT_VIRTUAL_PAY_APPKEY')) ||
+      this.configService.get<string>('AppKey') ||
+      this.configService.get<string>('APP_KEY');
+    const offerId =
+      this.configService.get<string>('WECHAT_VIRTUAL_PAY_OFFER_ID') ||
+      this.configService.get<string>('OfferID') ||
+      this.configService.get<string>('OFFER_ID');
+    const mode = this.configService.get<string>('WECHAT_VIRTUAL_PAY_MODE') || 'short_series_goods';
+
+    if (!appKey || !offerId) {
+      throw new BadRequestException('微信虚拟支付配置缺失，请检查 AppKey 和 WECHAT_VIRTUAL_PAY_OFFER_ID');
+    }
+
+    return {
+      env: Number.isFinite(env) ? env : 0,
+      appKey,
+      offerId,
+      mode,
+    };
+  }
+
+  private createHmacSha256(secret: string | undefined | null, data: string) {
+    if (!secret) {
+      throw new BadRequestException('微信虚拟支付签名配置缺失，请重新登录后再试');
+    }
+    return crypto.createHmac('sha256', secret).update(data).digest('hex');
+  }
+
+  async createVirtualPaymentParamsForExistingOrder(
+    userId: number,
+    orderNo: string,
+    options?: { buyQuantity?: number; productId?: string; attachType?: string },
+  ) {
     const [user, order] = await Promise.all([
       this.appUserRepository.findOne({ where: { id: userId } }),
       this.orderRepository.findOne({ where: { order_no: orderNo } }),
@@ -190,7 +231,7 @@ export class OrderService {
         payment_params: null,
       };
     }
-    if (order.status !== OrderStatus.PENDING || order.pay_provider !== 'wechat_pay') {
+    if (order.status !== OrderStatus.PENDING || order.pay_provider !== 'virtual_payment') {
       throw new BadRequestException('当前订单不可支付');
     }
 
@@ -199,10 +240,17 @@ export class OrderService {
       throw new NotFoundException('课程不存在');
     }
 
-    const paymentParams = await this.createWechatPayParams({ user, course, order });
+    const paymentParams = await this.createVirtualPaymentParams({
+      user,
+      course,
+      order,
+      buyQuantity: options?.buyQuantity || 1,
+      productId: options?.productId || `course_${course.id}`,
+      attachType: options?.attachType || 'course',
+    });
     order.pay_payload = {
       ...(order.pay_payload || {}),
-      prepay_id: paymentParams.prepay_id,
+      virtual_payment: paymentParams.virtual_payment,
       payment_params: paymentParams.payment_params,
     };
     await this.orderRepository.save(order);
@@ -466,31 +514,15 @@ export class OrderService {
     if (order.status !== OrderStatus.PENDING) {
       throw new BadRequestException('当前订单状态不可确认支付');
     }
-    if (order.pay_provider !== 'wechat_pay') {
+    if (order.pay_provider !== 'virtual_payment') {
       throw new BadRequestException('订单支付方式不匹配');
-    }
-
-    const wechatOrder = await this.queryWechatPayOrder(order.order_no);
-    const tradeState = wechatOrder.trade_state || wechatOrder.tradeState || wechatOrder.result_code || wechatOrder.resultCode;
-    if (tradeState !== 'SUCCESS') {
-      throw new BadRequestException('微信支付结果未完成，请稍后重试');
-    }
-
-    const expectedFee = Math.max(1, Math.round(Number(order.amount || 0) * 100));
-    const paidFee = Number(
-      wechatOrder.total_fee ??
-      wechatOrder.totalFee ??
-      wechatOrder.cash_fee ??
-      wechatOrder.cashFee ??
-      0,
-    );
-    if (paidFee < expectedFee) {
-      throw new BadRequestException('微信支付金额校验失败');
     }
 
     order.pay_payload = {
       ...(order.pay_payload || {}),
-      wechat_pay_order: wechatOrder,
+      virtual_payment_success: {
+        confirmed_at: new Date().toISOString(),
+      },
     };
     await this.orderRepository.save(order);
     await this.handlePaymentSuccess(order.id);
@@ -577,7 +609,7 @@ export class OrderService {
         payment_params: null,
       };
     }
-    if (order.status !== OrderStatus.PENDING || order.pay_provider !== 'wechat_pay') {
+    if (order.status !== OrderStatus.PENDING || order.pay_provider !== 'virtual_payment') {
       throw new BadRequestException('当前订单不可继续支付');
     }
 
@@ -592,10 +624,18 @@ export class OrderService {
       throw new NotFoundException('课程不存在');
     }
 
-    const paymentParams = await this.createWechatPayParams({ user, course, order });
+    const activationPurchase = order.pay_payload?.activation_code_purchase;
+    const paymentParams = await this.createVirtualPaymentParams({
+      user,
+      course,
+      order,
+      buyQuantity: activationPurchase?.count || 1,
+      productId: activationPurchase ? `activation_code_${course.id}` : `course_${course.id}`,
+      attachType: activationPurchase ? 'activation_code' : 'course',
+    });
     order.pay_payload = {
       ...(order.pay_payload || {}),
-      prepay_id: paymentParams.prepay_id,
+      virtual_payment: paymentParams.virtual_payment,
       payment_params: paymentParams.payment_params,
     };
     await this.orderRepository.save(order);
