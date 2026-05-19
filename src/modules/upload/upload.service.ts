@@ -33,6 +33,8 @@ export class UploadService {
 	private baseUrl: string;
 	private uploadCredentialInternalSkipUntil = 0;
 	private wechatTlsCompatWarned = false;
+	/** 虚拟支付统一商品图 URL 缓存，避免每次下单多次探测 */
+	private resolvedVirtualPayItemUrlCache: { url: string; expireAt: number } | null = null;
 
 	constructor(private configService: ConfigService) {
 		this.bucket = this.configService.get<string>('COS_BUCKET', '7072-prod-6g7tpqs40c5a758b-1392943725');
@@ -1127,19 +1129,18 @@ export class UploadService {
 			candidates.push(value);
 		};
 
-		const configured = this.configService.get<string>('WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL');
-		push(configured);
+		const origin = this.getPublicApiOrigin();
+		if (origin) {
+			push(`${origin}/api/app/public/virtual-pay-goods-cover`);
+		}
+
+		push(this.configService.get<string>('WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL'));
 
 		const bucket = this.configService.get<string>('COS_BUCKET') || this.bucket;
 		if (bucket) {
 			const host = `https://${bucket}.tcb.qcloud.la/images`;
 			push(`${host}/${UploadService.VIRTUAL_PAY_GOODS_COVER_BASENAME}.png`);
 			push(`${host}/${UploadService.VIRTUAL_PAY_GOODS_COVER_BASENAME}.jpg`);
-		}
-
-		const origin = this.getPublicApiOrigin();
-		if (origin) {
-			push(`${origin}/api/app/public/virtual-pay-goods-cover`);
 		}
 
 		return candidates;
@@ -1158,6 +1159,11 @@ export class UploadService {
 	 * 解析微信虚拟支付 item_url：统一使用 virtual-pay-goods-cover（200×200）
 	 */
 	async resolveVirtualPayItemUrl(): Promise<string> {
+		const now = Date.now();
+		if (this.resolvedVirtualPayItemUrlCache && this.resolvedVirtualPayItemUrlCache.expireAt > now) {
+			return this.resolvedVirtualPayItemUrlCache.url;
+		}
+
 		const maxBytes = UploadService.WECHAT_VIRTUAL_PAY_IMAGE_MAX_BYTES;
 		const requiredSize = UploadService.WECHAT_VIRTUAL_PAY_IMAGE_SIZE;
 		const candidates = this.getVirtualPayGoodsCoverCandidateUrls();
@@ -1165,6 +1171,10 @@ export class UploadService {
 		for (const url of candidates) {
 			if (await this.isWechatVirtualPayImageUrlAccessible(url, maxBytes, requiredSize)) {
 				this.logger.log(`虚拟支付商品图选用: ${url}`);
+				this.resolvedVirtualPayItemUrlCache = {
+					url,
+					expireAt: now + 60 * 60 * 1000,
+				};
 				return url;
 			}
 		}

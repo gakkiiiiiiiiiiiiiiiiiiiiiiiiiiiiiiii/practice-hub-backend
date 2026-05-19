@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull, Equal } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
@@ -19,6 +19,7 @@ import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 import { SystemService } from '../system/system.service';
 import { CourseService } from '../course/course.service';
 import { AdminRole } from '../../database/entities/sys-user.entity';
+import { VirtualPayGoodsService } from '../order/virtual-pay-goods.service';
 
 class PreviewCacheTaskInterruptedError extends Error {
   constructor() {
@@ -37,6 +38,8 @@ type PreviewCacheFailureDetail = {
 
 @Injectable()
 export class AdminCourseService {
+  private readonly logger = new Logger(AdminCourseService.name);
+
   constructor(
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
@@ -60,6 +63,7 @@ export class AdminCourseService {
     private previewCacheTaskRepository: Repository<PreviewCacheTask>,
     private systemService: SystemService,
     private courseService: CourseService,
+    private virtualPayGoodsService: VirtualPayGoodsService,
   ) {}
 
   /**
@@ -82,6 +86,7 @@ export class AdminCourseService {
       Object.assign(course, dto);
       const saved = await this.courseRepository.save(course);
       this.warmupPreviewCacheIfNeeded(saved);
+      this.virtualPayGoodsService.scheduleSyncCourseGoods(saved, { force: true });
       return saved;
     } else {
       if (dto.price === undefined || dto.price === null) {
@@ -102,6 +107,7 @@ export class AdminCourseService {
       const course = this.courseRepository.create(dto);
       const saved = await this.courseRepository.save(course);
       this.warmupPreviewCacheIfNeeded(saved);
+      this.virtualPayGoodsService.scheduleSyncCourseGoods(saved);
       return saved;
     }
   }

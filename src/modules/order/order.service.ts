@@ -11,15 +11,11 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { DistributorService } from '../distributor/distributor.service';
-import { UploadService } from '../upload/upload.service';
+import { VirtualPayGoodsService } from './virtual-pay-goods.service';
 
 @Injectable()
 export class OrderService {
   private readonly logger = new Logger(OrderService.name);
-  private readonly virtualPayGoodsReady = new Set<string>();
-  private readonly virtualPayGoodsPending = new Map<string, Promise<void>>();
-  private wechatAccessTokenCache: { token: string; expireAt: number } | null = null;
-  private wechatTlsCompatWarned = false;
 
   constructor(
     @InjectRepository(Order)
@@ -32,7 +28,7 @@ export class OrderService {
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     @Inject(forwardRef(() => DistributorService))
     private distributorService: DistributorService,
-    private uploadService: UploadService,
+    private virtualPayGoodsService: VirtualPayGoodsService,
     private configService: ConfigService,
   ) {}
 
@@ -93,7 +89,7 @@ export class OrderService {
       course,
       order,
       buyQuantity: 1,
-      productId: this.getVirtualPayProductId('course', course.id),
+      productId: this.virtualPayGoodsService.getVirtualPayProductId('course', course.id),
       attachType: 'course',
     });
 
@@ -109,6 +105,7 @@ export class OrderService {
       course_id: order.course_id,
       status: order.status,
       payment_params: paymentParams.payment_params,
+      virtual_pay_sync: paymentParams.virtual_pay_sync,
     };
   }
 
@@ -136,7 +133,7 @@ export class OrderService {
     productId: string;
     attachType?: string;
   }) {
-    const config = this.getVirtualPayConfig();
+    const config = this.virtualPayGoodsService.getVirtualPayConfig();
     const amountInCents = Math.max(1, Math.round(Number(order.amount || 0) * 100));
     const attach = JSON.stringify({
       type: attachType,
@@ -146,14 +143,6 @@ export class OrderService {
     });
     const normalizedBuyQuantity = Math.max(1, Math.floor(Number(buyQuantity || 1)));
     const unitPriceInCents = Math.max(1, Math.round(amountInCents / normalizedBuyQuantity));
-    await this.ensureVirtualPayGoodsPublished({
-      config,
-      productId,
-      course,
-      name: attachType === 'activation_code' ? `${course.name} 激活码` : course.name,
-      price: unitPriceInCents,
-      remark: attachType === 'activation_code' ? `激活码：${course.name}` : `课程：${course.name}`,
-    });
     const signDataObject = {
       offerId: config.offerId,
       buyQuantity: normalizedBuyQuantity,
@@ -183,280 +172,8 @@ export class OrderService {
         goodsPrice: unitPriceInCents,
       },
       payment_params: paymentParams,
+      virtual_pay_sync: this.virtualPayGoodsService.buildVirtualPaySyncInfo(productId, config),
     };
-  }
-
-  private getVirtualPayConfig() {
-    const env = Number(this.configService.get<string>('WECHAT_VIRTUAL_PAY_ENV') ?? 0);
-    const appKey =
-      (env === 1
-        ? this.configService.get<string>('WECHAT_VIRTUAL_PAY_SANDBOX_APPKEY') ||
-          this.configService.get<string>('SandboxAppKey')
-        : this.configService.get<string>('WECHAT_VIRTUAL_PAY_APPKEY') ||
-          this.configService.get<string>('ProdAppKey')) ||
-      this.configService.get<string>('AppKey') ||
-      this.configService.get<string>('APP_KEY');
-    const offerId =
-      this.configService.get<string>('WECHAT_VIRTUAL_PAY_OFFER_ID') ||
-      this.configService.get<string>('OfferID') ||
-      this.configService.get<string>('OFFER_ID');
-    const mode = this.configService.get<string>('WECHAT_VIRTUAL_PAY_MODE') || 'short_series_goods';
-
-    if (!appKey || !offerId) {
-      throw new BadRequestException('微信虚拟支付配置缺失，请检查 AppKey 和 WECHAT_VIRTUAL_PAY_OFFER_ID');
-    }
-
-    return {
-      env: Number.isFinite(env) ? env : 0,
-      appKey,
-      offerId,
-      mode,
-    };
-  }
-
-  private async ensureVirtualPayGoodsPublished({
-    config,
-    productId,
-    course,
-    name,
-    price,
-    remark,
-  }: {
-    config: { env: number; appKey: string };
-    productId: string;
-    course: Course;
-    name: string;
-    price: number;
-    remark: string;
-  }) {
-    if (this.configService.get<string>('WECHAT_VIRTUAL_PAY_AUTO_UPLOAD_GOODS') === 'false') {
-      return;
-    }
-    const cacheKey = `${config.env}:${productId}`;
-    if (this.virtualPayGoodsReady.has(cacheKey)) {
-      return;
-    }
-    const running = this.virtualPayGoodsPending.get(cacheKey);
-    if (running) {
-      await running;
-      return;
-    }
-
-    const task = this.uploadAndPublishVirtualPayGoods({
-      config,
-      productId,
-      course,
-      name,
-      price,
-      remark,
-    })
-      .then(() => {
-        this.virtualPayGoodsReady.add(cacheKey);
-      })
-      .finally(() => {
-        this.virtualPayGoodsPending.delete(cacheKey);
-      });
-    this.virtualPayGoodsPending.set(cacheKey, task);
-    await task;
-  }
-
-  private async uploadAndPublishVirtualPayGoods({
-    config,
-    productId,
-    course,
-    name,
-    price,
-    remark,
-  }: {
-    config: { env: number; appKey: string };
-    productId: string;
-    course: Course;
-    name: string;
-    price: number;
-    remark: string;
-  }) {
-    const accessToken = await this.getWechatAccessToken();
-    const itemUrl = await this.uploadService.resolveVirtualPayItemUrl();
-    const item = {
-      id: productId,
-      name: this.truncateText(name, 32),
-      price: Math.max(1, Math.round(Number(price || 0))),
-      remark: this.truncateText(remark, 128),
-      item_url: itemUrl,
-    };
-
-    this.logger.log(`微信虚拟支付道具上传发布: ${item.id} ${item.name} ${item.price} item_url=${itemUrl}`);
-    try {
-      await this.callVirtualPayApi('/xpay/start_upload_goods', { upload_item: [item] }, accessToken, config);
-      await this.waitVirtualPayGoodsTask('/xpay/query_upload_goods', 'upload_item', 'upload_status', item.id, accessToken, config);
-    } catch (error) {
-      if (!this.isVirtualPayGoodsIdempotentError(error)) {
-        throw error;
-      }
-      this.logger.warn(`微信虚拟支付道具上传已存在，继续发布: ${item.id}`);
-    }
-
-    try {
-      await this.callVirtualPayApi('/xpay/start_publish_goods', { publish_item: [{ id: item.id }] }, accessToken, config);
-      await this.waitVirtualPayGoodsTask('/xpay/query_publish_goods', 'publish_item', 'publish_status', item.id, accessToken, config);
-    } catch (error) {
-      if (!this.isVirtualPayGoodsIdempotentError(error)) {
-        throw error;
-      }
-      this.logger.warn(`微信虚拟支付道具已发布: ${item.id}`);
-    }
-  }
-
-  private isVirtualPayGoodsIdempotentError(error: any) {
-    const message = String(error?.message || error?.response?.message || error || '').toLowerCase();
-    return (
-      message.includes('exist') ||
-      message.includes('already') ||
-      message.includes('重复') ||
-      message.includes('已存在') ||
-      message.includes('已上传') ||
-      message.includes('已发布')
-    );
-  }
-
-  private async waitVirtualPayGoodsTask(
-    endpoint: string,
-    listKey: 'upload_item' | 'publish_item',
-    statusKey: 'upload_status' | 'publish_status',
-    productId: string,
-    accessToken: string,
-    config: { env: number; appKey: string },
-  ) {
-    const maxAttempts = Number(this.configService.get<string>('WECHAT_VIRTUAL_PAY_GOODS_QUERY_ATTEMPTS') || 6);
-    for (let i = 0; i < maxAttempts; i += 1) {
-      const result = await this.callVirtualPayApi(endpoint, {}, accessToken, config);
-      const list = Array.isArray(result?.[listKey]) ? result[listKey] : [];
-      const item = list.find((entry: Record<string, any>) => String(entry.id) === String(productId));
-      if (item?.errmsg) {
-        const hint =
-          String(item.errmsg).includes('图片下载') ?
-            '（请确认 item_url 为公网 HTTPS、小于 200KB，且微信服务器可访问；可配置 WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL 或 WECHAT_CLOUDRUN_PUBLIC_URL）'
-          : '';
-        throw new BadRequestException(
-          `微信虚拟支付商品${listKey === 'upload_item' ? '上传' : '发布'}失败：${item.errmsg}${hint}`,
-        );
-      }
-      if (item && item[statusKey] !== 0) {
-        return item;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-    }
-    this.logger.warn(`微信虚拟支付商品任务查询未返回最终状态: ${endpoint} ${productId}`);
-    return null;
-  }
-
-  private async callVirtualPayApi(
-    endpoint: string,
-    payload: Record<string, any>,
-    accessToken: string,
-    config: { env: number; appKey: string },
-  ) {
-    const body = JSON.stringify({ ...payload, env: config.env });
-    const paySig = this.createHmacSha256(config.appKey, `${endpoint}&${body}`);
-    const response = await this.requestWechatPublicApi(`https://api.weixin.qq.com${endpoint}`, body, {
-      access_token: accessToken,
-      pay_sig: paySig,
-    });
-    const data = response.data || {};
-    if (data.errcode) {
-      throw new BadRequestException(data.errmsg || `微信虚拟支付接口失败: ${data.errcode}`);
-    }
-    return data;
-  }
-
-  private async getWechatAccessToken() {
-    const now = Date.now();
-    if (this.wechatAccessTokenCache && this.wechatAccessTokenCache.expireAt > now + 60_000) {
-      return this.wechatAccessTokenCache.token;
-    }
-    const appid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
-    const secret =
-      this.configService.get<string>('WECHAT_SECRET') ||
-      this.configService.get<string>('AppSecret') ||
-      this.configService.get<string>('WECHAT_APPSECRET');
-    if (!appid || !secret) {
-      throw new BadRequestException('微信虚拟支付商品上传失败：缺少 WECHAT_APPID 或 WECHAT_SECRET');
-    }
-    const response = await this.requestWechatPublicApi('https://api.weixin.qq.com/cgi-bin/token', null, {
-      grant_type: 'client_credential',
-      appid,
-      secret,
-    });
-    const data = response.data || {};
-    if (data.errcode || !data.access_token) {
-      throw new BadRequestException(data.errmsg || `获取微信 access_token 失败: ${data.errcode || 'unknown'}`);
-    }
-    this.wechatAccessTokenCache = {
-      token: data.access_token,
-      expireAt: now + Math.max(60, Number(data.expires_in || 7200) - 300) * 1000,
-    };
-    return data.access_token;
-  }
-
-  private async requestWechatPublicApi(url: string, body: string | null, params: Record<string, any>) {
-    try {
-      return body === null
-        ? await axios.get(url, { params, timeout: 20000 })
-        : await axios.post(url, body, {
-            params,
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-            timeout: 30000,
-          });
-    } catch (error) {
-      if (!this.isTlsCertificateError(error)) {
-        throw error;
-      }
-      if (!this.wechatTlsCompatWarned) {
-        this.logger.warn(`微信公网接口 TLS 证书校验失败，使用兼容模式重试: ${error?.message || error}`);
-        this.wechatTlsCompatWarned = true;
-      }
-      const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-      return body === null
-        ? axios.get(url, { params, timeout: 20000, httpsAgent })
-        : axios.post(url, body, {
-            params,
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-            timeout: 30000,
-            httpsAgent,
-          });
-    }
-  }
-
-  private isTlsCertificateError(error: any) {
-    const message = String(error?.message || error?.code || '').toLowerCase();
-    return (
-      message.includes('self-signed certificate') ||
-      message.includes('unable to verify') ||
-      message.includes('certificate') ||
-      error?.code === 'SELF_SIGNED_CERT_IN_CHAIN'
-    );
-  }
-
-  private truncateText(value: string, maxLength: number) {
-    const text = String(value || '').trim();
-    return text.length > maxLength ? text.slice(0, maxLength) : text;
-  }
-
-  private getVirtualPayProductId(type: 'course' | 'activation_code', courseId?: number) {
-    const specificKey =
-      type === 'activation_code'
-        ? 'WECHAT_VIRTUAL_PAY_ACTIVATION_PRODUCT_ID'
-        : 'WECHAT_VIRTUAL_PAY_COURSE_PRODUCT_ID';
-    const productId =
-      this.configService.get<string>(specificKey) ||
-      this.configService.get<string>('WECHAT_VIRTUAL_PAY_PRODUCT_ID') ||
-      (courseId ? `${type}_${courseId}` : '');
-
-    if (!productId) {
-      throw new BadRequestException(`微信虚拟支付商品ID缺失，请配置 ${specificKey} 或 WECHAT_VIRTUAL_PAY_PRODUCT_ID`);
-    }
-
-    return productId;
   }
 
   private createHmacSha256(secret: string | undefined | null, data: string) {
@@ -509,7 +226,10 @@ export class OrderService {
       buyQuantity: options?.buyQuantity || 1,
       productId:
         options?.productId ||
-        this.getVirtualPayProductId(options?.attachType === 'activation_code' ? 'activation_code' : 'course', course.id),
+        this.virtualPayGoodsService.getVirtualPayProductId(
+          options?.attachType === 'activation_code' ? 'activation_code' : 'course',
+          course.id,
+        ),
       attachType: options?.attachType || 'course',
     });
     order.pay_payload = {
@@ -525,6 +245,7 @@ export class OrderService {
       course_id: order.course_id,
       status: order.status,
       payment_params: paymentParams.payment_params,
+      virtual_pay_sync: paymentParams.virtual_pay_sync,
     };
   }
 
@@ -894,7 +615,10 @@ export class OrderService {
       course,
       order,
       buyQuantity: activationPurchase?.count || 1,
-      productId: this.getVirtualPayProductId(activationPurchase ? 'activation_code' : 'course', course.id),
+      productId: this.virtualPayGoodsService.getVirtualPayProductId(
+        activationPurchase ? 'activation_code' : 'course',
+        course.id,
+      ),
       attachType: activationPurchase ? 'activation_code' : 'course',
     });
     order.pay_payload = {
@@ -910,6 +634,7 @@ export class OrderService {
       course_id: order.course_id,
       status: order.status,
       payment_params: paymentParams.payment_params,
+      virtual_pay_sync: paymentParams.virtual_pay_sync,
     };
   }
 

@@ -4,6 +4,7 @@ import { OrderController, OrderPayNotifyController } from './order.controller';
 import { DatabaseModule } from '../../database/database.module';
 import { DistributorModule } from '../distributor/distributor.module';
 import { UploadModule } from '../upload/upload.module';
+import { VirtualPayGoodsService } from './virtual-pay-goods.service';
 
 @Module({
   imports: [
@@ -12,7 +13,7 @@ import { UploadModule } from '../upload/upload.module';
     forwardRef(() => DistributorModule),
   ],
   controllers: [OrderController, OrderPayNotifyController],
-  providers: [OrderService],
-  exports: [OrderService],
+  providers: [OrderService, VirtualPayGoodsService],
+  exports: [OrderService, VirtualPayGoodsService],
 })
 export class OrderModule {}
