@@ -800,7 +800,6 @@ export class DistributorService {
 
 		const payment = await this.orderService.createVirtualPaymentParamsForExistingOrder(userId, order.order_no, {
 			buyQuantity: normalizedCount,
-			productId: `activation_code_${courseId}`,
 			attachType: 'activation_code',
 		});
 
