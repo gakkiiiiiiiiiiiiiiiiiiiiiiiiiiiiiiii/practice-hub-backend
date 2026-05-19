@@ -1051,8 +1051,10 @@ export class UploadService {
 		return { data: Buffer.from(res.data), contentType };
 	}
 
-	/** 微信虚拟支付要求 item_url 公网可下载且小于 200KB */
+	/** 微信虚拟支付要求 item_url 公网可下载、小于 200KB，且必须为 200×200 像素 */
 	private static readonly WECHAT_VIRTUAL_PAY_IMAGE_MAX_BYTES = 200 * 1024;
+	private static readonly WECHAT_VIRTUAL_PAY_IMAGE_SIZE = 200;
+	static readonly VIRTUAL_PAY_GOODS_COVER_BASENAME = 'virtual-pay-goods-cover';
 
 	getPublicApiOrigin(): string {
 		const configured =
@@ -1097,76 +1099,125 @@ export class UploadService {
 		if (data.length > UploadService.WECHAT_VIRTUAL_PAY_IMAGE_MAX_BYTES) {
 			throw new BadRequestException('内置虚拟支付商品图超过 200KB，请更换更小的图片');
 		}
+		if (!this.isVirtualPayImageDimensionsValid(data, UploadService.WECHAT_VIRTUAL_PAY_IMAGE_SIZE)) {
+			const dim = this.readImageDimensions(data);
+			throw new BadRequestException(
+				`内置 virtual-pay-goods-cover 须为 ${UploadService.WECHAT_VIRTUAL_PAY_IMAGE_SIZE}×${UploadService.WECHAT_VIRTUAL_PAY_IMAGE_SIZE} 像素，当前为 ${dim ? `${dim.width}×${dim.height}` : '未知'}`,
+			);
+		}
 		const ext = filePath ? path.extname(filePath).toLowerCase() : '.jpg';
 		const contentType =
 			ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
 		return { data, contentType };
 	}
 
-	/**
-	 * 解析可供微信虚拟支付拉取的商品图 URL（优先配置图 → 课程封面 → TCB 代理 → 内置公网图）
-	 */
-	async resolveVirtualPayItemUrl(course?: { cover_img?: string | null }): Promise<string> {
-		const maxBytes = UploadService.WECHAT_VIRTUAL_PAY_IMAGE_MAX_BYTES;
+	/** 虚拟支付统一商品图候选 URL（仅 virtual-pay-goods-cover，不使用课程封面） */
+	getVirtualPayGoodsCoverCandidateUrls(): string[] {
 		const seen = new Set<string>();
 		const candidates: string[] = [];
-
-		const pushCandidate = (url?: string | null) => {
+		const push = (url?: string | null) => {
 			const value = String(url || '').trim();
 			if (!value || !/^https:\/\//i.test(value) || seen.has(value)) {
+				return;
+			}
+			if (!this.isVirtualPayGoodsCoverUrl(value)) {
 				return;
 			}
 			seen.add(value);
 			candidates.push(value);
 		};
 
-		pushCandidate(this.configService.get<string>('WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL'));
-		pushCandidate(this.configService.get<string>('DEFAULT_COURSE_COVER_URL'));
-		pushCandidate(course?.cover_img);
+		const configured = this.configService.get<string>('WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL');
+		push(configured);
 
 		const bucket = this.configService.get<string>('COS_BUCKET') || this.bucket;
 		if (bucket) {
-			pushCandidate(`https://${bucket}.tcb.qcloud.la/images/xpay-goods-cover.jpg`);
+			const host = `https://${bucket}.tcb.qcloud.la/images`;
+			push(`${host}/${UploadService.VIRTUAL_PAY_GOODS_COVER_BASENAME}.png`);
+			push(`${host}/${UploadService.VIRTUAL_PAY_GOODS_COVER_BASENAME}.jpg`);
 		}
 
 		const origin = this.getPublicApiOrigin();
 		if (origin) {
-			pushCandidate(`${origin}/api/app/public/virtual-pay-goods-cover`);
+			push(`${origin}/api/app/public/virtual-pay-goods-cover`);
 		}
 
+		return candidates;
+	}
+
+	isVirtualPayGoodsCoverUrl(url: string): boolean {
+		try {
+			const pathname = new URL(url).pathname.toLowerCase();
+			return pathname.includes(UploadService.VIRTUAL_PAY_GOODS_COVER_BASENAME);
+		} catch {
+			return url.toLowerCase().includes(UploadService.VIRTUAL_PAY_GOODS_COVER_BASENAME);
+		}
+	}
+
+	/**
+	 * 解析微信虚拟支付 item_url：统一使用 virtual-pay-goods-cover（200×200）
+	 */
+	async resolveVirtualPayItemUrl(): Promise<string> {
+		const maxBytes = UploadService.WECHAT_VIRTUAL_PAY_IMAGE_MAX_BYTES;
+		const requiredSize = UploadService.WECHAT_VIRTUAL_PAY_IMAGE_SIZE;
+		const candidates = this.getVirtualPayGoodsCoverCandidateUrls();
+
 		for (const url of candidates) {
-			if (await this.isWechatVirtualPayImageUrlAccessible(url, maxBytes)) {
+			if (await this.isWechatVirtualPayImageUrlAccessible(url, maxBytes, requiredSize)) {
 				this.logger.log(`虚拟支付商品图选用: ${url}`);
 				return url;
 			}
-			if (origin && this.isAllowedProxyUrl(url)) {
-				const proxyUrl = `${origin}/api/admin/upload/proxy-image?url=${encodeURIComponent(url)}`;
-				if (!seen.has(proxyUrl) && (await this.isWechatVirtualPayImageUrlAccessible(proxyUrl, maxBytes))) {
-					this.logger.log(`虚拟支付商品图选用代理: ${proxyUrl}`);
-					return proxyUrl;
-				}
-			}
 		}
 
-		throw new BadRequestException(
-			'微信虚拟支付商品图不可用：请配置 WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL（HTTPS、公网可访问、小于 200KB），或设置 WECHAT_CLOUDRUN_PUBLIC_URL/BASE_URL 以使用内置商品图',
-		);
+		const origin = this.getPublicApiOrigin();
+		const localPath = this.getBuiltinVirtualPayCoverPath();
+		const hints = [
+			localPath ? `内置图: ${localPath}` : '内置图文件缺失',
+			origin ? `公网接口: ${origin}/api/app/public/virtual-pay-goods-cover` : '请配置 WECHAT_CLOUDRUN_PUBLIC_URL 或 BASE_URL',
+			'或将 virtual-pay-goods-cover.png（200×200）上传到 COS: images/virtual-pay-goods-cover.png',
+		];
+		throw new BadRequestException(`微信虚拟支付商品图不可用（须为 ${requiredSize}×${requiredSize} 的 virtual-pay-goods-cover）。${hints.join('；')}`);
 	}
 
-	private async isWechatVirtualPayImageUrlAccessible(url: string, maxBytes: number): Promise<boolean> {
-		try {
-			const headRes = await axios.head(url, {
-				timeout: 10000,
-				maxRedirects: 5,
-				validateStatus: () => true,
-			});
-			if (headRes.status === 200) {
-				const length = Number(headRes.headers['content-length'] || 0);
-				const type = String(headRes.headers['content-type'] || '');
-				if (length > 0 && length <= maxBytes && this.isImageContentType(type)) {
-					return true;
+	private readImageDimensions(buffer: Buffer): { width: number; height: number } | null {
+		if (buffer.length >= 24 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+			return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+		}
+		if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+			let offset = 2;
+			while (offset + 9 < buffer.length) {
+				if (buffer[offset] !== 0xff) {
+					offset += 1;
+					continue;
 				}
+				const marker = buffer[offset + 1];
+				if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+					return {
+						height: buffer.readUInt16BE(offset + 5),
+						width: buffer.readUInt16BE(offset + 7),
+					};
+				}
+				const segmentLength = buffer.readUInt16BE(offset + 2);
+				if (segmentLength < 2) {
+					break;
+				}
+				offset += 2 + segmentLength;
 			}
+		}
+		return null;
+	}
+
+	private isVirtualPayImageDimensionsValid(buffer: Buffer, requiredSize: number): boolean {
+		const dim = this.readImageDimensions(buffer);
+		return !!dim && dim.width === requiredSize && dim.height === requiredSize;
+	}
+
+	private async isWechatVirtualPayImageUrlAccessible(
+		url: string,
+		maxBytes: number,
+		requiredSize: number,
+	): Promise<boolean> {
+		try {
 			const getRes = await axios.get(url, {
 				responseType: 'arraybuffer',
 				timeout: 15000,
@@ -1183,7 +1234,17 @@ export class UploadService {
 				return false;
 			}
 			const type = String(getRes.headers['content-type'] || '');
-			return this.isImageContentType(type) || this.sniffImageMime(buffer) !== null;
+			if (!this.isImageContentType(type) && !this.sniffImageMime(buffer)) {
+				return false;
+			}
+			if (!this.isVirtualPayImageDimensionsValid(buffer, requiredSize)) {
+				const dim = this.readImageDimensions(buffer);
+				this.logger.debug(
+					`虚拟支付商品图尺寸不符 ${url}: ${dim ? `${dim.width}x${dim.height}` : 'unknown'}，需要 ${requiredSize}x${requiredSize}`,
+				);
+				return false;
+			}
+			return true;
 		} catch (error: any) {
 			this.logger.debug(`虚拟支付商品图不可达 ${url}: ${error?.message || error}`);
 			return false;

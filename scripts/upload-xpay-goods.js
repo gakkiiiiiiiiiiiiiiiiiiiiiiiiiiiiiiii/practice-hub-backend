@@ -142,9 +142,11 @@ async function getCourses(dbConfig, courseId) {
 function buildGoodsItems(course, type, defaultItemUrl) {
 	const coursePrice = toCents(course.price);
 	const agentPrice = toCents(course.agent_price || course.price);
-	const itemUrl = normalizeUrl(course.cover_img) || normalizeUrl(defaultItemUrl);
-	if (!itemUrl) {
-		throw new Error(`课程 ${course.id} 缺少有效封面 URL，请配置 WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL`);
+	const itemUrl = normalizeUrl(defaultItemUrl);
+	if (!itemUrl || !itemUrl.includes('virtual-pay-goods-cover')) {
+		throw new Error(
+			`缺少 virtual-pay-goods-cover 商品图 URL，请配置 WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL 或上传 images/virtual-pay-goods-cover.png 到 COS`,
+		);
 	}
 
 	if (type === 'activation') {
@@ -187,8 +189,11 @@ async function main() {
 		env === 1
 			? getRequiredEnv(['WECHAT_VIRTUAL_PAY_SANDBOX_APPKEY', 'SandboxAppKey', 'WECHAT_VIRTUAL_PAY_APPKEY', 'AppKey', 'APP_KEY'], '微信虚拟支付沙箱 AppKey')
 			: getRequiredEnv(['WECHAT_VIRTUAL_PAY_APPKEY', 'ProdAppKey', 'AppKey', 'APP_KEY'], '微信虚拟支付正式 AppKey');
-	const configuredDefaultItemUrl =
-		process.env.WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL || process.env.DEFAULT_COURSE_COVER_URL || '';
+	const bucket = process.env.COS_BUCKET || '';
+	const cosDefaultItemUrl = bucket
+		? `https://${bucket}.tcb.qcloud.la/images/virtual-pay-goods-cover.png`
+		: '';
+	const configuredDefaultItemUrl = process.env.WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL || cosDefaultItemUrl;
 
 	const dbConfig = isRemote
 		? {
@@ -212,8 +217,7 @@ async function main() {
 
 	const courses = await getCourses(dbConfig, courseId);
 	const scopedCourses = limit > 0 ? courses.slice(0, limit) : courses;
-	const firstCourseCover = scopedCourses.map((course) => normalizeUrl(course.cover_img)).find(Boolean) || '';
-	const defaultItemUrl = normalizeUrl(configuredDefaultItemUrl) || firstCourseCover;
+	const defaultItemUrl = normalizeUrl(configuredDefaultItemUrl);
 	const goods = scopedCourses.flatMap((course) => {
 		const items = [];
 		if (type === 'all' || type === 'course') {

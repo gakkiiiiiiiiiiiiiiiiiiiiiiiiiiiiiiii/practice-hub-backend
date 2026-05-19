@@ -276,7 +276,7 @@ export class OrderService {
     remark: string;
   }) {
     const accessToken = await this.getWechatAccessToken();
-    const itemUrl = await this.uploadService.resolveVirtualPayItemUrl(course);
+    const itemUrl = await this.uploadService.resolveVirtualPayItemUrl();
     const item = {
       id: productId,
       name: this.truncateText(name, 32),
