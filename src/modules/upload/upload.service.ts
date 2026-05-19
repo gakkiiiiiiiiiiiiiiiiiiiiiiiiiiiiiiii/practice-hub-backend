@@ -1068,16 +1068,19 @@ export class UploadService {
 	}
 
 	getBuiltinVirtualPayCoverPath(): string | null {
-		const candidates = [
-			path.join(process.cwd(), 'src', 'assets', 'virtual-pay-goods-cover.jpg'),
-			path.join(process.cwd(), 'assets', 'virtual-pay-goods-cover.jpg'),
-			path.join(process.cwd(), 'dist', 'assets', 'virtual-pay-goods-cover.jpg'),
-			path.join(__dirname, '..', '..', 'assets', 'virtual-pay-goods-cover.jpg'),
-			path.join(__dirname, '../../../assets/virtual-pay-goods-cover.jpg'),
+		const fileNames = ['virtual-pay-goods-cover.png', 'virtual-pay-goods-cover.jpg'];
+		const baseDirs = [
+			path.join(process.cwd(), 'src', 'assets'),
+			path.join(process.cwd(), 'assets'),
+			path.join(process.cwd(), 'dist', 'assets'),
+			path.join(__dirname, '..', '..', 'assets'),
 		];
-		for (const candidate of candidates) {
-			if (fs.existsSync(candidate)) {
-				return candidate;
+		for (const dir of baseDirs) {
+			for (const name of fileNames) {
+				const candidate = path.join(dir, name);
+				if (fs.existsSync(candidate)) {
+					return candidate;
+				}
 			}
 		}
 		return null;
@@ -1094,7 +1097,10 @@ export class UploadService {
 		if (data.length > UploadService.WECHAT_VIRTUAL_PAY_IMAGE_MAX_BYTES) {
 			throw new BadRequestException('内置虚拟支付商品图超过 200KB，请更换更小的图片');
 		}
-		return { data, contentType: 'image/jpeg' };
+		const ext = filePath ? path.extname(filePath).toLowerCase() : '.jpg';
+		const contentType =
+			ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+		return { data, contentType };
 	}
 
 	/**
