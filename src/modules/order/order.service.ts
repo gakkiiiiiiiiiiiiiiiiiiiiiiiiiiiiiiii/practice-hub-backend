@@ -11,6 +11,7 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { DistributorService } from '../distributor/distributor.service';
+import { UploadService } from '../upload/upload.service';
 
 @Injectable()
 export class OrderService {
@@ -31,6 +32,7 @@ export class OrderService {
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     @Inject(forwardRef(() => DistributorService))
     private distributorService: DistributorService,
+    private uploadService: UploadService,
     private configService: ConfigService,
   ) {}
 
@@ -147,6 +149,7 @@ export class OrderService {
     await this.ensureVirtualPayGoodsPublished({
       config,
       productId,
+      course,
       name: attachType === 'activation_code' ? `${course.name} 激活码` : course.name,
       price: unitPriceInCents,
       remark: attachType === 'activation_code' ? `激活码：${course.name}` : `课程：${course.name}`,
@@ -214,12 +217,14 @@ export class OrderService {
   private async ensureVirtualPayGoodsPublished({
     config,
     productId,
+    course,
     name,
     price,
     remark,
   }: {
     config: { env: number; appKey: string };
     productId: string;
+    course: Course;
     name: string;
     price: number;
     remark: string;
@@ -240,6 +245,7 @@ export class OrderService {
     const task = this.uploadAndPublishVirtualPayGoods({
       config,
       productId,
+      course,
       name,
       price,
       remark,
@@ -257,26 +263,29 @@ export class OrderService {
   private async uploadAndPublishVirtualPayGoods({
     config,
     productId,
+    course,
     name,
     price,
     remark,
   }: {
     config: { env: number; appKey: string };
     productId: string;
+    course: Course;
     name: string;
     price: number;
     remark: string;
   }) {
     const accessToken = await this.getWechatAccessToken();
+    const itemUrl = await this.uploadService.resolveVirtualPayItemUrl(course);
     const item = {
       id: productId,
       name: this.truncateText(name, 32),
       price: Math.max(1, Math.round(Number(price || 0))),
       remark: this.truncateText(remark, 128),
-      item_url: this.getVirtualPayGoodsImageUrl(),
+      item_url: itemUrl,
     };
 
-    this.logger.log(`微信虚拟支付道具上传发布: ${item.id} ${item.name} ${item.price}`);
+    this.logger.log(`微信虚拟支付道具上传发布: ${item.id} ${item.name} ${item.price} item_url=${itemUrl}`);
     try {
       await this.callVirtualPayApi('/xpay/start_upload_goods', { upload_item: [item] }, accessToken, config);
       await this.waitVirtualPayGoodsTask('/xpay/query_upload_goods', 'upload_item', 'upload_status', item.id, accessToken, config);
@@ -324,7 +333,13 @@ export class OrderService {
       const list = Array.isArray(result?.[listKey]) ? result[listKey] : [];
       const item = list.find((entry: Record<string, any>) => String(entry.id) === String(productId));
       if (item?.errmsg) {
-        throw new BadRequestException(`微信虚拟支付商品${listKey === 'upload_item' ? '上传' : '发布'}失败：${item.errmsg}`);
+        const hint =
+          String(item.errmsg).includes('图片下载') ?
+            '（请确认 item_url 为公网 HTTPS、小于 200KB，且微信服务器可访问；可配置 WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL 或 WECHAT_CLOUDRUN_PUBLIC_URL）'
+          : '';
+        throw new BadRequestException(
+          `微信虚拟支付商品${listKey === 'upload_item' ? '上传' : '发布'}失败：${item.errmsg}${hint}`,
+        );
       }
       if (item && item[statusKey] !== 0) {
         return item;
@@ -420,20 +435,6 @@ export class OrderService {
       message.includes('certificate') ||
       error?.code === 'SELF_SIGNED_CERT_IN_CHAIN'
     );
-  }
-
-  private getVirtualPayGoodsImageUrl() {
-    const configured =
-      this.configService.get<string>('WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL') ||
-      this.configService.get<string>('DEFAULT_COURSE_COVER_URL');
-    if (configured && /^https?:\/\//i.test(configured)) {
-      return configured;
-    }
-    const bucket = this.configService.get<string>('COS_BUCKET');
-    if (bucket) {
-      return `https://${bucket}.tcb.qcloud.la/images/xpay-goods-cover.jpg`;
-    }
-    throw new BadRequestException('微信虚拟支付商品上传失败：请配置 WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL');
   }
 
   private truncateText(value: string, maxLength: number) {

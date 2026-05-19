@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as COS from 'cos-nodejs-sdk-v5';
 import axios from 'axios';
@@ -23,6 +23,7 @@ interface MetaDataResponse {
 
 @Injectable()
 export class UploadService {
+	private readonly logger = new Logger(UploadService.name);
 	private cos: COS;
 	private bucket: string;
 	private region: string;
@@ -1048,5 +1049,158 @@ export class UploadService {
 		}
 		const contentType = res.headers['content-type'] || 'image/png';
 		return { data: Buffer.from(res.data), contentType };
+	}
+
+	/** 微信虚拟支付要求 item_url 公网可下载且小于 200KB */
+	private static readonly WECHAT_VIRTUAL_PAY_IMAGE_MAX_BYTES = 200 * 1024;
+
+	getPublicApiOrigin(): string {
+		const configured =
+			this.configService.get<string>('WECHAT_CLOUDRUN_PUBLIC_URL') ||
+			this.configService.get<string>('API_PUBLIC_ORIGIN') ||
+			this.configService.get<string>('BASE_URL') ||
+			this.baseUrl ||
+			'';
+		return String(configured)
+			.trim()
+			.replace(/\/+$/, '')
+			.replace(/\/api$/i, '');
+	}
+
+	getBuiltinVirtualPayCoverPath(): string | null {
+		const candidates = [
+			path.join(process.cwd(), 'src', 'assets', 'virtual-pay-goods-cover.jpg'),
+			path.join(process.cwd(), 'assets', 'virtual-pay-goods-cover.jpg'),
+			path.join(process.cwd(), 'dist', 'assets', 'virtual-pay-goods-cover.jpg'),
+			path.join(__dirname, '..', '..', 'assets', 'virtual-pay-goods-cover.jpg'),
+			path.join(__dirname, '../../../assets/virtual-pay-goods-cover.jpg'),
+		];
+		for (const candidate of candidates) {
+			if (fs.existsSync(candidate)) {
+				return candidate;
+			}
+		}
+		return null;
+	}
+
+	readBuiltinVirtualPayCover(): { data: Buffer; contentType: string } {
+		const filePath = this.getBuiltinVirtualPayCoverPath();
+		const data = filePath
+			? fs.readFileSync(filePath)
+			: Buffer.from(
+					'/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCwAA8A/9k=',
+					'base64',
+				);
+		if (data.length > UploadService.WECHAT_VIRTUAL_PAY_IMAGE_MAX_BYTES) {
+			throw new BadRequestException('内置虚拟支付商品图超过 200KB，请更换更小的图片');
+		}
+		return { data, contentType: 'image/jpeg' };
+	}
+
+	/**
+	 * 解析可供微信虚拟支付拉取的商品图 URL（优先配置图 → 课程封面 → TCB 代理 → 内置公网图）
+	 */
+	async resolveVirtualPayItemUrl(course?: { cover_img?: string | null }): Promise<string> {
+		const maxBytes = UploadService.WECHAT_VIRTUAL_PAY_IMAGE_MAX_BYTES;
+		const seen = new Set<string>();
+		const candidates: string[] = [];
+
+		const pushCandidate = (url?: string | null) => {
+			const value = String(url || '').trim();
+			if (!value || !/^https:\/\//i.test(value) || seen.has(value)) {
+				return;
+			}
+			seen.add(value);
+			candidates.push(value);
+		};
+
+		pushCandidate(this.configService.get<string>('WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL'));
+		pushCandidate(this.configService.get<string>('DEFAULT_COURSE_COVER_URL'));
+		pushCandidate(course?.cover_img);
+
+		const bucket = this.configService.get<string>('COS_BUCKET') || this.bucket;
+		if (bucket) {
+			pushCandidate(`https://${bucket}.tcb.qcloud.la/images/xpay-goods-cover.jpg`);
+		}
+
+		const origin = this.getPublicApiOrigin();
+		if (origin) {
+			pushCandidate(`${origin}/api/app/public/virtual-pay-goods-cover`);
+		}
+
+		for (const url of candidates) {
+			if (await this.isWechatVirtualPayImageUrlAccessible(url, maxBytes)) {
+				this.logger.log(`虚拟支付商品图选用: ${url}`);
+				return url;
+			}
+			if (origin && this.isAllowedProxyUrl(url)) {
+				const proxyUrl = `${origin}/api/admin/upload/proxy-image?url=${encodeURIComponent(url)}`;
+				if (!seen.has(proxyUrl) && (await this.isWechatVirtualPayImageUrlAccessible(proxyUrl, maxBytes))) {
+					this.logger.log(`虚拟支付商品图选用代理: ${proxyUrl}`);
+					return proxyUrl;
+				}
+			}
+		}
+
+		throw new BadRequestException(
+			'微信虚拟支付商品图不可用：请配置 WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL（HTTPS、公网可访问、小于 200KB），或设置 WECHAT_CLOUDRUN_PUBLIC_URL/BASE_URL 以使用内置商品图',
+		);
+	}
+
+	private async isWechatVirtualPayImageUrlAccessible(url: string, maxBytes: number): Promise<boolean> {
+		try {
+			const headRes = await axios.head(url, {
+				timeout: 10000,
+				maxRedirects: 5,
+				validateStatus: () => true,
+			});
+			if (headRes.status === 200) {
+				const length = Number(headRes.headers['content-length'] || 0);
+				const type = String(headRes.headers['content-type'] || '');
+				if (length > 0 && length <= maxBytes && this.isImageContentType(type)) {
+					return true;
+				}
+			}
+			const getRes = await axios.get(url, {
+				responseType: 'arraybuffer',
+				timeout: 15000,
+				maxRedirects: 5,
+				validateStatus: () => true,
+				maxContentLength: maxBytes + 4096,
+				maxBodyLength: maxBytes + 4096,
+			});
+			if (getRes.status !== 200) {
+				return false;
+			}
+			const buffer = Buffer.from(getRes.data || []);
+			if (!buffer.length || buffer.length > maxBytes) {
+				return false;
+			}
+			const type = String(getRes.headers['content-type'] || '');
+			return this.isImageContentType(type) || this.sniffImageMime(buffer) !== null;
+		} catch (error: any) {
+			this.logger.debug(`虚拟支付商品图不可达 ${url}: ${error?.message || error}`);
+			return false;
+		}
+	}
+
+	private isImageContentType(contentType: string): boolean {
+		return /^image\/(jpeg|jpg|png|gif|webp)/i.test(String(contentType || '').split(';')[0].trim());
+	}
+
+	private sniffImageMime(buf: Buffer): string | null {
+		if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+			return 'image/jpeg';
+		}
+		if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+			return 'image/png';
+		}
+		if (buf.length >= 6 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) {
+			return 'image/gif';
+		}
+		if (buf.length >= 12 && buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) {
+			return 'image/webp';
+		}
+		return null;
 	}
 }

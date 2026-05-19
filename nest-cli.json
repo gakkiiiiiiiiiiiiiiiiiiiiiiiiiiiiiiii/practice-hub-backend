@@ -5,6 +5,7 @@
   "compilerOptions": { "deleteOutDir": true },
   "assets": [
     { "include": "modules/process-pdf/fixtures/**/*", "outDir": "dist" },
-    { "include": "modules/process-pdf/output/**/*", "outDir": "dist" }
+    { "include": "modules/process-pdf/output/**/*", "outDir": "dist" },
+    { "include": "assets/**/*", "outDir": "dist", "watchAssets": true }
   ]
 }

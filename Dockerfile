@@ -49,6 +49,9 @@ RUN --mount=type=cache,target=/root/.npm \
 # 从构建阶段复制构建产物
 COPY --from=builder /app/dist ./dist
 
+# 虚拟支付内置商品图（微信拉取 item_url 兜底）
+COPY --from=builder /app/src/assets ./src/assets
+
 # 复制必要的配置文件
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
