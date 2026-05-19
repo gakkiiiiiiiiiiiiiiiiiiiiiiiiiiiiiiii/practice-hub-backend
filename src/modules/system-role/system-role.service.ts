@@ -461,6 +461,9 @@ export class SystemRoleService implements OnModuleInit {
 	getPermissionGroups() {
 		const allPermissions = this.getAllValidPermissions();
 		const groups: Record<string, string[]> = {};
+		const permissionOrder: Record<string, string[]> = {
+			course: ['course:view', 'course:create', 'course:edit', 'course:status', 'course:delete'],
+		};
 
 		allPermissions.forEach((permission) => {
 			const [module] = permission.split(':');
@@ -469,10 +472,22 @@ export class SystemRoleService implements OnModuleInit {
 			}
 			groups[module].push(permission);
 		});
+		permissionOrder.course.forEach((permission) => {
+			if (!groups.course) {
+				groups.course = [];
+			}
+			if (!groups.course.includes(permission)) {
+				groups.course.push(permission);
+			}
+		});
 
 		return Object.entries(groups).map(([module, permissions]) => ({
 			module,
-			permissions,
+			permissions: permissionOrder[module]
+				? permissionOrder[module]
+						.filter((permission) => permissions.includes(permission))
+						.concat(permissions.filter((permission) => !permissionOrder[module].includes(permission)))
+				: permissions,
 		}));
 	}
 
