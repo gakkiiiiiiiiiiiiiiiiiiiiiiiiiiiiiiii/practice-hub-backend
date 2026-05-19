@@ -17,6 +17,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AdminCourseService } from './admin-course.service';
+import { SystemRoleService } from '../system-role/system-role.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -39,7 +40,10 @@ import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 @UseFilters(HttpExceptionFilter)
 @ApiBearerAuth()
 export class AdminCourseController {
-	constructor(private readonly adminCourseService: AdminCourseService) {}
+	constructor(
+		private readonly adminCourseService: AdminCourseService,
+		private readonly systemRoleService: SystemRoleService,
+	) {}
 
 	@Post()
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
@@ -52,8 +56,8 @@ export class AdminCourseController {
 	@Put(':id')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 	@ApiOperation({ summary: '编辑课程' })
-	async updateCourse(@Param('id') id: number, @Body() dto: UpdateCourseDto) {
-		const result = await this.adminCourseService.saveCourse(dto, +id);
+	async updateCourse(@Param('id') id: number, @Body() dto: UpdateCourseDto, @CurrentUser() user: any) {
+		const result = await this.adminCourseService.saveCourse(dto, +id, user?.role);
 		return CommonResponseDto.success(result);
 	}
 
@@ -194,7 +198,8 @@ export class AdminCourseController {
 	@Post('batch-update-status')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 	@ApiOperation({ summary: '批量更新课程状态（启用/禁用）' })
-	async batchUpdateStatus(@Body() dto: BatchUpdateStatusDto) {
+	async batchUpdateStatus(@Body() dto: BatchUpdateStatusDto, @CurrentUser() user: any) {
+		await this.systemRoleService.assertPermissionUsage(user?.role, 'course:status', user?.adminId);
 		const result = await this.adminCourseService.batchUpdateStatus(dto);
 		return CommonResponseDto.success(result);
 	}

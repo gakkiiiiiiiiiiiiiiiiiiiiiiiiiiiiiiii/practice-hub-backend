@@ -4,9 +4,10 @@ import { AdminCourseController, AppCourseAdminController } from './admin-course.
 import { DatabaseModule } from '../../database/database.module';
 import { SystemModule } from '../system/system.module';
 import { CourseModule } from '../course/course.module';
+import { SystemRoleModule } from '../system-role/system-role.module';
 
 @Module({
-  imports: [DatabaseModule, SystemModule, CourseModule],
+  imports: [DatabaseModule, SystemModule, CourseModule, SystemRoleModule],
   controllers: [AdminCourseController, AppCourseAdminController],
   providers: [AdminCourseService],
   exports: [AdminCourseService],

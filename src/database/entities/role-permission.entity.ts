@@ -19,6 +19,9 @@ export class RolePermission {
 	@Column({ length: 100, comment: '权限标识（如：dashboard:view, question:create）' })
 	permission: string;
 
+	@Column({ type: 'int', nullable: true, comment: '每日调用上限，NULL 表示无限制' })
+	daily_limit: number | null;
+
 	@CreateDateColumn()
 	create_time: Date;
 

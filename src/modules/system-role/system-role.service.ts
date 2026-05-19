@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, OnModuleInit, Inject, forwardRef, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Role } from '../../database/entities/role.entity';
@@ -12,6 +12,7 @@ import { UpdateRolePermissionsDto } from './dto/update-role-permissions.dto';
 @Injectable()
 export class SystemRoleService implements OnModuleInit {
 	private readonly logger = new Logger(SystemRoleService.name);
+	private readonly permissionUsageCounters = new Map<string, number>();
 
 	constructor(
 		@InjectRepository(Role)
@@ -58,6 +59,7 @@ export class SystemRoleService implements OnModuleInit {
 					'course:view',
 					'course:create',
 					'course:edit',
+					'course:status',
 					'course:delete',
 					'chapter:view',
 					'chapter:create',
@@ -80,6 +82,7 @@ export class SystemRoleService implements OnModuleInit {
 					'course:view',
 					'course:create',
 					'course:edit',
+					'course:status',
 					'course:delete',
 					'chapter:view',
 					'chapter:create',
@@ -135,6 +138,21 @@ export class SystemRoleService implements OnModuleInit {
 				);
 				await this.rolePermissionRepository.save(permissions);
 				this.logger.log(`为角色 ${roleData.name} 创建了 ${permissions.length} 个权限`);
+			} else {
+				const existing = await this.rolePermissionRepository.find({ where: { role_id: role.id } });
+				const existingSet = new Set(existing.map((item) => item.permission));
+				const missing = roleData.permissions.filter((permission) => !existingSet.has(permission));
+				if (missing.length > 0) {
+					const permissions = missing.map((permission) =>
+						this.rolePermissionRepository.create({
+							role_id: role.id,
+							permission,
+							daily_limit: null,
+						}),
+					);
+					await this.rolePermissionRepository.save(permissions);
+					this.logger.log(`为角色 ${roleData.name} 补充了 ${permissions.length} 个权限`);
+				}
 			}
 		}
 	}
@@ -158,6 +176,7 @@ export class SystemRoleService implements OnModuleInit {
 			isSystem: role.is_system === 1,
 			status: role.status,
 			permissions: role.permissions?.map((p) => p.permission) || [],
+			permissionLimits: this.buildPermissionLimitMap(role.permissions),
 			permissionCount: role.permissions?.length || 0,
 			createdAt: role.create_time,
 			updatedAt: role.update_time,
@@ -199,6 +218,7 @@ export class SystemRoleService implements OnModuleInit {
 			isSystem: role.is_system === 1,
 			status: role.status,
 			permissions: role.permissions?.map((p) => p.permission) || [],
+			permissionLimits: this.buildPermissionLimitMap(role.permissions),
 			permissionCount: role.permissions?.length || 0,
 			createdAt: role.create_time,
 			updatedAt: role.update_time,
@@ -236,11 +256,13 @@ export class SystemRoleService implements OnModuleInit {
 		const savedRole = await this.roleRepository.save(role);
 
 		// 创建权限关联
+		const permissionLimits = this.normalizePermissionLimits(dto.permissionLimits, dto.permissions);
 		if (dto.permissions.length > 0) {
 			const permissions = dto.permissions.map((permission) =>
 				this.rolePermissionRepository.create({
 					role_id: savedRole.id,
 					permission,
+					daily_limit: permissionLimits[permission] ?? null,
 				}),
 			);
 			await this.rolePermissionRepository.save(permissions);
@@ -252,6 +274,7 @@ export class SystemRoleService implements OnModuleInit {
 			name: savedRole.name,
 			description: savedRole.description,
 			permissions: dto.permissions,
+			permissionLimits,
 			permissionCount: dto.permissions.length,
 			createdAt: savedRole.create_time,
 		};
@@ -296,11 +319,13 @@ export class SystemRoleService implements OnModuleInit {
 		}
 
 		// 创建新权限关联
+		const permissionLimits = this.normalizePermissionLimits(dto.permissionLimits, dto.permissions);
 		if (dto.permissions.length > 0) {
 			const permissions = dto.permissions.map((permission) =>
 				this.rolePermissionRepository.create({
 					role_id: role.id,
 					permission,
+					daily_limit: permissionLimits[permission] ?? null,
 				}),
 			);
 			await this.rolePermissionRepository.save(permissions);
@@ -311,6 +336,7 @@ export class SystemRoleService implements OnModuleInit {
 			value: role.value,
 			name: role.name,
 			permissions: dto.permissions,
+			permissionLimits,
 			permissionCount: dto.permissions.length,
 			updatedAt: new Date(),
 		};
@@ -368,6 +394,7 @@ export class SystemRoleService implements OnModuleInit {
 					'course:view',
 					'course:create',
 					'course:edit',
+					'course:status',
 					'course:delete',
 					'chapter:view',
 					'chapter:create',
@@ -406,6 +433,7 @@ export class SystemRoleService implements OnModuleInit {
 					'course:view',
 					'course:create',
 					'course:edit',
+					'course:status',
 					'course:delete',
 					'chapter:view',
 					'chapter:create',
@@ -469,5 +497,62 @@ export class SystemRoleService implements OnModuleInit {
 		}
 
 		return role.permissions.map((p) => p.permission);
+	}
+
+	async assertPermissionUsage(role: string | number, permission: string, actorId?: number) {
+		const queryBuilder = this.roleRepository
+			.createQueryBuilder('role')
+			.leftJoinAndSelect('role.permissions', 'permissions');
+
+		if (typeof role === 'number') {
+			queryBuilder.where('role.id = :id', { id: role });
+		} else {
+			queryBuilder.where('role.value = :value', { value: role });
+		}
+
+		const roleEntity = await queryBuilder.getOne();
+		const permissionEntity = roleEntity?.permissions?.find((item) => item.permission === permission);
+		if (!permissionEntity) {
+			throw new ForbiddenException('权限不足');
+		}
+
+		const limit = permissionEntity.daily_limit;
+		if (limit == null || limit <= 0) {
+			return;
+		}
+
+		const today = new Date().toISOString().slice(0, 10);
+		const key = `${today}:${actorId || 'anonymous'}:${roleEntity?.id || role}:${permission}`;
+		const used = this.permissionUsageCounters.get(key) || 0;
+		if (used >= limit) {
+			throw new ForbiddenException(`权限 ${permission} 今日调用次数已达上限`);
+		}
+		this.permissionUsageCounters.set(key, used + 1);
+	}
+
+	private buildPermissionLimitMap(permissions?: RolePermission[]) {
+		const map: Record<string, number | null> = {};
+		(permissions || []).forEach((item) => {
+			map[item.permission] = item.daily_limit ?? null;
+		});
+		return map;
+	}
+
+	private normalizePermissionLimits(input: Record<string, unknown> | undefined, permissions: string[]) {
+		const allowed = new Set(permissions);
+		const result: Record<string, number | null> = {};
+		Object.entries(input || {}).forEach(([permission, value]) => {
+			if (!allowed.has(permission)) return;
+			if (value === null || value === undefined || value === '') {
+				result[permission] = null;
+				return;
+			}
+			const limit = Number(value);
+			if (!Number.isInteger(limit) || limit < 1) {
+				throw new BadRequestException(`${permission} 的每日调用上限必须为正整数或留空`);
+			}
+			result[permission] = limit;
+		});
+		return result;
 	}
 }

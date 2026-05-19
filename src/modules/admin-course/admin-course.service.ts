@@ -18,6 +18,7 @@ import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 import { SystemService } from '../system/system.service';
 import { CourseService } from '../course/course.service';
+import { AdminRole } from '../../database/entities/sys-user.entity';
 
 class PreviewCacheTaskInterruptedError extends Error {
   constructor() {
@@ -64,7 +65,7 @@ export class AdminCourseService {
   /**
    * 新增/编辑课程
    */
-  async saveCourse(dto: CreateCourseDto | UpdateCourseDto, id?: number) {
+  async saveCourse(dto: CreateCourseDto | UpdateCourseDto, id?: number, actorRole?: AdminRole | string) {
     await this.applyDefaultIntroduction(dto, Boolean(id));
     if (id) {
       const course = await this.courseRepository.findOne({ where: { id } });
@@ -77,6 +78,7 @@ export class AdminCourseService {
       if (dto.is_free === 1) {
         dto.validity_days = null;
       }
+      this.protectCourseFileFromNonAdminDelete(dto, course, actorRole);
       Object.assign(course, dto);
       const saved = await this.courseRepository.save(course);
       this.warmupPreviewCacheIfNeeded(saved);
@@ -102,6 +104,27 @@ export class AdminCourseService {
       this.warmupPreviewCacheIfNeeded(saved);
       return saved;
     }
+  }
+
+  private protectCourseFileFromNonAdminDelete(
+    dto: CreateCourseDto | UpdateCourseDto,
+    course: Course,
+    actorRole?: AdminRole | string,
+  ) {
+    if (actorRole === AdminRole.SUPER_ADMIN) return;
+    const hasExistingFile = course.content_type === 'file' && !!course.file_url;
+    if (!hasExistingFile) return;
+
+    const nextFileUrl = typeof dto.file_url === 'string' ? dto.file_url.trim() : dto.file_url;
+    const isDeletingFile = dto.content_type !== undefined && dto.content_type !== 'file';
+    const isClearingFile = dto.file_url === null || dto.file_url === '' || nextFileUrl === '';
+    if (!isDeletingFile && !isClearingFile) return;
+
+    dto.content_type = 'file';
+    dto.file_url = course.file_url;
+    dto.file_name = course.file_name;
+    dto.file_type = course.file_type;
+    dto.file_size = course.file_size;
   }
 
   async warmupPreviewCache(courseId: number, force = false) {
