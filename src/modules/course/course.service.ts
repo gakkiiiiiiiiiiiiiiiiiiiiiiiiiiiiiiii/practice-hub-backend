@@ -379,7 +379,8 @@ export class CourseService {
       responseType: 'arraybuffer',
       timeout,
       headers: {
-        Accept: 'application/pdf,application/octet-stream,*/*',
+        Accept:
+          'application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/octet-stream,*/*',
         'User-Agent': 'Mozilla/5.0 (compatible; PracticeHub/1.0)',
       },
     });
@@ -387,7 +388,8 @@ export class CourseService {
   }
 
   /**
-   * 获取课程文件预览 PDF（前 maxPages 页），仅支持 PDF 类型
+   * 获取课程文件预览 PDF（前 maxPages 页）。
+   * Word 文件会先转换为临时 PDF，再复用 PDF 预览链路。
    */
   async getCourseFilePreviewPdf(courseId: number, maxPages: number = 3): Promise<Buffer> {
     const course = await this.courseRepository.findOne({
@@ -398,10 +400,10 @@ export class CourseService {
       throw new NotFoundException('课程无文件或非文件课程');
     }
     const fileType = (course.file_type || '').toLowerCase();
-    if (fileType !== 'pdf') {
-      throw new NotFoundException('仅支持 PDF 试读');
+    if (!this.isPreviewImageSupportedFileType(fileType)) {
+      throw new NotFoundException('仅支持 PDF/Word 试读');
     }
-    const bytes = await this.downloadCourseFileBuffer(course.file_url, 30000);
+    const bytes = await this.getCourseFileAsPdfBuffer(course, 30000);
     const donorDoc = await this.loadPdfDocument(bytes);
     const pageCount = donorDoc.getPageCount();
     const pagesToCopy = Math.min(maxPages, Math.max(1, pageCount));
@@ -424,10 +426,10 @@ export class CourseService {
     userId?: number,
   ): Promise<{ totalPages: number; cacheVersion: string }> {
     const { course, hasAuth } = await this.getCourseAccessContext(courseId, userId);
-    if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
-      throw new NotFoundException('课程无 PDF 文件');
+    if (!this.isPreviewImageSupportedFileCourse(course)) {
+      throw new NotFoundException('课程无可预览文件');
     }
-    const bytes = await this.downloadCourseFileBuffer(course.file_url, 30000);
+    const bytes = await this.getCourseFileAsPdfBuffer(course, 30000);
     const doc = await this.loadPdfDocument(bytes);
     const fullCount = doc.getPageCount();
     const totalPages =
@@ -441,7 +443,7 @@ export class CourseService {
   }
 
   /**
-   * 将课程 PDF 指定页转为预览图（用于小程序内图片预览）
+   * 将课程文件指定页转为预览图（用于小程序内图片预览）
    * 使用 JPEG 以在尽量保持清晰度的前提下降低传输体积。
    * 依赖 pdf2pic（需系统安装 GraphicsMagick + Ghostscript），失败时抛出
    */
@@ -451,8 +453,8 @@ export class CourseService {
     userId?: number,
   ): Promise<{ buffer: Buffer; contentType: string }> {
     const { course, hasAuth } = await this.getCourseAccessContext(courseId, userId);
-    if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
-      throw new NotFoundException('课程无 PDF 文件');
+    if (!this.isPreviewImageSupportedFileCourse(course)) {
+      throw new NotFoundException('课程无可预览文件');
     }
     const maxPages =
       hasAuth || Number(course.price) === 0 || course.is_free === 1
@@ -576,8 +578,8 @@ export class CourseService {
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
-    if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
-      throw new BadRequestException('仅文件类 PDF 课程支持生成图片缓存');
+    if (!this.isPreviewImageSupportedFileCourse(course)) {
+      throw new BadRequestException('仅文件类 PDF/Word 课程支持生成图片缓存');
     }
 
     const now = Date.now();
@@ -596,7 +598,7 @@ export class CourseService {
     });
     await this.notifyPreviewWarmupProgress(courseId, onProgress);
 
-    const pdfBuffer = await this.downloadCourseFileBuffer(course.file_url, 60000);
+    const pdfBuffer = await this.getCourseFileAsPdfBuffer(course, 60000);
     const doc = await this.loadPdfDocument(pdfBuffer);
     const totalPages = doc.getPageCount();
     const previewScope: 'full' = 'full';
@@ -702,7 +704,7 @@ export class CourseService {
     if (pdfBufferOverride) {
       pdfBuffer = pdfBufferOverride;
     } else if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
-      pdfBuffer = await this.downloadCourseFileBuffer(course.file_url, 30000);
+      pdfBuffer = await this.getCourseFileAsPdfBuffer(course, 30000);
     } else {
       pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 3);
     }
@@ -757,6 +759,89 @@ export class CourseService {
     const bytes = await singleDoc.save();
     fs.writeFileSync(outputPath, Buffer.from(bytes));
     return outputPath;
+  }
+
+  private isPreviewImageSupportedFileCourse(course: Pick<Course, 'content_type' | 'file_url' | 'file_type'>) {
+    return (
+      course.content_type === 'file' &&
+      !!course.file_url &&
+      this.isPreviewImageSupportedFileType((course.file_type || '').toLowerCase())
+    );
+  }
+
+  private isPreviewImageSupportedFileType(fileType?: string | null) {
+    return ['pdf', 'doc', 'docx'].includes((fileType || '').toLowerCase());
+  }
+
+  private async getCourseFileAsPdfBuffer(
+    course: Pick<Course, 'id' | 'file_url' | 'file_type'>,
+    timeout = 30000,
+  ): Promise<Buffer> {
+    if (!course.file_url) {
+      throw new NotFoundException('课程无文件');
+    }
+    const fileType = (course.file_type || '').toLowerCase();
+    const sourceBuffer = await this.downloadCourseFileBuffer(course.file_url, timeout);
+    if (fileType === 'pdf') {
+      return sourceBuffer;
+    }
+    if (fileType === 'doc' || fileType === 'docx') {
+      return this.convertWordToPdfBuffer(sourceBuffer, fileType, course.id);
+    }
+    throw new BadRequestException('暂不支持该文件类型预览');
+  }
+
+  private async convertWordToPdfBuffer(buffer: Buffer, fileType: string, courseId: number): Promise<Buffer> {
+    const tmpDir = path.join(
+      os.tmpdir(),
+      `course-doc-to-pdf-${courseId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    );
+    const profileDir = path.join(tmpDir, 'lo-profile');
+    const inputPath = path.join(tmpDir, `source.${fileType}`);
+    const outputPath = path.join(tmpDir, 'source.pdf');
+    fs.mkdirSync(profileDir, { recursive: true });
+    fs.writeFileSync(inputPath, buffer);
+
+    try {
+      await this.withTimeout(
+        execFileAsync('soffice', [
+          `-env:UserInstallation=file://${profileDir}`,
+          '--headless',
+          '--invisible',
+          '--nodefault',
+          '--nolockcheck',
+          '--nologo',
+          '--nofirststartwizard',
+          '--convert-to',
+          'pdf',
+          '--outdir',
+          tmpDir,
+          inputPath,
+        ]),
+        60000,
+        'Word 转 PDF 超时，请稍后重试',
+      );
+
+      if (!fs.existsSync(outputPath)) {
+        throw new Error('Word 转 PDF 未生成有效文件');
+      }
+      const pdfBuffer = fs.readFileSync(outputPath);
+      if (!pdfBuffer.length || pdfBuffer.slice(0, 4).toString() !== '%PDF') {
+        throw new Error('Word 转 PDF 结果不是有效 PDF');
+      }
+      return pdfBuffer;
+    } catch (error: any) {
+      const message = error?.code === 'ENOENT'
+        ? '未找到 soffice，请确认容器已安装 LibreOffice'
+        : error instanceof Error
+          ? error.message
+          : String(error);
+      throw new Error(`Word 转 PDF 失败: ${message}`);
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch (_) {}
+    }
   }
 
   private async renderPdfPageToJpeg(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {

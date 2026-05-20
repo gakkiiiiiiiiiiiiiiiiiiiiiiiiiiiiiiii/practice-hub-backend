@@ -31,8 +31,9 @@ FROM node:20-alpine AS production
 # - pdf2pic@3.x 依赖 GraphicsMagick + Ghostscript
 # - poppler-utils/pdftoppm 作为线上 PDF 转图主兜底
 # - ImageMagick 作为线上容器中 GraphicsMagick 返回空结果时的兜底
+# - LibreOffice 用于将 doc/docx 文件课程先转换为 PDF，再生成图片缓存
 # - 缺少 gm 时，课程文件单页预览接口会在云托管中转图失败
-RUN apk add --no-cache graphicsmagick ghostscript poppler-utils imagemagick
+RUN apk add --no-cache graphicsmagick ghostscript poppler-utils imagemagick libreoffice font-noto-cjk
 
 WORKDIR /app
 

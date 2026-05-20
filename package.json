@@ -32,6 +32,7 @@
 		"test:wechat": "node scripts/test-wechat-login.js",
 		"xpay:goods": "node scripts/upload-xpay-goods.js",
 		"xpay:goods:remote": "node scripts/upload-xpay-goods.js --remote",
+		"xpay:goods:fill-template": "node scripts/fill-xpay-goods-template.js --remote",
 		"fix:is-correct": "node scripts/fix-is-correct-nullable.js",
 		"fix:is-correct:remote": "node scripts/fix-is-correct-nullable.js --remote",
 		"test-data": "node scripts/insert-test-data.js",

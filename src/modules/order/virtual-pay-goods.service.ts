@@ -13,8 +13,8 @@ export type VirtualPayConfig = {
   mode: string;
 };
 
-/** 微信 xpay 道具名称：长度 (0, 40]，按 UTF-8 字节计 */
-const WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES = 40;
+/** 微信 xpay 道具名称：(0,40] 按 UTF-8 字节；恰好 40 字节会被拒，上限 39 */
+const WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES = 39;
 /** 微信 xpay 道具备注：按 UTF-8 字节截断 */
 const WECHAT_VIRTUAL_PAY_REMARK_MAX_BYTES = 128;
 
@@ -136,7 +136,7 @@ export class VirtualPayGoodsService {
     await this.ensureGoodsPublished({
       config,
       productId: this.getVirtualPayProductId('course', course.id),
-      name: this.buildVirtualPayGoodsName(courseName),
+      name: this.buildVirtualPayGoodsName(courseName, '', course.id),
       price: coursePriceCents,
       remark: this.buildVirtualPayGoodsRemark('课程', courseName),
     });
@@ -144,7 +144,7 @@ export class VirtualPayGoodsService {
     await this.ensureGoodsPublished({
       config,
       productId: this.getVirtualPayProductId('activation_code', course.id),
-      name: this.buildVirtualPayGoodsName(courseName, '激活码'),
+      name: this.buildVirtualPayGoodsName(courseName, '激活码', course.id),
       price: agentPriceCents,
       remark: this.buildVirtualPayGoodsRemark('激活码', courseName),
     });
@@ -357,6 +357,7 @@ export class VirtualPayGoodsService {
     payload: Record<string, any>,
     accessToken: string,
     config: { env: number; appKey: string },
+    retried = false,
   ) {
     const body = JSON.stringify({ ...payload, env: config.env });
     const paySig = this.createHmacSha256(config.appKey, `${endpoint}&${body}`);
@@ -367,6 +368,11 @@ export class VirtualPayGoodsService {
     const data = response.data || {};
     if (data.errcode) {
       const errmsg = data.errmsg || `微信虚拟支付接口失败: ${data.errcode}`;
+      if (!retried && this.isInvalidAccessTokenError({ message: errmsg })) {
+        this.logger.warn(`微信 access_token 失效，stable_token 强制刷新后重试: ${endpoint}`);
+        const freshToken = await this.getWechatAccessToken(true);
+        return this.callVirtualPayApi(endpoint, payload, freshToken, config, true);
+      }
       if (this.isVirtualPayRateLimitError({ message: errmsg })) {
         throw new BadRequestException(`频率限制 ${errmsg}`);
       }
@@ -375,9 +381,19 @@ export class VirtualPayGoodsService {
     return data;
   }
 
-  private async getWechatAccessToken() {
+  private isInvalidAccessTokenError(error: { message?: string }) {
+    const message = this.getErrorMessage(error).toLowerCase();
+    return (
+      message.includes('40001') ||
+      message.includes('invalid credential') ||
+      message.includes('access_token is invalid') ||
+      message.includes('not latest')
+    );
+  }
+
+  private async getWechatAccessToken(forceRefresh = false) {
     const now = Date.now();
-    if (this.wechatAccessTokenCache && this.wechatAccessTokenCache.expireAt > now + 60_000) {
+    if (!forceRefresh && this.wechatAccessTokenCache && this.wechatAccessTokenCache.expireAt > now + 60_000) {
       return this.wechatAccessTokenCache.token;
     }
     const appid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
@@ -388,14 +404,19 @@ export class VirtualPayGoodsService {
     if (!appid || !secret) {
       throw new BadRequestException('微信虚拟支付商品上传失败：缺少 WECHAT_APPID 或 WECHAT_SECRET');
     }
-    const response = await this.requestWechatPublicApi('https://api.weixin.qq.com/cgi-bin/token', null, {
-      grant_type: 'client_credential',
-      appid,
-      secret,
-    });
+    const response = await this.requestWechatPublicApi(
+      'https://api.weixin.qq.com/cgi-bin/stable_token',
+      JSON.stringify({
+        grant_type: 'client_credential',
+        appid,
+        secret,
+        force_refresh: !!forceRefresh,
+      }),
+      {},
+    );
     const data = response.data || {};
     if (data.errcode || !data.access_token) {
-      throw new BadRequestException(data.errmsg || `获取微信 access_token 失败: ${data.errcode || 'unknown'}`);
+      throw new BadRequestException(data.errmsg || `获取微信 stable access_token 失败: ${data.errcode || 'unknown'}`);
     }
     this.wechatAccessTokenCache = {
       token: data.access_token,
@@ -462,12 +483,17 @@ export class VirtualPayGoodsService {
     return result || text.slice(0, 1);
   }
 
-  private buildVirtualPayGoodsName(courseName: string, suffix?: string) {
+  private buildVirtualPayGoodsName(courseName: string, suffix = '', courseId?: number | string) {
+    const source = String(courseName || '').trim() || `课程${courseId || ''}`;
     const suffixText = suffix ? ` ${suffix}` : '';
     const suffixBytes = Buffer.byteLength(suffixText, 'utf8');
     const maxBaseBytes = Math.max(1, WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES - suffixBytes);
-    const base = this.truncateUtf8Bytes(String(courseName || '').trim(), maxBaseBytes);
-    return this.truncateUtf8Bytes(`${base}${suffixText}`, WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES);
+    const base = this.truncateUtf8Bytes(source, maxBaseBytes);
+    let name = this.truncateUtf8Bytes(`${base}${suffixText}`, WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES);
+    if (!name || Buffer.byteLength(name, 'utf8') < 1) {
+      name = this.truncateUtf8Bytes(`课程${courseId}${suffixText}`, WECHAT_VIRTUAL_PAY_NAME_MAX_BYTES);
+    }
+    return name;
   }
 
   private buildVirtualPayGoodsRemark(prefix: string, courseName: string) {

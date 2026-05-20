@@ -98,8 +98,8 @@ export class CourseController {
     if (allowSourceFile && (hasAuth || Number(course.price) === 0 || course.is_free === 1)) {
       return res.redirect(302, course.file_url);
     }
-    if ((course.file_type || '').toLowerCase() !== 'pdf') {
-      return res.status(403).send('仅支持 PDF 试读');
+    if (!['pdf', 'doc', 'docx'].includes((course.file_type || '').toLowerCase())) {
+      return res.status(403).send('仅支持 PDF/Word 试读');
     }
     const buffer = await this.courseService.getCourseFilePreviewPdf(courseId, maxPages);
     const etag = this.createBufferEtag(buffer);

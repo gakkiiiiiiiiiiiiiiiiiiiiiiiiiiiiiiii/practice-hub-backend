@@ -138,8 +138,8 @@ export class AdminCourseService {
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
-    if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
-      throw new BadRequestException('仅文件类 PDF 课程支持生成图片缓存');
+    if (!this.isPreviewCacheSupportedFileCourse(course)) {
+      throw new BadRequestException('仅文件类 PDF/Word 课程支持生成图片缓存');
     }
     return this.courseService.warmupCoursePreviewCacheInBackground(courseId, force);
   }
@@ -159,7 +159,7 @@ export class AdminCourseService {
     const courses = await this.courseRepository.find({
       where: {
         content_type: 'file',
-        file_type: 'pdf',
+        file_type: In(['pdf', 'doc', 'docx']),
       },
       select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
       order: { id: 'ASC' },
@@ -276,11 +276,11 @@ export class AdminCourseService {
     const targets = courses.filter(
       (course) =>
         course.content_type === 'file' &&
-        (course.file_type || '').toLowerCase() === 'pdf' &&
+        this.isPreviewCacheSupportedFileCourse(course) &&
         !!course.file_url,
     );
     if (targets.length === 0) {
-      throw new BadRequestException('失败明细中的课程已不存在或不是文件类 PDF 课程');
+      throw new BadRequestException('失败明细中的课程已不存在或不是文件类 PDF/Word 课程');
     }
 
     const task = await this.previewCacheTaskRepository.save(
@@ -572,10 +572,18 @@ export class AdminCourseService {
   }
 
   private warmupPreviewCacheIfNeeded(course: Course) {
-    if (course.content_type !== 'file' || !course.file_url || (course.file_type || '').toLowerCase() !== 'pdf') {
+    if (!this.isPreviewCacheSupportedFileCourse(course)) {
       return;
     }
     this.courseService.warmupCoursePreviewCacheInBackground(course.id, true);
+  }
+
+  private isPreviewCacheSupportedFileCourse(course: Pick<Course, 'content_type' | 'file_url' | 'file_type'>) {
+    return (
+      course.content_type === 'file' &&
+      !!course.file_url &&
+      ['pdf', 'doc', 'docx'].includes((course.file_type || '').toLowerCase())
+    );
   }
 
   private async applyDefaultIntroduction(dto: CreateCourseDto | UpdateCourseDto, isUpdate: boolean) {
