@@ -145,6 +145,22 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Post('preview-cache/fix-blank')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '检测空白预览图课程并强制重新生成' })
+	async fixBlankPreviewCaches() {
+		const result = await this.adminCourseService.fixBlankPreviewCaches();
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('files/pdf-health-check')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '检测指定 PDF 文件结构是否规范' })
+	async checkCourseFilePdfHealthByUrl(@Body() body: { fileUrl?: string; displayName?: string } = {}) {
+		const result = await this.adminCourseService.checkCourseFilePdfHealthByUrl(body?.fileUrl || '', body?.displayName);
+		return CommonResponseDto.success(result);
+	}
+
 	private parseOptionalCourseId(value: unknown): number | null {
 		if (value === undefined || value === null || value === '') {
 			return null;
@@ -173,6 +189,14 @@ export class AdminCourseController {
 		}
 
 		return recommendedCourseIds;
+	}
+
+	@Get(':id/files/pdf-health')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '检测课程 PDF 文件结构是否规范' })
+	async getCourseFilesPdfHealth(@Param('id') id: number) {
+		const result = await this.adminCourseService.getCourseFilesPdfHealth(+id);
+		return CommonResponseDto.success(result);
 	}
 
 	@Get(':id/files')

@@ -47,6 +47,30 @@ export interface PreviewWarmupProgress extends PreviewWarmupResult {
 
 export type PreviewWarmupProgressListener = (progress: PreviewWarmupProgress) => void | Promise<void>;
 
+export interface BlankPreviewCacheItem {
+  courseId: number;
+  courseName: string;
+  fileId: number;
+  fileName: string;
+  pageNum: number;
+}
+
+export interface PdfPageCountResult {
+  pageCount: number;
+  parser: 'pdf-lib' | 'pdfinfo' | 'ghostscript';
+  warnings: string[];
+}
+
+export interface CourseFilePdfHealth {
+  fileId: number | null;
+  displayName: string;
+  fileUrl: string;
+  healthy: boolean;
+  warnings: string[];
+  pageCount: number | null;
+  parser: string | null;
+}
+
 @Injectable()
 export class CourseService {
   private readonly logger = new Logger(CourseService.name);
@@ -401,6 +425,157 @@ export class CourseService {
     return PDFDocument.load(input, { ignoreEncryption: true });
   }
 
+  /** 解析 PDF 页数：pdf-lib 失败时依次 fallback 到 pdfinfo、Ghostscript */
+  private async resolvePdfPageCount(pdfBuffer: Buffer): Promise<PdfPageCountResult> {
+    const warnings: string[] = [];
+
+    try {
+      const doc = await this.loadPdfDocument(pdfBuffer);
+      const pageCount = doc.getPageCount();
+      if (pageCount > 0) {
+        return { pageCount, parser: 'pdf-lib', warnings };
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      warnings.push(`PDF 结构不规范（pdf-lib 无法解析）`);
+      this.logger.warn(`pdf-lib 解析页数失败，尝试外部工具: ${message}`);
+    }
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-page-count-'));
+    const pdfPath = path.join(tmpDir, 'source.pdf');
+    try {
+      fs.writeFileSync(pdfPath, pdfBuffer);
+
+      const pdfinfoCount = await this.resolvePdfPageCountWithPdfinfo(pdfPath);
+      if (pdfinfoCount && pdfinfoCount > 0) {
+        if (warnings.length) {
+          warnings.push('已使用 pdfinfo 兜底解析页数，预览仍可正常生成');
+        }
+        return { pageCount: pdfinfoCount, parser: 'pdfinfo', warnings };
+      }
+
+      const gsCount = await this.resolvePdfPageCountWithGhostscript(pdfPath);
+      if (gsCount && gsCount > 0) {
+        if (warnings.length) {
+          warnings.push('已使用 Ghostscript 兜底解析页数，预览仍可正常生成');
+        }
+        return { pageCount: gsCount, parser: 'ghostscript', warnings };
+      }
+
+      throw new Error(warnings[0] || '无法解析 PDF 页数');
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch (_) {}
+    }
+  }
+
+  private async resolvePdfPageCountWithPdfinfo(pdfPath: string): Promise<number | null> {
+    try {
+      const { stdout, stderr } = await execFileAsync('pdfinfo', [pdfPath]);
+      const count = this.parsePdfinfoPageCount(`${stdout}\n${stderr}`);
+      if (count) return count;
+    } catch (error: any) {
+      const text = `${error?.stdout || ''}\n${error?.stderr || ''}\n${error?.message || ''}`;
+      const count = this.parsePdfinfoPageCount(text);
+      if (count) return count;
+    }
+    return null;
+  }
+
+  private parsePdfinfoPageCount(text: string): number | null {
+    const match = String(text || '').match(/^Pages:\s+(\d+)/m);
+    if (!match) return null;
+    const count = Number.parseInt(match[1], 10);
+    return Number.isInteger(count) && count > 0 ? count : null;
+  }
+
+  private async resolvePdfPageCountWithGhostscript(pdfPath: string): Promise<number | null> {
+    const escapedPath = pdfPath.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+    try {
+      const { stdout } = await execFileAsync('gs', [
+        '-q',
+        '-dNODISPLAY',
+        '-dNOSAFER',
+        '-c',
+        `(${escapedPath}) (r) file runpdfbegin pdfpagecount = quit`,
+      ]);
+      const count = Number.parseInt(String(stdout).trim(), 10);
+      return Number.isInteger(count) && count > 0 ? count : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** 管理后台：检测课程 PDF 文件结构是否规范 */
+  async inspectCourseFilePdfHealth(
+    file: Pick<CourseFile, 'id' | 'course_id' | 'file_url' | 'file_type' | 'display_name'>,
+  ): Promise<CourseFilePdfHealth> {
+    const base: CourseFilePdfHealth = {
+      fileId: file.id ?? null,
+      displayName: file.display_name || '',
+      fileUrl: file.file_url,
+      healthy: true,
+      warnings: [],
+      pageCount: null,
+      parser: null,
+    };
+    const fileType = (file.file_type || '').toLowerCase();
+    if (fileType !== 'pdf') {
+      return base;
+    }
+    if (!file.file_url) {
+      return {
+        ...base,
+        healthy: false,
+        warnings: ['文件地址为空'],
+      };
+    }
+
+    try {
+      const pdfBuffer = await this.getCourseFileAsPdfBuffer(file, 120000);
+      const result = await this.resolvePdfPageCount(pdfBuffer);
+      const exportHint = '建议用 Adobe Acrobat 或 WPS「另存为 PDF」重新导出后再上传，以避免预览异常。';
+      return {
+        ...base,
+        healthy: result.warnings.length === 0,
+        warnings:
+          result.warnings.length > 0
+            ? [...result.warnings, exportHint]
+            : [],
+        pageCount: result.pageCount,
+        parser: result.parser,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ...base,
+        healthy: false,
+        warnings: [`无法解析 PDF：${message}`, '建议重新导出 PDF 后上传。'],
+      };
+    }
+  }
+
+  async getAdminCourseFilesPdfHealth(courseId: number): Promise<CourseFilePdfHealth[]> {
+    const files = await this.courseFileService.listByCourseId(courseId);
+    const pdfFiles = files.filter((file) => (file.file_type || '').toLowerCase() === 'pdf');
+    const results: CourseFilePdfHealth[] = [];
+    for (const file of pdfFiles) {
+      results.push(await this.inspectCourseFilePdfHealth(file));
+    }
+    return results;
+  }
+
+  async checkCourseFilePdfHealthByUrl(fileUrl: string, displayName?: string): Promise<CourseFilePdfHealth> {
+    return this.inspectCourseFilePdfHealth({
+      id: 0,
+      course_id: 0,
+      file_url: fileUrl,
+      file_type: 'pdf',
+      display_name: displayName || '',
+    });
+  }
+
   private async downloadCourseFileBuffer(fileUrl: string, timeout = 30000): Promise<Buffer> {
     const cosBuffer = await this.uploadService.readCosUrlBuffer(fileUrl);
     if (cosBuffer && cosBuffer.length > 0) {
@@ -750,6 +925,64 @@ export class CourseService {
     return aggregated;
   }
 
+  /** 扫描已生成但内容为空白页的预览缓存（抽样前 3 页） */
+  async scanCoursesWithBlankPreviewCache(): Promise<BlankPreviewCacheItem[]> {
+    const courseIds = await this.courseFileService.findCourseIdsWithPreviewableFiles();
+    const blankItems: BlankPreviewCacheItem[] = [];
+    const seenCourseIds = new Set<number>();
+
+    for (const courseId of courseIds) {
+      const course = await this.courseRepository.findOne({
+        where: { id: courseId },
+        select: ['id', 'name', 'content_type'],
+      });
+      if (!course) continue;
+
+      const files = await this.courseFileService.listByCourseId(courseId);
+      const supportedFiles = files.filter((file) => this.isPreviewImageSupportedFileRecord(file));
+      for (const courseFile of supportedFiles) {
+        const blankPageNum = await this.findBlankPreviewCachePage(course, courseFile);
+        if (blankPageNum > 0 && !seenCourseIds.has(courseId)) {
+          seenCourseIds.add(courseId);
+          blankItems.push({
+            courseId: course.id,
+            courseName: course.name,
+            fileId: courseFile.id,
+            fileName: courseFile.display_name,
+            pageNum: blankPageNum,
+          });
+          break;
+        }
+      }
+    }
+
+    return blankItems;
+  }
+
+  private async findBlankPreviewCachePage(course: Course, courseFile: CourseFile): Promise<number> {
+    const previewScope: 'full' = 'full';
+    for (let pageNum = 1; pageNum <= 3; pageNum += 1) {
+      const cacheKey = this.getPreviewImageCacheKey(
+        course.id,
+        courseFile.id,
+        pageNum,
+        courseFile.file_url,
+        previewScope,
+      );
+      if (!(await this.uploadService.cosObjectExists(cacheKey))) {
+        continue;
+      }
+      const buffer = await this.uploadService.readCosObjectBuffer(cacheKey);
+      if (!buffer || !this.isJpegBuffer(buffer)) {
+        continue;
+      }
+      if (await this.isPreviewJpegBlank(buffer)) {
+        return pageNum;
+      }
+    }
+    return 0;
+  }
+
   private async generateSingleCourseFilePreviewCache(
     course: Course,
     courseFile: CourseFile,
@@ -757,9 +990,13 @@ export class CourseService {
     onProgress?: PreviewWarmupProgressListener,
   ): Promise<PreviewWarmupResult> {
     const courseId = course.id;
-    const pdfBuffer = await this.getCourseFileAsPdfBuffer(courseFile, 60000);
-    const doc = await this.loadPdfDocument(pdfBuffer);
-    const totalPages = doc.getPageCount();
+    const pdfBuffer = await this.getCourseFileAsPdfBuffer(courseFile, 120000);
+    const { pageCount: totalPages, warnings: pageCountWarnings } = await this.resolvePdfPageCount(pdfBuffer);
+    if (pageCountWarnings.length) {
+      this.logger.warn(
+        `课程 ${courseId} 文件 ${courseFile.id} 页数解析警告: ${pageCountWarnings.join('; ')}`,
+      );
+    }
     const versionKey = this.getFilePageCountVersionKey(courseFile.file_url);
     await this.courseFileService.persistPageCount(courseFile.id, courseFile.file_url, totalPages, versionKey);
     const previewScope: 'full' = 'full';
@@ -1149,9 +1386,11 @@ export class CourseService {
     if (cached) {
       return cached;
     }
-    const bytes = await this.getCourseFileAsPdfBuffer(file, 30000);
-    const doc = await this.loadPdfDocument(bytes);
-    const fullCount = Math.max(0, doc.getPageCount());
+    const bytes = await this.getCourseFileAsPdfBuffer(file, 120000);
+    const { pageCount: fullCount, warnings } = await this.resolvePdfPageCount(bytes);
+    if (warnings.length) {
+      this.logger.warn(`课程文件 ${file.id} 页数解析警告: ${warnings.join('; ')}`);
+    }
     if (fullCount > 0) {
       await this.courseFileService.persistPageCount(file.id, file.file_url, fullCount, versionKey);
     }
@@ -1175,7 +1414,18 @@ export class CourseService {
 
   /** 拒绝几乎全白的 JPEG，避免将无效预览图写入 COS */
   private async assertPreviewJpegNotBlank(buffer: Buffer, tmpDir: string): Promise<void> {
-    const tmpPath = path.join(tmpDir, `blank-check-${Date.now()}.jpg`);
+    if (await this.isPreviewJpegBlank(buffer, tmpDir)) {
+      throw new Error('PDF 转图结果为空白页');
+    }
+  }
+
+  private async isPreviewJpegBlank(buffer: Buffer, tmpDir?: string): Promise<boolean> {
+    if (!this.isJpegBuffer(buffer)) {
+      return false;
+    }
+    const workDir = tmpDir || fs.mkdtempSync(path.join(os.tmpdir(), 'preview-blank-'));
+    const shouldCleanupDir = !tmpDir;
+    const tmpPath = path.join(workDir, `blank-check-${Date.now()}.jpg`);
     fs.writeFileSync(tmpPath, buffer);
     try {
       const { stdout } = await execFileAsync('magick', [
@@ -1188,20 +1438,21 @@ export class CourseService {
       ]);
       const std = Number.parseFloat(String(stdout).trim());
       if (Number.isFinite(std) && std < 1) {
-        throw new Error('PDF 转图结果为空白页');
+        return true;
       }
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('空白页')) {
-        throw error;
-      }
+      return false;
+    } catch (_) {
       // ImageMagick 不可用时，用体积做兜底：全白 JPEG 通常远小于正常内容页
-      if (buffer.length < 60000) {
-        throw new Error('PDF 转图结果疑似空白页');
-      }
+      return buffer.length < 60000;
     } finally {
       try {
         fs.unlinkSync(tmpPath);
       } catch (_) {}
+      if (shouldCleanupDir) {
+        try {
+          fs.rmSync(workDir, { recursive: true, force: true });
+        } catch (_) {}
+      }
     }
   }
 

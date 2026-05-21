@@ -202,6 +202,24 @@ export class AdminCourseService {
     return this.courseService.getAdminCoursePreviewSamplePages(courseId, fileId);
   }
 
+  async getCourseFilesPdfHealth(courseId: number) {
+    const course = await this.courseRepository.findOne({ where: { id: courseId }, select: ['id', 'content_type'] });
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+    if (course.content_type !== 'file') {
+      return [];
+    }
+    return this.courseService.getAdminCourseFilesPdfHealth(courseId);
+  }
+
+  async checkCourseFilePdfHealthByUrl(fileUrl: string, displayName?: string) {
+    if (!fileUrl || typeof fileUrl !== 'string') {
+      throw new BadRequestException('fileUrl 不能为空');
+    }
+    return this.courseService.checkCourseFilePdfHealthByUrl(fileUrl.trim(), displayName?.trim());
+  }
+
   async getPreviewSamplePageImage(courseId: number, pageNum: number, fileId?: number) {
     return this.courseService.getAdminCoursePreviewSamplePageImage(courseId, pageNum, fileId);
   }
@@ -378,6 +396,79 @@ export class AdminCourseService {
       running: 0,
       alreadyRunning: false,
       retryFromTaskNo: failedTask.task_no,
+      ...this.formatPreviewCacheTask(task),
+    };
+  }
+
+  async fixBlankPreviewCaches() {
+    const runningTask = await this.findRunningPreviewCacheTask();
+    if (runningTask) {
+      return {
+        ...this.formatPreviewCacheTask(runningTask),
+        total: runningTask.total_courses,
+        started: 0,
+        running: 1,
+        alreadyRunning: true,
+        detected: [],
+      };
+    }
+
+    const detected = await this.courseService.scanCoursesWithBlankPreviewCache();
+    if (detected.length === 0) {
+      return {
+        total: 0,
+        started: 0,
+        running: 0,
+        alreadyRunning: false,
+        detected: [],
+        ...this.emptyPreviewCacheProgress(),
+        message: '未检测到空白预览图课程',
+      };
+    }
+
+    const courseIds = Array.from(new Set(detected.map((item) => item.courseId)));
+    const targets = await this.courseRepository.find({
+      where: { id: In(courseIds) },
+      select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
+      order: { id: 'ASC' },
+    });
+    const validTargets: Course[] = [];
+    for (const course of targets) {
+      if (await this.isPreviewCacheSupportedFileCourse(course)) {
+        validTargets.push(course);
+      }
+    }
+    if (validTargets.length === 0) {
+      return {
+        total: 0,
+        started: 0,
+        running: 0,
+        alreadyRunning: false,
+        detected,
+        ...this.emptyPreviewCacheProgress(),
+        message: '检测到空白预览图，但对应课程已不可用',
+      };
+    }
+
+    const task = await this.previewCacheTaskRepository.save(
+      this.previewCacheTaskRepository.create({
+        task_no: this.createPreviewCacheTaskNo(),
+        trigger_type: 'fix-blank',
+        status: PreviewCacheTaskStatus.PENDING,
+        total_courses: validTargets.length,
+        message: `任务已创建，准备修复 ${validTargets.length} 个空白预览图课程`,
+        failed_details: JSON.stringify([]),
+      }),
+    );
+
+    void this.runPreviewCacheTask(task.id, validTargets, true);
+
+    return {
+      total: validTargets.length,
+      started: validTargets.length,
+      running: 0,
+      alreadyRunning: false,
+      detected,
       ...this.formatPreviewCacheTask(task),
     };
   }
