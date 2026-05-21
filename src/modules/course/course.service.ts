@@ -429,9 +429,7 @@ export class CourseService {
     if (!this.isPreviewImageSupportedFileCourse(course)) {
       throw new NotFoundException('课程无可预览文件');
     }
-    const bytes = await this.getCourseFileAsPdfBuffer(course, 30000);
-    const doc = await this.loadPdfDocument(bytes);
-    const fullCount = doc.getPageCount();
+    const fullCount = await this.resolveFullFilePageCount(course);
     const totalPages =
       hasAuth || Number(course.price) === 0 || course.is_free === 1 ? fullCount : Math.min(3, fullCount);
     const previewScope =
@@ -480,6 +478,81 @@ export class CourseService {
     const renderTask = this.renderAndCachePreviewPage({
       course,
       hasAuth,
+      courseId,
+      pageNum,
+      cacheKey,
+    }).finally(() => {
+      this.previewRenderTasks.delete(taskKey);
+    });
+    this.previewRenderTasks.set(taskKey, renderTask);
+    return renderTask;
+  }
+
+  /** 管理后台：获取文件课程前三页预览图状态 */
+  async getAdminCoursePreviewSamplePages(courseId: number) {
+    const course = await this.courseRepository.findOne({ where: { id: courseId } });
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+    if (!this.isPreviewImageSupportedFileCourse(course)) {
+      return {
+        supported: false,
+        samplePages: [] as Array<{ pageNum: number; ready: boolean }>,
+        totalPages: 0,
+        fullTotalPages: 0,
+        cacheVersion: '',
+      };
+    }
+    const fullTotalPages = await this.resolveFullFilePageCount(course);
+    const sampleCount = Math.min(3, Math.max(0, fullTotalPages));
+    const previewScope: 'full' = 'full';
+    const cacheVersion = this.getPreviewCacheVersion(course.file_url, previewScope);
+    const samplePages: Array<{ pageNum: number; ready: boolean }> = [];
+    for (let pageNum = 1; pageNum <= sampleCount; pageNum += 1) {
+      const cacheKey = this.getPreviewImageCacheKey(courseId, pageNum, course.file_url, previewScope);
+      const ready = await this.uploadService.cosObjectExists(cacheKey);
+      samplePages.push({ pageNum, ready });
+    }
+    return {
+      supported: true,
+      samplePages,
+      totalPages: sampleCount,
+      fullTotalPages,
+      cacheVersion,
+    };
+  }
+
+  /** 管理后台：获取文件课程前三页预览图（JPEG） */
+  async getAdminCoursePreviewSamplePageImage(
+    courseId: number,
+    pageNum: number,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    const course = await this.courseRepository.findOne({ where: { id: courseId } });
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+    if (!this.isPreviewImageSupportedFileCourse(course)) {
+      throw new NotFoundException('课程无可预览文件');
+    }
+    if (pageNum < 1 || pageNum > 3) {
+      throw new NotFoundException('仅支持预览前 3 页');
+    }
+    const previewScope: 'full' = 'full';
+    const cacheKey = this.getPreviewImageCacheKey(courseId, pageNum, course.file_url, previewScope);
+    const cached = await this.uploadService.readCosObjectBuffer(cacheKey);
+    if (cached && this.isJpegBuffer(cached)) {
+      return { buffer: cached, contentType: 'image/jpeg' };
+    }
+
+    const taskKey = `admin:${courseId}:${previewScope}:${this.getPreviewCacheVersion(course.file_url, previewScope)}:${pageNum}`;
+    const existingTask = this.previewRenderTasks.get(taskKey);
+    if (existingTask) {
+      return existingTask;
+    }
+
+    const renderTask = this.renderAndCachePreviewPage({
+      course,
+      hasAuth: true,
       courseId,
       pageNum,
       cacheKey,
@@ -601,6 +674,7 @@ export class CourseService {
     const pdfBuffer = await this.getCourseFileAsPdfBuffer(course, 60000);
     const doc = await this.loadPdfDocument(pdfBuffer);
     const totalPages = doc.getPageCount();
+    await this.persistFilePageCount(courseId, course.file_url, totalPages);
     const previewScope: 'full' = 'full';
     const result: PreviewWarmupResult = {
       courseId,
@@ -987,6 +1061,55 @@ export class CourseService {
 	    if (value.path && fs.existsSync(value.path)) return fs.readFileSync(value.path);
 	    return undefined;
 	  }
+
+  private getFilePageCountVersionKey(fileUrl: string): string {
+    return this.getPreviewCacheVersion(fileUrl, 'full');
+  }
+
+  private getCachedFilePageCount(
+    course: Pick<Course, 'file_url' | 'file_page_count' | 'file_page_count_key'>,
+  ): number | null {
+    if (!course.file_url) {
+      return null;
+    }
+    const count = Number(course.file_page_count || 0);
+    if (!Number.isInteger(count) || count <= 0) {
+      return null;
+    }
+    const cachedKey = String(course.file_page_count_key || '').trim();
+    if (!cachedKey || cachedKey !== this.getFilePageCountVersionKey(course.file_url)) {
+      return null;
+    }
+    return count;
+  }
+
+  private async persistFilePageCount(courseId: number, fileUrl: string, pageCount: number): Promise<void> {
+    const count = Math.max(0, Math.floor(Number(pageCount) || 0));
+    if (!fileUrl || count <= 0) {
+      return;
+    }
+    await this.courseRepository.update(courseId, {
+      file_page_count: count,
+      file_page_count_key: this.getFilePageCountVersionKey(fileUrl),
+    });
+  }
+
+  /** 优先读库内页数缓存，缺失时再下载并解析源 PDF */
+  async resolveFullFilePageCount(
+    course: Pick<Course, 'id' | 'file_url' | 'file_type' | 'content_type' | 'file_page_count' | 'file_page_count_key'>,
+  ): Promise<number> {
+    const cached = this.getCachedFilePageCount(course);
+    if (cached) {
+      return cached;
+    }
+    const bytes = await this.getCourseFileAsPdfBuffer(course, 30000);
+    const doc = await this.loadPdfDocument(bytes);
+    const fullCount = Math.max(0, doc.getPageCount());
+    if (fullCount > 0) {
+      await this.persistFilePageCount(course.id, course.file_url, fullCount);
+    }
+    return fullCount;
+  }
 
   private getPreviewImageCacheKey(
     courseId: number,

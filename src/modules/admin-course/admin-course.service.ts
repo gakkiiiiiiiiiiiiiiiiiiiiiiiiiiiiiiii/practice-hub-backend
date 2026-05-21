@@ -83,6 +83,13 @@ export class AdminCourseService {
         dto.validity_days = null;
       }
       this.protectCourseFileFromNonAdminDelete(dto, course, actorRole);
+      if (dto.file_url !== undefined) {
+        const nextFileUrl = typeof dto.file_url === 'string' ? dto.file_url.trim() : dto.file_url;
+        if (nextFileUrl !== course.file_url) {
+          course.file_page_count = null;
+          course.file_page_count_key = null;
+        }
+      }
       Object.assign(course, dto);
       const saved = await this.courseRepository.save(course);
       this.warmupPreviewCacheIfNeeded(saved);
@@ -131,6 +138,14 @@ export class AdminCourseService {
     dto.file_name = course.file_name;
     dto.file_type = course.file_type;
     dto.file_size = course.file_size;
+  }
+
+  async getPreviewSamplePages(courseId: number) {
+    return this.courseService.getAdminCoursePreviewSamplePages(courseId);
+  }
+
+  async getPreviewSamplePageImage(courseId: number, pageNum: number) {
+    return this.courseService.getAdminCoursePreviewSamplePageImage(courseId, pageNum);
   }
 
   async warmupPreviewCache(courseId: number, force = false) {

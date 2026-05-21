@@ -77,6 +77,14 @@ export class Course {
 	@Column({ type: 'bigint', default: 0 })
 	file_size: number;
 
+	/** 文件课程：PDF 总页数（生成预览缓存或首次解析后写入） */
+	@Column({ type: 'int', nullable: true })
+	file_page_count: number | null;
+
+	/** 文件课程：页数缓存对应的文件版本（file_url 变更后失效） */
+	@Column({ type: 'varchar', length: 32, nullable: true })
+	file_page_count_key: string | null;
+
 	/** 文件课程：是否允许用户查看源文件 */
 	@Column({ type: 'tinyint', default: 0, comment: '是否允许查看源文件：0-否，1-是' })
 	allow_source_file: number;

@@ -7,12 +7,15 @@ import {
 	Body,
 	Param,
 	Query,
+	Res,
 	UseGuards,
 	UseInterceptors,
 	UseFilters,
 	BadRequestException,
 	ForbiddenException,
 } from '@nestjs/common';
+import { Response } from 'express';
+import { createHash } from 'crypto';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -169,6 +172,35 @@ export class AdminCourseController {
 		}
 
 		return recommendedCourseIds;
+	}
+
+	@Get(':id/preview-sample-pages')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '获取课程文件前三页预览图状态（管理后台）' })
+	async getPreviewSamplePages(@Param('id') id: number) {
+		const result = await this.adminCourseService.getPreviewSamplePages(+id);
+		return CommonResponseDto.success(result);
+	}
+
+	@Get(':id/preview-sample-page/:pageNum')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '获取课程文件指定预览页图片（管理后台，仅前 3 页）' })
+	async getPreviewSamplePageImage(
+		@Param('id') id: number,
+		@Param('pageNum') pageNumStr: string,
+		@Res({ passthrough: false }) res: Response,
+	) {
+		const pageNum = parseInt(pageNumStr, 10);
+		if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > 3) {
+			return res.status(400).send('仅支持预览第 1-3 页');
+		}
+		const { buffer, contentType } = await this.adminCourseService.getPreviewSamplePageImage(+id, pageNum);
+		const etag = `"${createHash('sha1').update(buffer).digest('base64url')}"`;
+		res.setHeader('Content-Type', contentType);
+		res.setHeader('Content-Length', String(buffer.length));
+		res.setHeader('Cache-Control', 'private, max-age=86400');
+		res.setHeader('ETag', etag);
+		res.send(buffer);
 	}
 
 	@Get(':id')
