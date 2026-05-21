@@ -66,9 +66,12 @@ INNER JOIN (
 SET p.`course_file_id` = first_file.`file_id`
 WHERE p.`course_file_id` IS NULL;
 
--- 替换唯一索引
+-- 替换唯一索引（线上可能是 uniq_user_file_course_progress 或 IDX_user_file_course_progress_user_course）
 ALTER TABLE `user_file_course_progress`
-  DROP INDEX `IDX_user_file_course_progress_user_course`;
+  DROP INDEX `uniq_user_file_course_progress`;
+
+-- 若上一句报 1091（索引不存在），再尝试：
+-- ALTER TABLE `user_file_course_progress` DROP INDEX `IDX_user_file_course_progress_user_course`;
 
 ALTER TABLE `user_file_course_progress`
   ADD UNIQUE KEY `IDX_user_file_course_progress_user_course_file` (`user_id`, `course_id`, `course_file_id`);

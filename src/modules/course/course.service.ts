@@ -871,19 +871,22 @@ export class CourseService {
     const tmpDir = path.join(os.tmpdir(), `course-preview-${courseId}-${pageNum}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     fs.mkdirSync(tmpDir, { recursive: true });
     const pdfPath = path.join(tmpDir, 'doc.pdf');
-    const pagePdfPath = path.join(tmpDir, 'page.pdf');
     try {
       fs.writeFileSync(pdfPath, pdfBuffer);
-      const renderPdfPath = await this.extractSinglePagePdf(pdfBuffer, pageNum, pagePdfPath);
       let buffer: Buffer | undefined;
       let lastError: unknown;
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          buffer = await this.renderPdfPageToJpeg(renderPdfPath, 1, tmpDir);
-          if (buffer && Buffer.isBuffer(buffer) && buffer.length > 8) break;
+          buffer = await this.renderPdfPageToJpeg(pdfPath, pageNum, tmpDir);
+          if (buffer && Buffer.isBuffer(buffer) && buffer.length > 8) {
+            await this.assertPreviewJpegNotBlank(buffer, tmpDir);
+            break;
+          }
           lastError = new Error('PDF 转图未生成有效图片');
+          buffer = undefined;
         } catch (error) {
           lastError = error;
+          buffer = undefined;
         }
         await this.sleep(250 * attempt);
       }
@@ -904,20 +907,6 @@ export class CourseService {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       } catch (_) {}
     }
-  }
-
-  private async extractSinglePagePdf(pdfBuffer: Buffer, pageNum: number, outputPath: string): Promise<string> {
-    const sourceDoc = await this.loadPdfDocument(pdfBuffer);
-    const pageCount = sourceDoc.getPageCount();
-    if (pageNum < 1 || pageNum > pageCount) {
-      throw new NotFoundException('页码超出范围');
-    }
-    const singleDoc = await PDFDocument.create();
-    const [page] = await singleDoc.copyPages(sourceDoc, [pageNum - 1]);
-    singleDoc.addPage(page);
-    const bytes = await singleDoc.save();
-    fs.writeFileSync(outputPath, Buffer.from(bytes));
-    return outputPath;
   }
 
   private isPreviewImageSupportedFileRecord(file: Pick<CourseFile, 'file_url' | 'file_type'>) {
@@ -1184,9 +1173,41 @@ export class CourseService {
     return buffer.length > 8 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
   }
 
+  /** 拒绝几乎全白的 JPEG，避免将无效预览图写入 COS */
+  private async assertPreviewJpegNotBlank(buffer: Buffer, tmpDir: string): Promise<void> {
+    const tmpPath = path.join(tmpDir, `blank-check-${Date.now()}.jpg`);
+    fs.writeFileSync(tmpPath, buffer);
+    try {
+      const { stdout } = await execFileAsync('magick', [
+        tmpPath,
+        '-colorspace',
+        'Gray',
+        '-format',
+        '%[standard-deviation]',
+        'info:',
+      ]);
+      const std = Number.parseFloat(String(stdout).trim());
+      if (Number.isFinite(std) && std < 1) {
+        throw new Error('PDF 转图结果为空白页');
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('空白页')) {
+        throw error;
+      }
+      // ImageMagick 不可用时，用体积做兜底：全白 JPEG 通常远小于正常内容页
+      if (buffer.length < 60000) {
+        throw new Error('PDF 转图结果疑似空白页');
+      }
+    } finally {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch (_) {}
+    }
+  }
+
   private getPreviewCacheVersion(fileUrl: string, scope: 'full' | 'trial'): string {
     return createHash('md5')
-      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|single-page-v4`)
+      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|direct-page-v5`)
       .digest('hex')
       .slice(0, 12);
   }
