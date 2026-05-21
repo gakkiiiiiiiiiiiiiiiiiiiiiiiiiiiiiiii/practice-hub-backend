@@ -288,14 +288,17 @@ export class AdminCourseService {
   }
 
   async getPreviewCacheProgress() {
-    const latest = await this.previewCacheTaskRepository.findOne({
-      where: {},
-      order: { id: 'DESC' },
-    });
     const records = await this.previewCacheTaskRepository.find({
       order: { id: 'DESC' },
       take: 10,
     });
+    const runningTask = await this.findRunningPreviewCacheTask();
+    const latest = runningTask
+      ? runningTask
+      : await this.previewCacheTaskRepository.findOne({
+          where: {},
+          order: { id: 'DESC' },
+        });
     return this.formatPreviewCacheTask(latest, records);
   }
 
@@ -413,64 +416,76 @@ export class AdminCourseService {
       };
     }
 
-    const detected = await this.courseService.scanCoursesWithBlankPreviewCache();
-    if (detected.length === 0) {
-      return {
-        total: 0,
-        started: 0,
-        running: 0,
-        alreadyRunning: false,
-        detected: [],
-        ...this.emptyPreviewCacheProgress(),
-        message: '未检测到空白预览图课程',
-      };
-    }
-
-    const courseIds = Array.from(new Set(detected.map((item) => item.courseId)));
-    const targets = await this.courseRepository.find({
-      where: { id: In(courseIds) },
-      select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
-      order: { id: 'ASC' },
-    });
-    const validTargets: Course[] = [];
-    for (const course of targets) {
-      if (await this.isPreviewCacheSupportedFileCourse(course)) {
-        validTargets.push(course);
-      }
-    }
-    if (validTargets.length === 0) {
-      return {
-        total: 0,
-        started: 0,
-        running: 0,
-        alreadyRunning: false,
-        detected,
-        ...this.emptyPreviewCacheProgress(),
-        message: '检测到空白预览图，但对应课程已不可用',
-      };
-    }
-
     const task = await this.previewCacheTaskRepository.save(
       this.previewCacheTaskRepository.create({
         task_no: this.createPreviewCacheTaskNo(),
         trigger_type: 'fix-blank',
         status: PreviewCacheTaskStatus.PENDING,
-        total_courses: validTargets.length,
-        message: `任务已创建，准备修复 ${validTargets.length} 个空白预览图课程`,
+        total_courses: 0,
+        message: '正在检测空白预览图课程，请稍候…',
         failed_details: JSON.stringify([]),
       }),
     );
 
-    void this.runPreviewCacheTask(task.id, validTargets, true);
+    void this.runFixBlankPreviewCacheTask(task.id);
 
     return {
-      total: validTargets.length,
-      started: validTargets.length,
+      total: 0,
+      started: 1,
       running: 0,
       alreadyRunning: false,
-      detected,
+      detected: [],
       ...this.formatPreviewCacheTask(task),
     };
+  }
+
+  private async runFixBlankPreviewCacheTask(taskId: number) {
+    try {
+      const detected = await this.courseService.scanCoursesWithBlankPreviewCache();
+      if (detected.length === 0) {
+        await this.previewCacheTaskRepository.update(taskId, {
+          status: PreviewCacheTaskStatus.COMPLETED,
+          message: '未检测到空白预览图课程',
+          finished_at: new Date(),
+        });
+        return;
+      }
+
+      const courseIds = Array.from(new Set(detected.map((item) => item.courseId)));
+      const targets = await this.courseRepository.find({
+        where: { id: In(courseIds) },
+        select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
+        order: { id: 'ASC' },
+      });
+      const validTargets: Course[] = [];
+      for (const course of targets) {
+        if (await this.isPreviewCacheSupportedFileCourse(course)) {
+          validTargets.push(course);
+        }
+      }
+      if (validTargets.length === 0) {
+        await this.previewCacheTaskRepository.update(taskId, {
+          status: PreviewCacheTaskStatus.COMPLETED,
+          message: '检测到空白预览图，但对应课程已不可用',
+          finished_at: new Date(),
+        });
+        return;
+      }
+
+      await this.previewCacheTaskRepository.update(taskId, {
+        total_courses: validTargets.length,
+        message: `已检测到 ${validTargets.length} 个空白预览图课程，开始强制重新生成`,
+      });
+
+      await this.runPreviewCacheTask(taskId, validTargets, true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.previewCacheTaskRepository.update(taskId, {
+        status: PreviewCacheTaskStatus.FAILED,
+        message: `空白图修复失败：${message}`,
+        finished_at: new Date(),
+      });
+    }
   }
 
   private async findRunningPreviewCacheTask() {
