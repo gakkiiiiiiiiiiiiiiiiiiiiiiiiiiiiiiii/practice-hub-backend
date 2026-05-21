@@ -8,7 +8,7 @@ import {
 } from 'typeorm';
 
 @Entity('user_file_course_progress')
-@Index(['user_id', 'course_id'], { unique: true })
+@Index(['user_id', 'course_id', 'course_file_id'], { unique: true })
 export class UserFileCourseProgress {
   @PrimaryGeneratedColumn()
   id: number;
@@ -18,6 +18,9 @@ export class UserFileCourseProgress {
 
   @Column()
   course_id: number;
+
+  @Column({ type: 'int', nullable: true, comment: '文件课程附件ID' })
+  course_file_id: number | null;
 
   @Column({ type: 'int', default: 0, comment: '已读最大页码' })
   current_page: number;

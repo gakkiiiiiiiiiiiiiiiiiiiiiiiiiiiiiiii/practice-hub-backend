@@ -42,10 +42,19 @@ export class CourseController {
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '获取小程序内嵌 PDF 预览用短期凭证与 viewer 地址' })
-  async getPreviewTicket(@Param('id') id: string, @CurrentUser() user: any) {
+  async getPreviewTicket(
+    @Param('id') id: string,
+    @Query('fileId') fileIdStr: string | undefined,
+    @CurrentUser() user: any,
+  ) {
     const courseId = +id;
-    const { ticket, viewerUrl } = await this.courseService.createPreviewTicket(courseId, user?.userId);
-    return CommonResponseDto.success({ ticket, viewerUrl });
+    const fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
+    const result = await this.courseService.createPreviewTicket(
+      courseId,
+      user?.userId,
+      Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
+    );
+    return CommonResponseDto.success(result);
   }
 
   @Get(':id/document-preview-url')
@@ -55,17 +64,24 @@ export class CourseController {
   async getDocumentPreviewUrl(
     @Param('id') id: string,
     @Query('ticket') ticket: string | undefined,
+    @Query('fileId') fileIdStr: string | undefined,
     @CurrentUser() user: any,
   ) {
     const courseId = +id;
     let userId = user?.userId;
+    let fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
     if (ticket && !userId) {
       const verified = this.courseService.verifyPreviewTicket(ticket);
       if (verified && verified.courseId === courseId) {
         userId = verified.userId ?? undefined;
+        if (!fileId && verified.fileId) fileId = verified.fileId;
       }
     }
-    const result = await this.courseService.getCourseDocumentPreviewUrl(courseId, userId);
+    const result = await this.courseService.getCourseDocumentPreviewUrl(
+      courseId,
+      userId,
+      Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
+    );
     return CommonResponseDto.success(result);
   }
 
@@ -77,31 +93,42 @@ export class CourseController {
     @Param('id') id: string,
     @Query('maxPages') maxPagesStr: string | undefined,
     @Query('ticket') ticket: string | undefined,
+    @Query('fileId') fileIdStr: string | undefined,
     @CurrentUser() user: any,
     @Req() req: Request,
     @Res({ passthrough: false }) res: Response,
   ) {
     const courseId = +id;
     let userId = user?.userId;
+    let fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
     if (ticket && !userId) {
       const verified = this.courseService.verifyPreviewTicket(ticket);
       if (verified && verified.courseId === courseId) {
         userId = verified.userId ?? undefined;
+        if (!fileId && verified.fileId) fileId = verified.fileId;
       }
     }
     const { course, hasAuth } = await this.courseService.getCourseAccessContext(courseId, userId);
-    if (course.content_type !== 'file' || !course.file_url) {
+    const courseFile = await this.courseService.resolveCourseFile(
+      courseId,
+      Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
+    );
+    if (course.content_type !== 'file') {
       return res.status(404).send('课程无文件');
     }
     const maxPages = Math.min(10, Math.max(1, parseInt(maxPagesStr || '3', 10) || 3));
     const allowSourceFile = course.allow_source_file !== 0;
     if (allowSourceFile && (hasAuth || Number(course.price) === 0 || course.is_free === 1)) {
-      return res.redirect(302, course.file_url);
+      return res.redirect(302, courseFile.file_url);
     }
-    if (!['pdf', 'doc', 'docx'].includes((course.file_type || '').toLowerCase())) {
+    if (!['pdf', 'doc', 'docx'].includes((courseFile.file_type || '').toLowerCase())) {
       return res.status(403).send('仅支持 PDF/Word 试读');
     }
-    const buffer = await this.courseService.getCourseFilePreviewPdf(courseId, maxPages);
+    const buffer = await this.courseService.getCourseFilePreviewPdf(
+      courseId,
+      maxPages,
+      courseFile.id,
+    );
     const etag = this.createBufferEtag(buffer);
     if (this.isFresh(req, etag)) {
       return res.status(304).end();
@@ -119,15 +146,24 @@ export class CourseController {
   async getPreviewPagesInfo(
     @Param('id') id: string,
     @Query('ticket') ticket: string | undefined,
+    @Query('fileId') fileIdStr: string | undefined,
     @CurrentUser() user: any,
   ) {
     const courseId = +id;
     let userId = user?.userId;
+    let fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
     if (ticket && !userId) {
       const verified = this.courseService.verifyPreviewTicket(ticket);
-      if (verified && verified.courseId === courseId) userId = verified.userId ?? undefined;
+      if (verified && verified.courseId === courseId) {
+        userId = verified.userId ?? undefined;
+        if (!fileId && verified.fileId) fileId = verified.fileId;
+      }
     }
-    const info = await this.courseService.getCourseFilePreviewPageInfo(courseId, userId);
+    const info = await this.courseService.getCourseFilePreviewPageInfo(
+      courseId,
+      userId,
+      Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
+    );
     return CommonResponseDto.success(info);
   }
 
@@ -139,6 +175,7 @@ export class CourseController {
     @Param('id') id: string,
     @Param('pageNum') pageNumStr: string,
     @Query('ticket') ticket: string | undefined,
+    @Query('fileId') fileIdStr: string | undefined,
     @CurrentUser() user: any,
     @Req() req: Request,
     @Res({ passthrough: false }) res: Response,
@@ -149,14 +186,19 @@ export class CourseController {
       return res.status(400).send('页码无效');
     }
     let userId = user?.userId;
+    let fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
     if (ticket && !userId) {
       const verified = this.courseService.verifyPreviewTicket(ticket);
-      if (verified && verified.courseId === courseId) userId = verified.userId ?? undefined;
+      if (verified && verified.courseId === courseId) {
+        userId = verified.userId ?? undefined;
+        if (!fileId && verified.fileId) fileId = verified.fileId;
+      }
     }
     const { buffer, contentType } = await this.courseService.getCourseFilePreviewPageImage(
       courseId,
       pageNum,
       userId,
+      Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
     );
     const etag = this.createBufferEtag(buffer);
     if (this.isFresh(req, etag)) {
@@ -204,9 +246,15 @@ export class CourseController {
   @ApiOperation({ summary: '获取文件课程阅读进度' })
   async getFileCourseProgress(
     @Param('id') id: string,
+    @Query('fileId') fileIdStr: string | undefined,
     @CurrentUser() user: any,
   ) {
-    const result = await this.courseService.getFileCourseProgress(user.userId, +id);
+    const fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
+    const result = await this.courseService.getFileCourseProgress(
+      user.userId,
+      +id,
+      Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
+    );
     return CommonResponseDto.success(result);
   }
 

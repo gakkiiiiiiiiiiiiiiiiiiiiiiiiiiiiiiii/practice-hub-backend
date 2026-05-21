@@ -18,6 +18,7 @@ import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 import { SystemService } from '../system/system.service';
 import { CourseService } from '../course/course.service';
+import { CourseFileService, CourseFileInput } from '../course/course-file.service';
 import { AdminRole } from '../../database/entities/sys-user.entity';
 import { VirtualPayGoodsService } from '../order/virtual-pay-goods.service';
 
@@ -63,6 +64,7 @@ export class AdminCourseService {
     private previewCacheTaskRepository: Repository<PreviewCacheTask>,
     private systemService: SystemService,
     private courseService: CourseService,
+    private courseFileService: CourseFileService,
     private virtualPayGoodsService: VirtualPayGoodsService,
   ) {}
 
@@ -82,17 +84,12 @@ export class AdminCourseService {
       if (dto.is_free === 1) {
         dto.validity_days = null;
       }
-      this.protectCourseFileFromNonAdminDelete(dto, course, actorRole);
-      if (dto.file_url !== undefined) {
-        const nextFileUrl = typeof dto.file_url === 'string' ? dto.file_url.trim() : dto.file_url;
-        if (nextFileUrl !== course.file_url) {
-          course.file_page_count = null;
-          course.file_page_count_key = null;
-        }
-      }
+      await this.protectCourseFileFromNonAdminDelete(dto, course, actorRole);
       Object.assign(course, dto);
       const saved = await this.courseRepository.save(course);
-      this.warmupPreviewCacheIfNeeded(saved);
+      await this.ensureCourseFilesFromLegacyFields(saved);
+      await this.courseFileService.syncPrimaryMirror(saved.id);
+      void this.warmupPreviewCacheIfNeeded(saved);
       this.virtualPayGoodsService.scheduleSyncCourseGoods(saved, { force: true });
       return saved;
     } else {
@@ -113,39 +110,100 @@ export class AdminCourseService {
       }
       const course = this.courseRepository.create(dto);
       const saved = await this.courseRepository.save(course);
-      this.warmupPreviewCacheIfNeeded(saved);
+      await this.ensureCourseFilesFromLegacyFields(saved);
+      await this.courseFileService.syncPrimaryMirror(saved.id);
+      void this.warmupPreviewCacheIfNeeded(saved);
       this.virtualPayGoodsService.scheduleSyncCourseGoods(saved);
       return saved;
     }
   }
 
-  private protectCourseFileFromNonAdminDelete(
+  async listCourseFiles(courseId: number) {
+    const files = await this.courseFileService.listByCourseId(courseId);
+    return files.map((file) => this.courseFileService.formatFileListItem(file));
+  }
+
+  async createCourseFile(courseId: number, input: CourseFileInput) {
+    const saved = await this.courseFileService.create(courseId, input);
+    const course = await this.courseRepository.findOne({ where: { id: courseId } });
+    if (course) {
+      void this.warmupPreviewCacheIfNeeded(course);
+    }
+    return this.courseFileService.formatFileListItem(saved);
+  }
+
+  async updateCourseFile(
+    courseId: number,
+    fileId: number,
+    patch: Partial<CourseFileInput> & {
+      file_url?: string;
+      file_name?: string | null;
+      file_type?: string;
+      file_size?: number;
+    },
+  ) {
+    const saved = await this.courseFileService.update(courseId, fileId, patch);
+    return this.courseFileService.formatFileListItem(saved);
+  }
+
+  async deleteCourseFile(courseId: number, fileId: number, actorRole?: AdminRole | string) {
+    const course = await this.courseRepository.findOne({ where: { id: courseId } });
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+    const files = await this.courseFileService.listByCourseId(courseId);
+    if (actorRole !== AdminRole.SUPER_ADMIN && files.length <= 1) {
+      throw new BadRequestException('当前账号不能删除课程最后一个文件');
+    }
+    await this.courseFileService.remove(courseId, fileId);
+    await this.courseFileService.syncPrimaryMirror(courseId);
+  }
+
+  private async ensureCourseFilesFromLegacyFields(course: Course) {
+    if (course.content_type !== 'file') return;
+    const files = await this.courseFileService.listByCourseId(course.id);
+    if (files.length > 0) return;
+    const fileUrl = String(course.file_url || '').trim();
+    if (!fileUrl) return;
+    await this.courseFileService.create(course.id, {
+      display_name: course.file_name || course.name,
+      file_url: fileUrl,
+      file_name: course.file_name,
+      file_type: (course.file_type || 'pdf').toLowerCase(),
+      file_size: Number(course.file_size || 0),
+      sort: 0,
+    });
+  }
+
+  private async protectCourseFileFromNonAdminDelete(
     dto: CreateCourseDto | UpdateCourseDto,
     course: Course,
     actorRole?: AdminRole | string,
   ) {
     if (actorRole === AdminRole.SUPER_ADMIN) return;
-    const hasExistingFile = course.content_type === 'file' && !!course.file_url;
+    const hasExistingFile =
+      course.content_type === 'file' &&
+      ((await this.courseFileService.listByCourseId(course.id)).length > 0 || !!course.file_url);
     if (!hasExistingFile) return;
 
-    const nextFileUrl = typeof dto.file_url === 'string' ? dto.file_url.trim() : dto.file_url;
     const isDeletingFile = dto.content_type !== undefined && dto.content_type !== 'file';
-    const isClearingFile = dto.file_url === null || dto.file_url === '' || nextFileUrl === '';
+    const isClearingFile = dto.file_url === null || dto.file_url === '';
     if (!isDeletingFile && !isClearingFile) return;
 
     dto.content_type = 'file';
-    dto.file_url = course.file_url;
-    dto.file_name = course.file_name;
-    dto.file_type = course.file_type;
-    dto.file_size = course.file_size;
+    const primary = (await this.courseFileService.listByCourseId(course.id))[0];
+    dto.file_url = primary?.file_url || course.file_url;
+    dto.file_name = primary?.file_name || course.file_name;
+    dto.file_type = primary?.file_type || course.file_type;
+    dto.file_size = primary?.file_size ?? course.file_size;
   }
 
-  async getPreviewSamplePages(courseId: number) {
-    return this.courseService.getAdminCoursePreviewSamplePages(courseId);
+  async getPreviewSamplePages(courseId: number, fileId?: number) {
+    return this.courseService.getAdminCoursePreviewSamplePages(courseId, fileId);
   }
 
-  async getPreviewSamplePageImage(courseId: number, pageNum: number) {
-    return this.courseService.getAdminCoursePreviewSamplePageImage(courseId, pageNum);
+  async getPreviewSamplePageImage(courseId: number, pageNum: number, fileId?: number) {
+    return this.courseService.getAdminCoursePreviewSamplePageImage(courseId, pageNum, fileId);
   }
 
   async warmupPreviewCache(courseId: number, force = false) {
@@ -153,7 +211,7 @@ export class AdminCourseService {
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
-    if (!this.isPreviewCacheSupportedFileCourse(course)) {
+    if (!(await this.isPreviewCacheSupportedFileCourse(course))) {
       throw new BadRequestException('仅文件类 PDF/Word 课程支持生成图片缓存');
     }
     return this.courseService.warmupCoursePreviewCacheInBackground(courseId, force);
@@ -171,15 +229,15 @@ export class AdminCourseService {
       };
     }
 
-    const courses = await this.courseRepository.find({
-      where: {
-        content_type: 'file',
-        file_type: In(['pdf', 'doc', 'docx']),
-      },
-      select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
-      order: { id: 'ASC' },
-    });
-    const targets = courses.filter((course) => !!course.file_url);
+    const courseIds = await this.courseFileService.findCourseIdsWithPreviewableFiles();
+    const targets =
+      courseIds.length > 0
+        ? await this.courseRepository.find({
+            where: { id: In(courseIds) },
+            select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
+            order: { id: 'ASC' },
+          })
+        : [];
     if (targets.length === 0) {
       return {
         total: 0,
@@ -288,12 +346,15 @@ export class AdminCourseService {
       select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
       order: { id: 'ASC' },
     });
-    const targets = courses.filter(
-      (course) =>
+    const targets: Course[] = [];
+    for (const course of courses) {
+      if (
         course.content_type === 'file' &&
-        this.isPreviewCacheSupportedFileCourse(course) &&
-        !!course.file_url,
-    );
+        (await this.isPreviewCacheSupportedFileCourse(course))
+      ) {
+        targets.push(course);
+      }
+    }
     if (targets.length === 0) {
       throw new BadRequestException('失败明细中的课程已不存在或不是文件类 PDF/Word 课程');
     }
@@ -586,19 +647,17 @@ export class AdminCourseService {
     }
   }
 
-  private warmupPreviewCacheIfNeeded(course: Course) {
-    if (!this.isPreviewCacheSupportedFileCourse(course)) {
+  private async warmupPreviewCacheIfNeeded(course: Course) {
+    if (!(await this.isPreviewCacheSupportedFileCourse(course))) {
       return;
     }
     this.courseService.warmupCoursePreviewCacheInBackground(course.id, true);
   }
 
-  private isPreviewCacheSupportedFileCourse(course: Pick<Course, 'content_type' | 'file_url' | 'file_type'>) {
-    return (
-      course.content_type === 'file' &&
-      !!course.file_url &&
-      ['pdf', 'doc', 'docx'].includes((course.file_type || '').toLowerCase())
-    );
+  private async isPreviewCacheSupportedFileCourse(course: Pick<Course, 'id' | 'content_type'>) {
+    if (course.content_type !== 'file') return false;
+    const files = await this.courseFileService.listByCourseId(course.id);
+    return files.some((file) => ['pdf', 'doc', 'docx'].includes((file.file_type || '').toLowerCase()));
   }
 
   private async applyDefaultIntroduction(dto: CreateCourseDto | UpdateCourseDto, isUpdate: boolean) {
@@ -666,7 +725,9 @@ export class AdminCourseService {
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
-    return course;
+    const files =
+      course.content_type === 'file' ? await this.listCourseFiles(id) : [];
+    return { ...course, files };
   }
 
   /**

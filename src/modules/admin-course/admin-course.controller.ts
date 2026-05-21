@@ -33,6 +33,7 @@ import { UpdateCourseDto } from './dto/update-course.dto';
 import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.dto';
 import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
+import { CreateCourseFileDto, UpdateCourseFileDto } from './dto/course-file.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 
@@ -174,11 +175,58 @@ export class AdminCourseController {
 		return recommendedCourseIds;
 	}
 
+	@Get(':id/files')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '获取课程文件列表' })
+	async listCourseFiles(@Param('id') id: number) {
+		const result = await this.adminCourseService.listCourseFiles(+id);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post(':id/files')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '新增课程文件' })
+	async createCourseFile(@Param('id') id: number, @Body() dto: CreateCourseFileDto) {
+		const result = await this.adminCourseService.createCourseFile(+id, dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Put(':id/files/:fileId')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '更新课程文件（展示名/排序/替换文件）' })
+	async updateCourseFile(
+		@Param('id') id: number,
+		@Param('fileId') fileId: number,
+		@Body() dto: UpdateCourseFileDto,
+	) {
+		const result = await this.adminCourseService.updateCourseFile(+id, +fileId, dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Delete(':id/files/:fileId')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '删除课程文件' })
+	async deleteCourseFile(
+		@Param('id') id: number,
+		@Param('fileId') fileId: number,
+		@CurrentUser() user: any,
+	) {
+		await this.adminCourseService.deleteCourseFile(+id, +fileId, user?.role);
+		return CommonResponseDto.success(null);
+	}
+
 	@Get(':id/preview-sample-pages')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 	@ApiOperation({ summary: '获取课程文件前三页预览图状态（管理后台）' })
-	async getPreviewSamplePages(@Param('id') id: number) {
-		const result = await this.adminCourseService.getPreviewSamplePages(+id);
+	async getPreviewSamplePages(
+		@Param('id') id: number,
+		@Query('fileId') fileIdStr?: string,
+	) {
+		const fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
+		const result = await this.adminCourseService.getPreviewSamplePages(
+			+id,
+			Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
+		);
 		return CommonResponseDto.success(result);
 	}
 
@@ -189,12 +237,18 @@ export class AdminCourseController {
 		@Param('id') id: number,
 		@Param('pageNum') pageNumStr: string,
 		@Res({ passthrough: false }) res: Response,
+		@Query('fileId') fileIdStr?: string,
 	) {
 		const pageNum = parseInt(pageNumStr, 10);
 		if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > 3) {
 			return res.status(400).send('仅支持预览第 1-3 页');
 		}
-		const { buffer, contentType } = await this.adminCourseService.getPreviewSamplePageImage(+id, pageNum);
+		const fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
+		const { buffer, contentType } = await this.adminCourseService.getPreviewSamplePageImage(
+			+id,
+			pageNum,
+			Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
+		);
 		const etag = `"${createHash('sha1').update(buffer).digest('base64url')}"`;
 		res.setHeader('Content-Type', contentType);
 		res.setHeader('Content-Length', String(buffer.length));
@@ -273,19 +327,61 @@ export class AppCourseAdminController {
 	async createFileCourse(@Body() body: Record<string, any>, @CurrentUser() user: any) {
 		await this.assertAppAdmin(user);
 		const name = String(body?.name || '').trim();
-		const fileUrl = String(body?.file_url || body?.fileUrl || '').trim();
-		const fileName = String(body?.file_name || body?.fileName || name || '').trim();
-		const fileType = String(body?.file_type || body?.fileType || '').trim().toLowerCase();
 		if (!name) {
 			throw new BadRequestException('课程名称不能为空');
 		}
-		if (!fileUrl) {
-			throw new BadRequestException('课程文件地址不能为空');
-		}
-		if (!['pdf', 'doc', 'docx'].includes(fileType)) {
-			throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
+
+		const rawFiles = Array.isArray(body?.files) ? body.files : null;
+		const fileInputs: Array<{
+			display_name: string;
+			file_url: string;
+			file_name?: string;
+			file_type: string;
+			file_size?: number;
+			sort?: number;
+		}> = [];
+
+		if (rawFiles && rawFiles.length > 0) {
+			rawFiles.forEach((item: Record<string, unknown>, index: number) => {
+				const fileUrl = String(item?.file_url || item?.fileUrl || '').trim();
+				const fileType = String(item?.file_type || item?.fileType || '').trim().toLowerCase();
+				const displayName = String(item?.display_name || item?.displayName || item?.file_name || item?.fileName || name).trim();
+				if (!fileUrl) {
+					throw new BadRequestException(`第 ${index + 1} 个文件地址不能为空`);
+				}
+				if (!['pdf', 'doc', 'docx'].includes(fileType)) {
+					throw new BadRequestException(`第 ${index + 1} 个文件仅支持 PDF、Word（.doc/.docx）`);
+				}
+				fileInputs.push({
+					display_name: displayName,
+					file_url: fileUrl,
+					file_name: String(item?.file_name || item?.fileName || displayName).trim() || displayName,
+					file_type: fileType,
+					file_size: this.optionalNumber(item?.file_size ?? item?.fileSize, 0),
+					sort: Number.isInteger(Number(item?.sort)) ? Number(item.sort) : index,
+				});
+			});
+		} else {
+			const fileUrl = String(body?.file_url || body?.fileUrl || '').trim();
+			const fileName = String(body?.file_name || body?.fileName || name || '').trim();
+			const fileType = String(body?.file_type || body?.fileType || '').trim().toLowerCase();
+			if (!fileUrl) {
+				throw new BadRequestException('课程文件地址不能为空');
+			}
+			if (!['pdf', 'doc', 'docx'].includes(fileType)) {
+				throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
+			}
+			fileInputs.push({
+				display_name: fileName || name,
+				file_url: fileUrl,
+				file_name: fileName || name,
+				file_type: fileType,
+				file_size: this.optionalNumber(body?.file_size ?? body?.fileSize, 0),
+				sort: 0,
+			});
 		}
 
+		const primary = fileInputs[0];
 		const dto: CreateCourseDto = {
 			name,
 			subject: this.optionalText(body?.subject),
@@ -301,14 +397,28 @@ export class AppCourseAdminController {
 			validity_days: this.optionalNumber(body?.validity_days ?? body?.validityDays, 365),
 			introduction: this.optionalText(body?.introduction),
 			content_type: 'file',
-			file_url: fileUrl,
-			file_name: fileName || name,
-			file_type: fileType,
-			file_size: this.optionalNumber(body?.file_size ?? body?.fileSize, 0),
+			file_url: primary.file_url,
+			file_name: primary.file_name,
+			file_type: primary.file_type,
+			file_size: primary.file_size,
 			allow_source_file: this.optionalNumber(body?.allow_source_file ?? body?.allowSourceFile, 0),
 		};
-		const result = await this.adminCourseService.saveCourse(dto);
-		return CommonResponseDto.success(result);
+		const saved = await this.adminCourseService.saveCourse(dto);
+		for (let i = 0; i < fileInputs.length; i += 1) {
+			const input = fileInputs[i];
+			if (i === 0) {
+				const existing = await this.adminCourseService.listCourseFiles(saved.id);
+				if (existing.length > 0) {
+					await this.adminCourseService.updateCourseFile(saved.id, existing[0].id, {
+						display_name: input.display_name,
+						sort: input.sort ?? 0,
+					});
+					continue;
+				}
+			}
+			await this.adminCourseService.createCourseFile(saved.id, input);
+		}
+		return CommonResponseDto.success(saved);
 	}
 
 	private async assertAppAdmin(user: any) {

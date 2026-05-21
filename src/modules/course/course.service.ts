@@ -12,6 +12,8 @@ import { createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { Course } from '../../database/entities/course.entity';
+import { CourseFile } from '../../database/entities/course-file.entity';
+import { CourseFileService } from './course-file.service';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
 import { CourseRecommendation } from '../../database/entities/course-recommendation.entity';
@@ -35,6 +37,7 @@ export interface PreviewWarmupResult {
 export interface PreviewWarmupProgress extends PreviewWarmupResult {
   status: 'pending' | 'running' | 'completed' | 'failed';
   courseName?: string;
+  currentFileName?: string;
   currentPage: number;
   startedAt: number;
   updatedAt: number;
@@ -65,6 +68,7 @@ export class CourseService {
     private configService: ConfigService,
     private jwtService: JwtService,
     private uploadService: UploadService,
+    private courseFileService: CourseFileService,
   ) {}
 
   /**
@@ -166,8 +170,15 @@ export class CourseService {
       '获取课程章节列表',
     );
 
-    const fileType = (course.file_type || '').toLowerCase();
-    const isFileCourse = course.content_type === 'file' && course.file_url;
+    const courseFiles =
+      course.content_type === 'file'
+        ? (await this.courseFileService.listByCourseId(courseId)).map((file) =>
+            this.courseFileService.formatFileListItem(file),
+          )
+        : [];
+    const primaryFile = courseFiles[0];
+    const fileType = (primaryFile?.file_type || course.file_type || '').toLowerCase();
+    const isFileCourse = course.content_type === 'file' && courseFiles.length > 0;
     const allowSourceFile = course.allow_source_file !== 0;
     const price = Number(course.price) || 0;
     const needPreviewUrl =
@@ -175,13 +186,20 @@ export class CourseService {
 
     return {
       ...course,
-      file_url: allowSourceFile ? course.file_url : null,
+      files: courseFiles,
+      file_url: allowSourceFile ? primaryFile?.file_url || course.file_url : null,
+      file_name: primaryFile?.file_name || course.file_name,
+      file_type: primaryFile?.file_type || course.file_type,
+      file_size: primaryFile?.file_size ?? course.file_size,
       allow_source_file: allowSourceFile ? 1 : 0,
       chapters,
       hasAuth,
       expireTime,
       /** 付费未购买时，试读用：PDF 为前 3 页地址，Word 暂不提供试读 */
-      file_preview_url: needPreviewUrl && fileType === 'pdf' ? `/api/app/courses/${courseId}/file-preview` : undefined,
+      file_preview_url:
+        needPreviewUrl && fileType === 'pdf'
+          ? `/api/app/courses/${courseId}/file-preview${primaryFile?.id ? `?fileId=${primaryFile.id}` : ''}`
+          : undefined,
     };
   }
 
@@ -192,13 +210,15 @@ export class CourseService {
   async getCourseDocumentPreviewUrl(
     courseId: number,
     userId?: number,
-  ): Promise<{ url: string; fileType: string; fileName: string }> {
+    fileId?: number,
+  ): Promise<{ url: string; fileType: string; fileName: string; fileId: number }> {
     const { course, hasAuth } = await this.getCourseAccessContext(courseId, userId);
-    if (course.content_type !== 'file' || !course.file_url) {
+    const courseFile = await this.courseFileService.resolve(courseId, fileId);
+    if (course.content_type !== 'file') {
       throw new NotFoundException('课程无文件或非文件课程');
     }
 
-    const fileType = (course.file_type || '').toLowerCase();
+    const fileType = (courseFile.file_type || '').toLowerCase();
     if (!['doc', 'docx', 'pdf'].includes(fileType)) {
       throw new BadRequestException('暂不支持该文件类型预览');
     }
@@ -209,9 +229,10 @@ export class CourseService {
     }
 
     return {
-      url: course.file_url,
+      url: courseFile.file_url,
       fileType,
-      fileName: course.file_name || `course.${fileType}`,
+      fileName: courseFile.file_name || courseFile.display_name || `course.${fileType}`,
+      fileId: courseFile.id,
     };
   }
 
@@ -247,13 +268,18 @@ export class CourseService {
     return { course, hasAuth, expireTime };
   }
 
-  async getFileCourseProgress(userId: number, courseId: number) {
-    await this.assertFileCourse(courseId);
+  async getFileCourseProgress(userId: number, courseId: number, fileId?: number) {
+    const courseFile = await this.courseFileService.resolve(courseId, fileId);
+    await this.courseFileService.assertFileCourseHasFiles(courseId);
     const progress = await this.userFileCourseProgressRepository.findOne({
-      where: { user_id: userId, course_id: courseId },
+      where: {
+        user_id: userId,
+        course_id: courseId,
+        course_file_id: courseFile.id,
+      },
     });
 
-    return this.formatFileCourseProgress(progress, courseId);
+    return this.formatFileCourseProgress(progress, courseId, courseFile.id);
   }
 
   async recordFileCourseProgress(
@@ -263,9 +289,15 @@ export class CourseService {
       currentPage?: unknown;
       totalPages?: unknown;
       durationSeconds?: unknown;
+      fileId?: unknown;
     },
   ) {
-    await this.assertFileCourse(courseId);
+    const fileIdNum = body.fileId === undefined || body.fileId === null ? undefined : Number(body.fileId);
+    const courseFile = await this.courseFileService.resolve(
+      courseId,
+      Number.isInteger(fileIdNum) && fileIdNum > 0 ? fileIdNum : undefined,
+    );
+    await this.courseFileService.assertFileCourseHasFiles(courseId);
 
     const totalPages = this.parseNonNegativeInteger(body.totalPages, 'totalPages');
     const rawCurrentPage = this.parseNonNegativeInteger(body.currentPage, 'currentPage');
@@ -276,12 +308,17 @@ export class CourseService {
     );
 
     let progress = await this.userFileCourseProgressRepository.findOne({
-      where: { user_id: userId, course_id: courseId },
+      where: {
+        user_id: userId,
+        course_id: courseId,
+        course_file_id: courseFile.id,
+      },
     });
     if (!progress) {
       progress = this.userFileCourseProgressRepository.create({
         user_id: userId,
         course_id: courseId,
+        course_file_id: courseFile.id,
         current_page: 0,
         total_pages: 0,
         total_seconds: 0,
@@ -294,17 +331,7 @@ export class CourseService {
     progress.last_read_at = new Date();
 
     const saved = await this.userFileCourseProgressRepository.save(progress);
-    return this.formatFileCourseProgress(saved, courseId);
-  }
-
-  private async assertFileCourse(courseId: number) {
-    const course = await this.courseRepository.findOne({
-      where: { id: courseId },
-      select: ['id', 'content_type', 'file_url'],
-    });
-    if (!course || course.content_type !== 'file' || !course.file_url) {
-      throw new NotFoundException('课程无文件或非文件课程');
-    }
+    return this.formatFileCourseProgress(saved, courseId, courseFile.id);
   }
 
   private parseNonNegativeInteger(value: unknown, field: string): number {
@@ -315,9 +342,14 @@ export class CourseService {
     return numberValue;
   }
 
-  private formatFileCourseProgress(progress: UserFileCourseProgress | null, courseId: number) {
+  private formatFileCourseProgress(
+    progress: UserFileCourseProgress | null,
+    courseId: number,
+    fileId?: number,
+  ) {
     return {
       courseId,
+      fileId: progress?.course_file_id ?? fileId ?? null,
       currentPage: progress?.current_page || 0,
       totalPages: progress?.total_pages || 0,
       totalSeconds: progress?.total_seconds || 0,
@@ -391,19 +423,20 @@ export class CourseService {
    * 获取课程文件预览 PDF（前 maxPages 页）。
    * Word 文件会先转换为临时 PDF，再复用 PDF 预览链路。
    */
-  async getCourseFilePreviewPdf(courseId: number, maxPages: number = 3): Promise<Buffer> {
+  async getCourseFilePreviewPdf(courseId: number, maxPages: number = 3, fileId?: number): Promise<Buffer> {
     const course = await this.courseRepository.findOne({
       where: { id: courseId },
-      select: ['id', 'content_type', 'file_url', 'file_type'],
+      select: ['id', 'content_type'],
     });
-    if (!course || course.content_type !== 'file' || !course.file_url) {
+    const courseFile = await this.courseFileService.resolve(courseId, fileId);
+    if (!course || course.content_type !== 'file') {
       throw new NotFoundException('课程无文件或非文件课程');
     }
-    const fileType = (course.file_type || '').toLowerCase();
+    const fileType = (courseFile.file_type || '').toLowerCase();
     if (!this.isPreviewImageSupportedFileType(fileType)) {
       throw new NotFoundException('仅支持 PDF/Word 试读');
     }
-    const bytes = await this.getCourseFileAsPdfBuffer(course, 30000);
+    const bytes = await this.getCourseFileAsPdfBuffer(courseFile, 30000);
     const donorDoc = await this.loadPdfDocument(bytes);
     const pageCount = donorDoc.getPageCount();
     const pagesToCopy = Math.min(maxPages, Math.max(1, pageCount));
@@ -424,19 +457,22 @@ export class CourseService {
   async getCourseFilePreviewPageInfo(
     courseId: number,
     userId?: number,
-  ): Promise<{ totalPages: number; cacheVersion: string }> {
+    fileId?: number,
+  ): Promise<{ totalPages: number; cacheVersion: string; fileId: number }> {
     const { course, hasAuth } = await this.getCourseAccessContext(courseId, userId);
-    if (!this.isPreviewImageSupportedFileCourse(course)) {
+    const courseFile = await this.courseFileService.resolve(courseId, fileId);
+    if (!this.isPreviewImageSupportedFileRecord(courseFile)) {
       throw new NotFoundException('课程无可预览文件');
     }
-    const fullCount = await this.resolveFullFilePageCount(course);
+    const fullCount = await this.resolveFullFilePageCount(courseFile);
     const totalPages =
       hasAuth || Number(course.price) === 0 || course.is_free === 1 ? fullCount : Math.min(3, fullCount);
     const previewScope =
       hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
     return {
       totalPages: Math.max(1, totalPages),
-      cacheVersion: this.getPreviewCacheVersion(course.file_url, previewScope),
+      cacheVersion: this.getPreviewCacheVersion(courseFile.file_url, previewScope),
+      fileId: courseFile.id,
     };
   }
 
@@ -449,9 +485,11 @@ export class CourseService {
     courseId: number,
     pageNum: number,
     userId?: number,
+    fileId?: number,
   ): Promise<{ buffer: Buffer; contentType: string }> {
     const { course, hasAuth } = await this.getCourseAccessContext(courseId, userId);
-    if (!this.isPreviewImageSupportedFileCourse(course)) {
+    const courseFile = await this.courseFileService.resolve(courseId, fileId);
+    if (!this.isPreviewImageSupportedFileRecord(courseFile)) {
       throw new NotFoundException('课程无可预览文件');
     }
     const maxPages =
@@ -461,15 +499,15 @@ export class CourseService {
     if (pageNum < 1 || pageNum > maxPages) {
       throw new NotFoundException('页码超出范围');
     }
-	    const previewScope =
-	      hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
-	    const cacheKey = this.getPreviewImageCacheKey(courseId, pageNum, course.file_url, previewScope);
-	    const cached = await this.uploadService.readCosObjectBuffer(cacheKey);
-	    if (cached && this.isJpegBuffer(cached)) {
-	      return { buffer: cached, contentType: 'image/jpeg' };
-	    }
+    const previewScope =
+      hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
+    const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
+    const cached = await this.uploadService.readCosObjectBuffer(cacheKey);
+    if (cached && this.isJpegBuffer(cached)) {
+      return { buffer: cached, contentType: 'image/jpeg' };
+    }
 
-    const taskKey = `${courseId}:${previewScope}:${this.getPreviewCacheVersion(course.file_url, previewScope)}:${pageNum}`;
+    const taskKey = `${courseId}:${courseFile.id}:${previewScope}:${this.getPreviewCacheVersion(courseFile.file_url, previewScope)}:${pageNum}`;
     const existingTask = this.previewRenderTasks.get(taskKey);
     if (existingTask) {
       return existingTask;
@@ -477,6 +515,7 @@ export class CourseService {
 
     const renderTask = this.renderAndCachePreviewPage({
       course,
+      courseFile,
       hasAuth,
       courseId,
       pageNum,
@@ -489,27 +528,29 @@ export class CourseService {
   }
 
   /** 管理后台：获取文件课程前三页预览图状态 */
-  async getAdminCoursePreviewSamplePages(courseId: number) {
+  async getAdminCoursePreviewSamplePages(courseId: number, fileId?: number) {
     const course = await this.courseRepository.findOne({ where: { id: courseId } });
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
-    if (!this.isPreviewImageSupportedFileCourse(course)) {
+    const courseFile = await this.courseFileService.resolve(courseId, fileId);
+    if (!this.isPreviewImageSupportedFileRecord(courseFile)) {
       return {
         supported: false,
         samplePages: [] as Array<{ pageNum: number; ready: boolean }>,
         totalPages: 0,
         fullTotalPages: 0,
         cacheVersion: '',
+        fileId: courseFile.id,
       };
     }
-    const fullTotalPages = await this.resolveFullFilePageCount(course);
+    const fullTotalPages = await this.resolveFullFilePageCount(courseFile);
     const sampleCount = Math.min(3, Math.max(0, fullTotalPages));
     const previewScope: 'full' = 'full';
-    const cacheVersion = this.getPreviewCacheVersion(course.file_url, previewScope);
+    const cacheVersion = this.getPreviewCacheVersion(courseFile.file_url, previewScope);
     const samplePages: Array<{ pageNum: number; ready: boolean }> = [];
     for (let pageNum = 1; pageNum <= sampleCount; pageNum += 1) {
-      const cacheKey = this.getPreviewImageCacheKey(courseId, pageNum, course.file_url, previewScope);
+      const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
       const ready = await this.uploadService.cosObjectExists(cacheKey);
       samplePages.push({ pageNum, ready });
     }
@@ -519,6 +560,7 @@ export class CourseService {
       totalPages: sampleCount,
       fullTotalPages,
       cacheVersion,
+      fileId: courseFile.id,
     };
   }
 
@@ -526,25 +568,27 @@ export class CourseService {
   async getAdminCoursePreviewSamplePageImage(
     courseId: number,
     pageNum: number,
+    fileId?: number,
   ): Promise<{ buffer: Buffer; contentType: string }> {
     const course = await this.courseRepository.findOne({ where: { id: courseId } });
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
-    if (!this.isPreviewImageSupportedFileCourse(course)) {
+    const courseFile = await this.courseFileService.resolve(courseId, fileId);
+    if (!this.isPreviewImageSupportedFileRecord(courseFile)) {
       throw new NotFoundException('课程无可预览文件');
     }
     if (pageNum < 1 || pageNum > 3) {
       throw new NotFoundException('仅支持预览前 3 页');
     }
     const previewScope: 'full' = 'full';
-    const cacheKey = this.getPreviewImageCacheKey(courseId, pageNum, course.file_url, previewScope);
+    const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
     const cached = await this.uploadService.readCosObjectBuffer(cacheKey);
     if (cached && this.isJpegBuffer(cached)) {
       return { buffer: cached, contentType: 'image/jpeg' };
     }
 
-    const taskKey = `admin:${courseId}:${previewScope}:${this.getPreviewCacheVersion(course.file_url, previewScope)}:${pageNum}`;
+    const taskKey = `admin:${courseId}:${courseFile.id}:${previewScope}:${this.getPreviewCacheVersion(courseFile.file_url, previewScope)}:${pageNum}`;
     const existingTask = this.previewRenderTasks.get(taskKey);
     if (existingTask) {
       return existingTask;
@@ -552,6 +596,7 @@ export class CourseService {
 
     const renderTask = this.renderAndCachePreviewPage({
       course,
+      courseFile,
       hasAuth: true,
       courseId,
       pageNum,
@@ -651,11 +696,21 @@ export class CourseService {
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
-    if (!this.isPreviewImageSupportedFileCourse(course)) {
+    const files = await this.courseFileService.assertFileCourseHasFiles(courseId);
+    const supportedFiles = files.filter((file) => this.isPreviewImageSupportedFileRecord(file));
+    if (supportedFiles.length === 0) {
       throw new BadRequestException('仅文件类 PDF/Word 课程支持生成图片缓存');
     }
 
     const now = Date.now();
+    const aggregated: PreviewWarmupResult = {
+      courseId,
+      totalPages: 0,
+      generated: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+    };
     this.previewWarmupProgress.set(courseId, {
       courseId,
       courseName: course.name,
@@ -671,10 +726,42 @@ export class CourseService {
     });
     await this.notifyPreviewWarmupProgress(courseId, onProgress);
 
-    const pdfBuffer = await this.getCourseFileAsPdfBuffer(course, 60000);
+    for (const courseFile of supportedFiles) {
+      this.updatePreviewWarmupProgress(courseId, {
+        currentFileName: courseFile.display_name,
+        status: 'running',
+      });
+      await this.notifyPreviewWarmupProgress(courseId, onProgress);
+      const fileResult = await this.generateSingleCourseFilePreviewCache(course, courseFile, force, onProgress);
+      aggregated.totalPages += fileResult.totalPages;
+      aggregated.generated += fileResult.generated;
+      aggregated.skipped += fileResult.skipped;
+      aggregated.failed += fileResult.failed;
+      aggregated.errors.push(...fileResult.errors);
+    }
+
+    this.updatePreviewWarmupProgress(courseId, {
+      ...aggregated,
+      currentPage: aggregated.totalPages,
+      status: aggregated.failed > 0 ? 'failed' : 'completed',
+      finishedAt: Date.now(),
+    });
+    await this.notifyPreviewWarmupProgress(courseId, onProgress);
+    return aggregated;
+  }
+
+  private async generateSingleCourseFilePreviewCache(
+    course: Course,
+    courseFile: CourseFile,
+    force: boolean,
+    onProgress?: PreviewWarmupProgressListener,
+  ): Promise<PreviewWarmupResult> {
+    const courseId = course.id;
+    const pdfBuffer = await this.getCourseFileAsPdfBuffer(courseFile, 60000);
     const doc = await this.loadPdfDocument(pdfBuffer);
     const totalPages = doc.getPageCount();
-    await this.persistFilePageCount(courseId, course.file_url, totalPages);
+    const versionKey = this.getFilePageCountVersionKey(courseFile.file_url);
+    await this.courseFileService.persistPageCount(courseFile.id, courseFile.file_url, totalPages, versionKey);
     const previewScope: 'full' = 'full';
     const result: PreviewWarmupResult = {
       courseId,
@@ -686,6 +773,7 @@ export class CourseService {
     };
     this.updatePreviewWarmupProgress(courseId, {
       ...result,
+      currentFileName: courseFile.display_name,
       status: 'running',
     });
     await this.notifyPreviewWarmupProgress(courseId, onProgress);
@@ -693,11 +781,12 @@ export class CourseService {
     for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
       this.updatePreviewWarmupProgress(courseId, {
         currentPage: pageNum,
+        currentFileName: courseFile.display_name,
         status: 'running',
       });
       await this.notifyPreviewWarmupProgress(courseId, onProgress);
-      const cacheKey = this.getPreviewImageCacheKey(courseId, pageNum, course.file_url, previewScope);
-      if (!force && await this.uploadService.cosObjectExists(cacheKey)) {
+      const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
+      if (!force && (await this.uploadService.cosObjectExists(cacheKey))) {
         result.skipped += 1;
         this.updatePreviewWarmupProgress(courseId, { skipped: result.skipped });
         await this.notifyPreviewWarmupProgress(courseId, onProgress);
@@ -706,6 +795,7 @@ export class CourseService {
       try {
         await this.renderAndCachePreviewPage({
           course,
+          courseFile,
           hasAuth: true,
           courseId,
           pageNum,
@@ -718,26 +808,19 @@ export class CourseService {
       } catch (error) {
         result.failed += 1;
         const message = error instanceof Error ? error.message : String(error);
-        result.errors.push({ pageNum, message });
+        result.errors.push({ pageNum, message: `[${courseFile.display_name}] ${message}` });
         this.updatePreviewWarmupProgress(courseId, {
           failed: result.failed,
           errors: result.errors,
           message,
         });
         await this.notifyPreviewWarmupProgress(courseId, onProgress);
-        this.logger.warn(`课程预览缓存页生成失败 course=${courseId} page=${pageNum}: ${message}`);
+        this.logger.warn(
+          `课程预览缓存页生成失败 course=${courseId} file=${courseFile.id} page=${pageNum}: ${message}`,
+        );
       }
-      // 让出事件循环，避免长任务持续占满容器。
       await this.sleep(20);
     }
-
-    this.updatePreviewWarmupProgress(courseId, {
-      ...result,
-      currentPage: totalPages,
-      status: result.failed > 0 ? 'failed' : 'completed',
-      finishedAt: Date.now(),
-    });
-    await this.notifyPreviewWarmupProgress(courseId, onProgress);
     return result;
   }
 
@@ -761,6 +844,7 @@ export class CourseService {
 
   private async renderAndCachePreviewPage({
     course,
+    courseFile,
     hasAuth,
     courseId,
     pageNum,
@@ -768,6 +852,7 @@ export class CourseService {
     pdfBufferOverride,
   }: {
     course: Course;
+    courseFile: CourseFile;
     hasAuth: boolean;
     courseId: number;
     pageNum: number;
@@ -778,9 +863,9 @@ export class CourseService {
     if (pdfBufferOverride) {
       pdfBuffer = pdfBufferOverride;
     } else if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
-      pdfBuffer = await this.getCourseFileAsPdfBuffer(course, 30000);
+      pdfBuffer = await this.getCourseFileAsPdfBuffer(courseFile, 30000);
     } else {
-      pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 3);
+      pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 3, courseFile.id);
     }
 
     const tmpDir = path.join(os.tmpdir(), `course-preview-${courseId}-${pageNum}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -835,12 +920,14 @@ export class CourseService {
     return outputPath;
   }
 
-  private isPreviewImageSupportedFileCourse(course: Pick<Course, 'content_type' | 'file_url' | 'file_type'>) {
-    return (
-      course.content_type === 'file' &&
-      !!course.file_url &&
-      this.isPreviewImageSupportedFileType((course.file_type || '').toLowerCase())
-    );
+  private isPreviewImageSupportedFileRecord(file: Pick<CourseFile, 'file_url' | 'file_type'>) {
+    return !!file.file_url && this.isPreviewImageSupportedFileType((file.file_type || '').toLowerCase());
+  }
+
+  private async isPreviewImageSupportedFileCourse(course: Pick<Course, 'id' | 'content_type'>) {
+    if (course.content_type !== 'file') return false;
+    const files = await this.courseFileService.listByCourseId(course.id);
+    return files.some((file) => this.isPreviewImageSupportedFileRecord(file));
   }
 
   private isPreviewImageSupportedFileType(fileType?: string | null) {
@@ -848,19 +935,19 @@ export class CourseService {
   }
 
   private async getCourseFileAsPdfBuffer(
-    course: Pick<Course, 'id' | 'file_url' | 'file_type'>,
+    file: Pick<CourseFile, 'id' | 'course_id' | 'file_url' | 'file_type'>,
     timeout = 30000,
   ): Promise<Buffer> {
-    if (!course.file_url) {
+    if (!file.file_url) {
       throw new NotFoundException('课程无文件');
     }
-    const fileType = (course.file_type || '').toLowerCase();
-    const sourceBuffer = await this.downloadCourseFileBuffer(course.file_url, timeout);
+    const fileType = (file.file_type || '').toLowerCase();
+    const sourceBuffer = await this.downloadCourseFileBuffer(file.file_url, timeout);
     if (fileType === 'pdf') {
       return sourceBuffer;
     }
     if (fileType === 'doc' || fileType === 'docx') {
-      return this.convertWordToPdfBuffer(sourceBuffer, fileType, course.id);
+      return this.convertWordToPdfBuffer(sourceBuffer, fileType, file.course_id);
     }
     throw new BadRequestException('暂不支持该文件类型预览');
   }
@@ -1066,59 +1153,31 @@ export class CourseService {
     return this.getPreviewCacheVersion(fileUrl, 'full');
   }
 
-  private getCachedFilePageCount(
-    course: Pick<Course, 'file_url' | 'file_page_count' | 'file_page_count_key'>,
-  ): number | null {
-    if (!course.file_url) {
-      return null;
-    }
-    const count = Number(course.file_page_count || 0);
-    if (!Number.isInteger(count) || count <= 0) {
-      return null;
-    }
-    const cachedKey = String(course.file_page_count_key || '').trim();
-    if (!cachedKey || cachedKey !== this.getFilePageCountVersionKey(course.file_url)) {
-      return null;
-    }
-    return count;
-  }
-
-  private async persistFilePageCount(courseId: number, fileUrl: string, pageCount: number): Promise<void> {
-    const count = Math.max(0, Math.floor(Number(pageCount) || 0));
-    if (!fileUrl || count <= 0) {
-      return;
-    }
-    await this.courseRepository.update(courseId, {
-      file_page_count: count,
-      file_page_count_key: this.getFilePageCountVersionKey(fileUrl),
-    });
-  }
-
   /** 优先读库内页数缓存，缺失时再下载并解析源 PDF */
-  async resolveFullFilePageCount(
-    course: Pick<Course, 'id' | 'file_url' | 'file_type' | 'content_type' | 'file_page_count' | 'file_page_count_key'>,
-  ): Promise<number> {
-    const cached = this.getCachedFilePageCount(course);
+  async resolveFullFilePageCount(file: CourseFile): Promise<number> {
+    const versionKey = this.getFilePageCountVersionKey(file.file_url);
+    const cached = this.courseFileService.getCachedPageCount(file, versionKey);
     if (cached) {
       return cached;
     }
-    const bytes = await this.getCourseFileAsPdfBuffer(course, 30000);
+    const bytes = await this.getCourseFileAsPdfBuffer(file, 30000);
     const doc = await this.loadPdfDocument(bytes);
     const fullCount = Math.max(0, doc.getPageCount());
     if (fullCount > 0) {
-      await this.persistFilePageCount(course.id, course.file_url, fullCount);
+      await this.courseFileService.persistPageCount(file.id, file.file_url, fullCount, versionKey);
     }
     return fullCount;
   }
 
   private getPreviewImageCacheKey(
     courseId: number,
+    fileId: number,
     pageNum: number,
     fileUrl: string,
     scope: 'full' | 'trial',
   ): string {
     const version = this.getPreviewCacheVersion(fileUrl, scope);
-    return ['course-preview-cache', String(courseId), version, `${pageNum}.jpg`].join('/');
+    return ['course-preview-cache', String(courseId), String(fileId), version, `${pageNum}.jpg`].join('/');
   }
 
   private isJpegBuffer(buffer: Buffer): boolean {
@@ -1230,27 +1289,50 @@ export class CourseService {
   /**
    * 生成小程序内嵌 PDF 预览用短期凭证（5 分钟有效）
    */
-  async createPreviewTicket(courseId: number, userId?: number): Promise<{ ticket: string; viewerUrl: string }> {
-    const course = await this.courseRepository.findOne({ where: { id: courseId }, select: ['id', 'content_type', 'file_type'] });
+  async resolveCourseFile(courseId: number, fileId?: number) {
+    return this.courseFileService.resolve(courseId, fileId);
+  }
+
+  async createPreviewTicket(
+    courseId: number,
+    userId?: number,
+    fileId?: number,
+  ): Promise<{ ticket: string; viewerUrl: string; fileId: number }> {
+    const course = await this.courseRepository.findOne({ where: { id: courseId }, select: ['id', 'content_type'] });
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
-    const payload = { courseId, userId: userId ?? null, purpose: 'pdf-viewer' };
+    const courseFile = await this.courseFileService.resolve(courseId, fileId);
+    const payload = {
+      courseId,
+      fileId: courseFile.id,
+      userId: userId ?? null,
+      purpose: 'pdf-viewer',
+    };
     const ticket = this.jwtService.sign(payload, { expiresIn: '5m' });
     const baseUrl = (this.configService.get('BASE_URL') || '').replace(/\/$/, '');
     const apiPrefix = baseUrl ? `${baseUrl}/api` : '/api';
-    const viewerUrl = `${apiPrefix}/app/pdf-viewer?courseId=${courseId}&ticket=${encodeURIComponent(ticket)}`;
-    return { ticket, viewerUrl };
+    const viewerUrl = `${apiPrefix}/app/pdf-viewer?courseId=${courseId}&fileId=${courseFile.id}&ticket=${encodeURIComponent(ticket)}`;
+    return { ticket, viewerUrl, fileId: courseFile.id };
   }
 
   /**
    * 校验预览凭证并返回 userId（用于 file-preview 接口）
    */
-  verifyPreviewTicket(ticket: string): { courseId: number; userId: number | null } | null {
+  verifyPreviewTicket(ticket: string): { courseId: number; fileId: number | null; userId: number | null } | null {
     try {
-      const payload = this.jwtService.verify(ticket) as { courseId?: number; userId?: number; purpose?: string };
+      const payload = this.jwtService.verify(ticket) as {
+        courseId?: number;
+        fileId?: number;
+        userId?: number;
+        purpose?: string;
+      };
       if (payload.purpose !== 'pdf-viewer' || payload.courseId == null) return null;
-      return { courseId: payload.courseId, userId: payload.userId ?? null };
+      return {
+        courseId: payload.courseId,
+        fileId: Number.isInteger(payload.fileId) && payload.fileId > 0 ? payload.fileId : null,
+        userId: payload.userId ?? null,
+      };
     } catch {
       return null;
     }
