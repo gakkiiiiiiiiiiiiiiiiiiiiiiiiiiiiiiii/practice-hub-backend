@@ -84,6 +84,8 @@ export class OrderService {
 
     await this.orderRepository.save(order);
 
+    await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course);
+
     const paymentParams = await this.createVirtualPaymentParams({
       user,
       course,
@@ -218,6 +220,8 @@ export class OrderService {
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
+
+    await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course);
 
     const paymentParams = await this.createVirtualPaymentParams({
       user,
@@ -610,6 +614,8 @@ export class OrderService {
     }
 
     const activationPurchase = order.pay_payload?.activation_code_purchase;
+    await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course);
+
     const paymentParams = await this.createVirtualPaymentParams({
       user,
       course,

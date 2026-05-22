@@ -21,7 +21,8 @@ const WECHAT_VIRTUAL_PAY_REMARK_MAX_BYTES = 128;
 @Injectable()
 export class VirtualPayGoodsService {
   private readonly logger = new Logger(VirtualPayGoodsService.name);
-  private readonly virtualPayGoodsReady = new Set<string>();
+  /** `${env}:${productId}` -> 已同步到微信侧的价格（分） */
+  private readonly virtualPayGoodsSyncedPrice = new Map<string, number>();
   private readonly virtualPayGoodsPending = new Map<string, Promise<void>>();
   private readonly virtualPayGoodsSyncedAt = new Map<string, number>();
   private wechatAccessTokenCache: { token: string; expireAt: number } | null = null;
@@ -103,6 +104,31 @@ export class VirtualPayGoodsService {
   }
 
   /**
+   * 下单/拉起支付前：若本地缓存价格与课程现价不一致，强制重新 upload/publish 微信道具。
+   */
+  async prepareCourseGoodsForPayment(course: Course) {
+    if (this.configService.get<string>('WECHAT_VIRTUAL_PAY_AUTO_UPLOAD_GOODS') === 'false') {
+      return;
+    }
+    if (course.is_free === 1 || Number(course.price) <= 0) {
+      return;
+    }
+
+    const config = this.getVirtualPayConfig();
+    const coursePriceCents = Math.max(1, Math.round(Number(course.price || 0) * 100));
+    const agentPriceCents = Math.max(1, Math.round(Number(course.agent_price || course.price || 0) * 100));
+    const courseProductId = this.getVirtualPayProductId('course', course.id);
+    const activationProductId = this.getVirtualPayProductId('activation_code', course.id);
+    const courseCacheKey = `${config.env}:${courseProductId}`;
+    const activationCacheKey = `${config.env}:${activationProductId}`;
+    const force =
+      this.virtualPayGoodsSyncedPrice.get(courseCacheKey) !== coursePriceCents ||
+      this.virtualPayGoodsSyncedPrice.get(activationCacheKey) !== agentPriceCents;
+
+    await this.syncCourseGoods(course, { force });
+  }
+
+  /**
    * 后台保存付费课程后：上传并发布 course_{id}、activation_code_{id} 道具（异步，不阻塞保存接口）
    */
   scheduleSyncCourseGoods(course: Course, options?: { force?: boolean }) {
@@ -139,6 +165,7 @@ export class VirtualPayGoodsService {
       name: this.buildVirtualPayGoodsName(courseName, '', course.id),
       price: coursePriceCents,
       remark: this.buildVirtualPayGoodsRemark('课程', courseName),
+      force: options?.force,
     });
 
     await this.ensureGoodsPublished({
@@ -147,6 +174,7 @@ export class VirtualPayGoodsService {
       name: this.buildVirtualPayGoodsName(courseName, '激活码', course.id),
       price: agentPriceCents,
       remark: this.buildVirtualPayGoodsRemark('激活码', courseName),
+      force: options?.force,
     });
 
     this.logger.log(`课程 ${course.id} 虚拟支付道具已提交同步`);
@@ -155,7 +183,9 @@ export class VirtualPayGoodsService {
   private clearCourseGoodsCache(courseId: number, env: number) {
     for (const type of ['course', 'activation_code'] as const) {
       const productId = this.getVirtualPayProductId(type, courseId);
-      this.virtualPayGoodsReady.delete(`${env}:${productId}`);
+      const cacheKey = `${env}:${productId}`;
+      this.virtualPayGoodsSyncedPrice.delete(cacheKey);
+      this.virtualPayGoodsSyncedAt.delete(cacheKey);
     }
   }
 
@@ -165,38 +195,49 @@ export class VirtualPayGoodsService {
     name,
     price,
     remark,
+    force,
   }: {
     config: { env: number; appKey: string };
     productId: string;
     name: string;
     price: number;
     remark: string;
+    force?: boolean;
   }) {
-    if (this.isVirtualPayProductPrePublished(productId)) {
-      this.virtualPayGoodsReady.add(`${config.env}:${productId}`);
+    const cacheKey = `${config.env}:${productId}`;
+    const normalizedPrice = Math.max(1, Math.round(Number(price || 0)));
+
+    if (this.isVirtualPayProductPrePublished(productId) && !force) {
       return;
     }
-    const cacheKey = `${config.env}:${productId}`;
-    if (this.virtualPayGoodsReady.has(cacheKey)) {
+    if (!force && this.virtualPayGoodsSyncedPrice.get(cacheKey) === normalizedPrice) {
       return;
     }
     const running = this.virtualPayGoodsPending.get(cacheKey);
     if (running) {
       await running;
-      return;
+      if (!force && this.virtualPayGoodsSyncedPrice.get(cacheKey) === normalizedPrice) {
+        return;
+      }
     }
 
     const task = this.uploadAndPublishVirtualPayGoods({
       config,
       productId,
       name,
-      price,
+      price: normalizedPrice,
       remark,
     })
       .then((didSync) => {
-        this.virtualPayGoodsReady.add(cacheKey);
         if (didSync) {
+          this.virtualPayGoodsSyncedPrice.set(cacheKey, normalizedPrice);
           this.markVirtualPayGoodsSynced(productId, config);
+          return;
+        }
+        if (force) {
+          this.logger.warn(
+            `微信虚拟支付道具 ${productId} 改价同步未确认成功（${normalizedPrice} 分），支付可能报 GOODS_PRICE_INVALID`,
+          );
         }
       })
       .finally(() => {
