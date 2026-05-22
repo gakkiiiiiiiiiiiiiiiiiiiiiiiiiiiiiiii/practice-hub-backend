@@ -16,6 +16,7 @@ import { UpdateCourseDto } from './dto/update-course.dto';
 import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.dto';
 import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
+import { BatchAdjustCoursePriceDto } from './dto/batch-adjust-price.dto';
 import { SystemService } from '../system/system.service';
 import { CourseService } from '../course/course.service';
 import { CourseFileService, CourseFileInput } from '../course/course-file.service';
@@ -1218,6 +1219,68 @@ export class AdminCourseService {
       status: dto.status,
     };
 	  }
+
+  async batchAdjustPrice(dto: BatchAdjustCoursePriceDto) {
+    if (!dto.ids?.length) {
+      throw new BadRequestException('课程ID列表不能为空');
+    }
+
+    const uniqueIds = Array.from(new Set(dto.ids.map((id) => Number(id)).filter((id) => id > 0)));
+    if (uniqueIds.length === 0) {
+      throw new BadRequestException('课程ID列表无效');
+    }
+
+    if (dto.mode === 'fixed' && dto.value < 0) {
+      throw new BadRequestException('固定价格不能小于 0');
+    }
+
+    const fields = dto.fields || 'both';
+    const courses = await this.courseRepository.find({
+      where: { id: In(uniqueIds) },
+    });
+    if (courses.length === 0) {
+      throw new NotFoundException('未找到要调价的课程');
+    }
+
+    const updatedCourses: Course[] = [];
+    for (const course of courses) {
+      if (fields === 'price' || fields === 'both') {
+        course.price = this.computeAdjustedPrice(Number(course.price || 0), dto.mode, dto.value);
+      }
+      if (fields === 'agent_price' || fields === 'both') {
+        course.agent_price = this.computeAdjustedPrice(Number(course.agent_price || 0), dto.mode, dto.value);
+      }
+      const saved = await this.courseRepository.save(course);
+      updatedCourses.push(saved);
+      this.virtualPayGoodsService.scheduleSyncCourseGoods(saved, { force: true });
+    }
+
+    return {
+      success: true,
+      count: updatedCourses.length,
+      mode: dto.mode,
+      value: dto.value,
+      fields,
+    };
+  }
+
+  private roundCoursePrice(value: number): number {
+    return Math.round(Math.max(0, value) * 100) / 100;
+  }
+
+  private computeAdjustedPrice(current: number, mode: BatchAdjustCoursePriceDto['mode'], value: number): number {
+    const base = Number(current) || 0;
+    switch (mode) {
+      case 'delta':
+        return this.roundCoursePrice(base + value);
+      case 'percent':
+        return this.roundCoursePrice(base * (1 + value / 100));
+      case 'fixed':
+        return this.roundCoursePrice(value);
+      default:
+        throw new BadRequestException('不支持的调价方式');
+    }
+  }
 
   private async getNextSortValue() {
     const latest = await this.courseRepository

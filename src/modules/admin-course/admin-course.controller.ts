@@ -33,6 +33,7 @@ import { UpdateCourseDto } from './dto/update-course.dto';
 import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.dto';
 import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
+import { BatchAdjustCoursePriceDto } from './dto/batch-adjust-price.dto';
 import { CreateCourseFileDto, UpdateCourseFileDto } from './dto/course-file.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
@@ -328,6 +329,14 @@ export class AdminCourseController {
 	async batchUpdateStatus(@Body() dto: BatchUpdateStatusDto, @CurrentUser() user: any) {
 		await this.systemRoleService.assertPermissionUsage(user?.role, 'course:status', user?.adminId);
 		const result = await this.adminCourseService.batchUpdateStatus(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch-adjust-price')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '批量调整课程价格' })
+	async batchAdjustPrice(@Body() dto: BatchAdjustCoursePriceDto) {
+		const result = await this.adminCourseService.batchAdjustPrice(dto);
 		return CommonResponseDto.success(result);
 	}
 
