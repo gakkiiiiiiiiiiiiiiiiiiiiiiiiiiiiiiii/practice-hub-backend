@@ -1221,23 +1221,32 @@ export class AdminCourseService {
 	  }
 
   async batchAdjustPrice(dto: BatchAdjustCoursePriceDto) {
-    if (!dto.ids?.length) {
-      throw new BadRequestException('课程ID列表不能为空');
-    }
-
-    const uniqueIds = Array.from(new Set(dto.ids.map((id) => Number(id)).filter((id) => id > 0)));
-    if (uniqueIds.length === 0) {
-      throw new BadRequestException('课程ID列表无效');
-    }
-
     if (dto.mode === 'fixed' && dto.value < 0) {
       throw new BadRequestException('固定价格不能小于 0');
     }
 
     const fields = dto.fields || 'both';
-    const courses = await this.courseRepository.find({
-      where: { id: In(uniqueIds) },
-    });
+    let courses: Course[] = [];
+    if (dto.selectAll === true) {
+      courses = await this.getCourseList({
+        name: dto.name,
+        subject: dto.subject,
+        category: dto.category,
+        subCategory: dto.subCategory,
+      });
+    } else {
+      if (!dto.ids?.length) {
+        throw new BadRequestException('课程ID列表不能为空');
+      }
+      const uniqueIds = Array.from(new Set(dto.ids.map((id) => Number(id)).filter((id) => id > 0)));
+      if (uniqueIds.length === 0) {
+        throw new BadRequestException('课程ID列表无效');
+      }
+      courses = await this.courseRepository.find({
+        where: { id: In(uniqueIds) },
+      });
+    }
+
     if (courses.length === 0) {
       throw new NotFoundException('未找到要调价的课程');
     }
@@ -1261,6 +1270,7 @@ export class AdminCourseService {
       mode: dto.mode,
       value: dto.value,
       fields,
+      selectAll: dto.selectAll === true,
     };
   }
 
