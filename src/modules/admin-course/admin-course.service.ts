@@ -40,6 +40,7 @@ type PreviewCacheFailureDetail = {
 @Injectable()
 export class AdminCourseService {
   private readonly logger = new Logger(AdminCourseService.name);
+  private readonly previewCacheWarmupTimers = new Map<number, { timer: NodeJS.Timeout; force: boolean }>();
 
   constructor(
     @InjectRepository(Course)
@@ -89,7 +90,6 @@ export class AdminCourseService {
       const saved = await this.courseRepository.save(course);
       await this.ensureCourseFilesFromLegacyFields(saved);
       await this.courseFileService.syncPrimaryMirror(saved.id);
-      void this.warmupPreviewCacheIfNeeded(saved);
       this.virtualPayGoodsService.scheduleSyncCourseGoods(saved, { force: true });
       return saved;
     } else {
@@ -112,7 +112,6 @@ export class AdminCourseService {
       const saved = await this.courseRepository.save(course);
       await this.ensureCourseFilesFromLegacyFields(saved);
       await this.courseFileService.syncPrimaryMirror(saved.id);
-      void this.warmupPreviewCacheIfNeeded(saved);
       this.virtualPayGoodsService.scheduleSyncCourseGoods(saved);
       return saved;
     }
@@ -125,10 +124,6 @@ export class AdminCourseService {
 
   async createCourseFile(courseId: number, input: CourseFileInput) {
     const saved = await this.courseFileService.create(courseId, input);
-    const course = await this.courseRepository.findOne({ where: { id: courseId } });
-    if (course) {
-      void this.warmupPreviewCacheIfNeeded(course);
-    }
     return this.courseFileService.formatFileListItem(saved);
   }
 
@@ -142,7 +137,16 @@ export class AdminCourseService {
       file_size?: number;
     },
   ) {
+    const before = await this.courseFileService.resolve(courseId, fileId);
     const saved = await this.courseFileService.update(courseId, fileId, patch);
+    const fileUrlChanged =
+      patch.file_url !== undefined && String(patch.file_url || '').trim() !== String(before.file_url || '').trim();
+    const fileTypeChanged =
+      patch.file_type !== undefined &&
+      String(patch.file_type || '').trim().toLowerCase() !== String(before.file_type || '').trim().toLowerCase();
+    if (fileUrlChanged || fileTypeChanged) {
+      this.schedulePreviewCacheWarmup(courseId, true);
+    }
     return this.courseFileService.formatFileListItem(saved);
   }
 
@@ -232,6 +236,31 @@ export class AdminCourseService {
     if (!(await this.isPreviewCacheSupportedFileCourse(course))) {
       throw new BadRequestException('仅文件类 PDF/Word 课程支持生成图片缓存');
     }
+    return this.courseService.warmupCoursePreviewCacheInBackground(courseId, force);
+  }
+
+  /** 课程文件同步完成后统一触发：默认只生成缺失缓存；若期间有换文件则自动 force */
+  async warmupPreviewCacheAfterFilesSync(courseId: number, force = false) {
+    const course = await this.courseRepository.findOne({ where: { id: courseId } });
+    if (!course) {
+      throw new NotFoundException('课程不存在');
+    }
+    if (!(await this.isPreviewCacheSupportedFileCourse(course))) {
+      return {
+        started: false,
+        running: false,
+        skipped: true,
+        message: '非文件类课程或无预览文件，跳过图片缓存生成',
+      };
+    }
+
+    const pending = this.previewCacheWarmupTimers.get(courseId);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.previewCacheWarmupTimers.delete(courseId);
+      force = pending.force || force;
+    }
+
     return this.courseService.warmupCoursePreviewCacheInBackground(courseId, force);
   }
 
@@ -399,6 +428,105 @@ export class AdminCourseService {
       running: 0,
       alreadyRunning: false,
       retryFromTaskNo: failedTask.task_no,
+      ...this.formatPreviewCacheTask(task),
+    };
+  }
+
+  async listPreviewCacheTargets(keyword?: string) {
+    const courseIds = await this.courseFileService.findCourseIdsWithPreviewableFiles();
+    if (courseIds.length === 0) {
+      return { list: [], total: 0 };
+    }
+
+    const queryBuilder = this.courseRepository
+      .createQueryBuilder('course')
+      .select([
+        'course.id',
+        'course.name',
+        'course.subject',
+        'course.category',
+        'course.sub_category',
+        'course.content_type',
+      ])
+      .where('course.id IN (:...courseIds)', { courseIds })
+      .orderBy('course.id', 'ASC');
+
+    const trimmedKeyword = String(keyword || '').trim();
+    if (trimmedKeyword) {
+      queryBuilder.andWhere('course.name LIKE :keyword', { keyword: `%${trimmedKeyword}%` });
+    }
+
+    const list = await queryBuilder.getMany();
+    return {
+      list: list.map((course) => ({
+        id: course.id,
+        name: course.name,
+        subject: course.subject,
+        category: course.category,
+        subCategory: course.sub_category,
+        contentType: course.content_type,
+      })),
+      total: list.length,
+    };
+  }
+
+  async warmupSelectedPreviewCaches(courseIds: number[]) {
+    const runningTask = await this.findRunningPreviewCacheTask();
+    if (runningTask) {
+      return {
+        ...this.formatPreviewCacheTask(runningTask),
+        total: runningTask.total_courses,
+        started: 0,
+        running: 1,
+        alreadyRunning: true,
+      };
+    }
+
+    if (!Array.isArray(courseIds) || courseIds.length === 0) {
+      throw new BadRequestException('请至少选择一个课程');
+    }
+
+    const uniqueIds = Array.from(
+      new Set(courseIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)),
+    );
+    if (uniqueIds.length === 0) {
+      throw new BadRequestException('courseIds 必须是大于 0 的整数数组');
+    }
+
+    const courses = await this.courseRepository.find({
+      where: { id: In(uniqueIds) },
+      select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
+      order: { id: 'ASC' },
+    });
+    const targets: Course[] = [];
+    for (const course of courses) {
+      if (await this.isPreviewCacheSupportedFileCourse(course)) {
+        targets.push(course);
+      }
+    }
+    if (targets.length === 0) {
+      throw new BadRequestException('所选课程均不支持图片缓存（需为文件类 PDF/Word 课程）');
+    }
+
+    const task = await this.previewCacheTaskRepository.save(
+      this.previewCacheTaskRepository.create({
+        task_no: this.createPreviewCacheTaskNo(),
+        trigger_type: 'force-selected',
+        status: PreviewCacheTaskStatus.PENDING,
+        total_courses: targets.length,
+        message: `任务已创建，准备强制重新生成 ${targets.length} 个课程的图片缓存`,
+        failed_details: JSON.stringify([]),
+      }),
+    );
+
+    void this.runPreviewCacheTask(task.id, targets, true);
+
+    return {
+      total: targets.length,
+      started: targets.length,
+      running: 0,
+      alreadyRunning: false,
+      selectedCourseIds: targets.map((course) => course.id),
       ...this.formatPreviewCacheTask(task),
     };
   }
@@ -753,11 +881,30 @@ export class AdminCourseService {
     }
   }
 
-  private async warmupPreviewCacheIfNeeded(course: Course) {
+  private schedulePreviewCacheWarmup(courseId: number, force = false) {
+    const existing = this.previewCacheWarmupTimers.get(courseId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      force = existing.force || force;
+    }
+    const timer = setTimeout(() => {
+      this.previewCacheWarmupTimers.delete(courseId);
+      void this.warmupPreviewCacheIfNeededById(courseId, force);
+    }, 800);
+    this.previewCacheWarmupTimers.set(courseId, { timer, force });
+  }
+
+  private async warmupPreviewCacheIfNeededById(courseId: number, force = false) {
+    const course = await this.courseRepository.findOne({ where: { id: courseId } });
+    if (!course) return;
+    await this.warmupPreviewCacheIfNeeded(course, force);
+  }
+
+  private async warmupPreviewCacheIfNeeded(course: Course, force = false) {
     if (!(await this.isPreviewCacheSupportedFileCourse(course))) {
       return;
     }
-    this.courseService.warmupCoursePreviewCacheInBackground(course.id, true);
+    this.courseService.warmupCoursePreviewCacheInBackground(course.id, force);
   }
 
   private async isPreviewCacheSupportedFileCourse(course: Pick<Course, 'id' | 'content_type'>) {

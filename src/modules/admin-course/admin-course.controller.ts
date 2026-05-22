@@ -153,6 +153,23 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Get('preview-cache/targets')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '获取支持图片缓存的文件类课程列表' })
+	async listPreviewCacheTargets(@Query('keyword') keyword?: string) {
+		const result = await this.adminCourseService.listPreviewCacheTargets(keyword);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('preview-cache/force-selected')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '强制重新生成指定课程的图片预览缓存' })
+	async warmupSelectedPreviewCaches(@Body() body: { courseIds?: number[] } = {}) {
+		const courseIds = Array.isArray(body?.courseIds) ? body.courseIds : [];
+		const result = await this.adminCourseService.warmupSelectedPreviewCaches(courseIds);
+		return CommonResponseDto.success(result);
+	}
+
 	@Post('files/pdf-health-check')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 	@ApiOperation({ summary: '检测指定 PDF 文件结构是否规范' })
@@ -332,6 +349,17 @@ export class AdminCourseController {
 		const result = await this.adminCourseService.warmupPreviewCache(+id, body?.force === true);
 		return CommonResponseDto.success(result);
 	}
+
+	@Post(':id/preview-cache/warmup-after-save')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '课程文件保存完成后统一生成缺失图片预览缓存' })
+	async warmupPreviewCacheAfterFilesSync(
+		@Param('id') id: number,
+		@Body() body: { force?: boolean } = {},
+	) {
+		const result = await this.adminCourseService.warmupPreviewCacheAfterFilesSync(+id, body?.force === true);
+		return CommonResponseDto.success(result);
+	}
 }
 
 @ApiTags('小程序端-课程管理')
@@ -442,6 +470,7 @@ export class AppCourseAdminController {
 			}
 			await this.adminCourseService.createCourseFile(saved.id, input);
 		}
+		void this.adminCourseService.warmupPreviewCacheAfterFilesSync(saved.id, false);
 		return CommonResponseDto.success(saved);
 	}
 
