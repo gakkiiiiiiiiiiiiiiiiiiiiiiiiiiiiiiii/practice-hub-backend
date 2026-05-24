@@ -103,6 +103,16 @@ export class VirtualPayGoodsService {
     };
   }
 
+  /** 管理端改价后提示：虚拟道具价格同步中 */
+  buildAdminPriceSyncNotice() {
+    const waitMinutes = this.getVirtualPayGoodsCooldownMinutes();
+    return {
+      syncing: true,
+      wait_minutes: waitMinutes,
+      message: `虚拟道具价格正在同步，约 ${waitMinutes} 分钟后生效`,
+    };
+  }
+
   /**
    * 下单/拉起支付前：若本地缓存价格与课程现价不一致，强制重新 upload/publish 微信道具。
    */

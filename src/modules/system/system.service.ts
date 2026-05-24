@@ -297,6 +297,57 @@ export class SystemService {
     };
   }
 
+  private getDefaultCourseDefaultParams() {
+    return {
+      subject: '',
+      school: '',
+      major: '',
+      exam_year: '',
+      answer_year: '',
+      price: 0.5,
+      agent_price: 0.1,
+      is_free: 0,
+      validity_days: 365,
+      allow_source_file: 0,
+      content_type: 'normal',
+    };
+  }
+
+  private normalizeCourseDefaultParams(input?: Record<string, any> | null) {
+    const fallback = this.getDefaultCourseDefaultParams();
+    const source = input || {};
+    const isFree = Number(source.is_free ?? fallback.is_free) === 1 ? 1 : 0;
+    const contentType = source.content_type === 'file' ? 'file' : 'normal';
+    return {
+      subject: String(source.subject || '').trim(),
+      school: String(source.school || '').trim(),
+      major: String(source.major || '').trim(),
+      exam_year: String(source.exam_year || '').trim(),
+      answer_year: String(source.answer_year || '').trim(),
+      price: Math.max(0, Number(source.price ?? fallback.price) || 0),
+      agent_price: Math.max(0, Number(source.agent_price ?? fallback.agent_price) || 0),
+      is_free: isFree,
+      validity_days:
+        isFree === 1 ? null : Math.max(1, Number(source.validity_days ?? fallback.validity_days) || 365),
+      allow_source_file: Number(source.allow_source_file ?? fallback.allow_source_file) === 1 ? 1 : 0,
+      content_type: contentType,
+    };
+  }
+
+  async getCourseDefaultParams() {
+    const value = await this.getJsonConfig('course_default_params', this.getDefaultCourseDefaultParams());
+    return this.normalizeCourseDefaultParams(value as Record<string, any>);
+  }
+
+  async setCourseDefaultParams(input: Record<string, any>) {
+    const normalized = this.normalizeCourseDefaultParams(input);
+    await this.setJsonConfig('course_default_params', '新增课程默认参数', normalized);
+    return {
+      success: true,
+      params: normalized,
+    };
+  }
+
   async getFaqConfig() {
     return this.getJsonConfig('faq_config', [
       {

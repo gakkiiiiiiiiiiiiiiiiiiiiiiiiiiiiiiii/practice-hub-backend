@@ -35,6 +35,7 @@ import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 import { BatchAdjustCoursePriceDto } from './dto/batch-adjust-price.dto';
 import { CreateCourseFileDto, UpdateCourseFileDto } from './dto/course-file.dto';
+import { SetCourseDefaultParamsDto } from '../system/dto/set-course-default-params.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 
@@ -337,6 +338,30 @@ export class AdminCourseController {
 	@ApiOperation({ summary: '批量调整课程价格' })
 	async batchAdjustPrice(@Body() dto: BatchAdjustCoursePriceDto) {
 		const result = await this.adminCourseService.batchAdjustPrice(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('virtual-pay-goods/sync-all')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '同步全部付费课程的微信虚拟道具价格' })
+	async syncAllCourseVirtualPayGoods() {
+		const result = await this.adminCourseService.syncAllCourseVirtualPayGoods();
+		return CommonResponseDto.success(result);
+	}
+
+	@Get('default-params')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '获取新增课程默认参数' })
+	async getCourseDefaultParams() {
+		const result = await this.adminCourseService.getCourseDefaultParams();
+		return CommonResponseDto.success(result);
+	}
+
+	@Put('default-params')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '设置新增课程默认参数' })
+	async setCourseDefaultParams(@Body() dto: SetCourseDefaultParamsDto) {
+		const result = await this.adminCourseService.setCourseDefaultParams(dto);
 		return CommonResponseDto.success(result);
 	}
 

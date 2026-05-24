@@ -80,6 +80,9 @@ export class AdminCourseService {
       if (!course) {
         throw new NotFoundException('课程不存在');
       }
+      const previousPrice = this.roundCoursePrice(Number(course.price || 0));
+      const previousAgentPrice = this.roundCoursePrice(Number(course.agent_price || 0));
+      const previousIsFree = Number(course.is_free || 0);
       if (dto.is_free === 0 && dto.validity_days === undefined && course.validity_days == null) {
         dto.validity_days = 365;
       }
@@ -91,20 +94,21 @@ export class AdminCourseService {
       const saved = await this.courseRepository.save(course);
       await this.ensureCourseFilesFromLegacyFields(saved);
       await this.courseFileService.syncPrimaryMirror(saved.id);
-      this.virtualPayGoodsService.scheduleSyncCourseGoods(saved, { force: true });
-      return saved;
+      const priceRelatedChanged = this.isCoursePriceRelatedChanged(saved, {
+        price: previousPrice,
+        agent_price: previousAgentPrice,
+        is_free: previousIsFree,
+      });
+      let virtualPayGoodsSync;
+      if (this.shouldSyncVirtualPayGoods(saved) && priceRelatedChanged) {
+        this.virtualPayGoodsService.scheduleSyncCourseGoods(saved, { force: true });
+        virtualPayGoodsSync = this.virtualPayGoodsService.buildAdminPriceSyncNotice();
+      }
+      return this.buildCourseSaveResult(saved, virtualPayGoodsSync);
     } else {
-      if (dto.price === undefined || dto.price === null) {
-        dto.price = 0.5;
-      }
-      if (dto.agent_price === undefined || dto.agent_price === null) {
-        dto.agent_price = 0.1;
-      }
+      await this.applyCreateCourseDefaults(dto);
       if (dto.sort === undefined || dto.sort === null) {
         dto.sort = await this.getNextSortValue();
-      }
-      if ((dto.is_free ?? 0) === 0 && dto.validity_days == null) {
-        dto.validity_days = 365;
       }
       if (dto.is_free === 1) {
         dto.validity_days = null;
@@ -113,8 +117,109 @@ export class AdminCourseService {
       const saved = await this.courseRepository.save(course);
       await this.ensureCourseFilesFromLegacyFields(saved);
       await this.courseFileService.syncPrimaryMirror(saved.id);
-      this.virtualPayGoodsService.scheduleSyncCourseGoods(saved);
-      return saved;
+      let virtualPayGoodsSync;
+      if (this.shouldSyncVirtualPayGoods(saved)) {
+        this.virtualPayGoodsService.scheduleSyncCourseGoods(saved, { force: true });
+        virtualPayGoodsSync = this.virtualPayGoodsService.buildAdminPriceSyncNotice();
+      }
+      return this.buildCourseSaveResult(saved, virtualPayGoodsSync);
+    }
+  }
+
+  async syncAllCourseVirtualPayGoods() {
+    const courses = await this.courseRepository.find();
+    const targets = courses.filter((course) => this.shouldSyncVirtualPayGoods(course));
+    void this.runVirtualPayGoodsBatchSync(targets);
+    return {
+      total: targets.length,
+      scheduled: true,
+      virtual_pay_goods_sync: this.virtualPayGoodsService.buildAdminPriceSyncNotice(),
+    };
+  }
+
+  private async runVirtualPayGoodsBatchSync(courses: Course[]) {
+    const delayMs = 300;
+    let success = 0;
+    let failed = 0;
+    for (const course of courses) {
+      try {
+        await this.virtualPayGoodsService.syncCourseGoods(course, { force: true });
+        success += 1;
+      } catch (error: any) {
+        failed += 1;
+        this.logger.warn(`课程 ${course.id} 虚拟道具价格同步失败: ${error?.message || error}`);
+      }
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    this.logger.log(`全部课程虚拟道具价格同步完成：成功 ${success}，失败 ${failed}`);
+  }
+
+  private shouldSyncVirtualPayGoods(course: Course) {
+    return course.is_free !== 1 && Number(course.price) > 0;
+  }
+
+  private isCoursePriceRelatedChanged(
+    course: Course,
+    previous: { price: number; agent_price: number; is_free: number },
+  ) {
+    return (
+      this.roundCoursePrice(Number(course.price || 0)) !== previous.price ||
+      this.roundCoursePrice(Number(course.agent_price || 0)) !== previous.agent_price ||
+      Number(course.is_free || 0) !== previous.is_free
+    );
+  }
+
+  private buildCourseSaveResult(course: Course, virtualPayGoodsSync?: Record<string, unknown>) {
+    return {
+      ...course,
+      virtual_pay_goods_sync: virtualPayGoodsSync,
+    };
+  }
+
+  async getCourseDefaultParams() {
+    return this.systemService.getCourseDefaultParams();
+  }
+
+  async setCourseDefaultParams(input: Record<string, unknown>) {
+    return this.systemService.setCourseDefaultParams(input);
+  }
+
+  private async applyCreateCourseDefaults(dto: CreateCourseDto) {
+    const defaults = await this.systemService.getCourseDefaultParams();
+    if (dto.subject === undefined || dto.subject === null) {
+      dto.subject = defaults.subject || undefined;
+    }
+    if (dto.school === undefined || dto.school === null) {
+      dto.school = defaults.school || undefined;
+    }
+    if (dto.major === undefined || dto.major === null) {
+      dto.major = defaults.major || undefined;
+    }
+    if (dto.exam_year === undefined || dto.exam_year === null) {
+      dto.exam_year = defaults.exam_year || undefined;
+    }
+    if (dto.answer_year === undefined || dto.answer_year === null) {
+      dto.answer_year = defaults.answer_year || undefined;
+    }
+    if (dto.price === undefined || dto.price === null) {
+      dto.price = defaults.price;
+    }
+    if (dto.agent_price === undefined || dto.agent_price === null) {
+      dto.agent_price = defaults.agent_price;
+    }
+    if (dto.is_free === undefined || dto.is_free === null) {
+      dto.is_free = defaults.is_free;
+    }
+    if (dto.validity_days === undefined) {
+      dto.validity_days = defaults.is_free === 1 ? null : defaults.validity_days ?? 365;
+    }
+    if (dto.allow_source_file === undefined || dto.allow_source_file === null) {
+      dto.allow_source_file = defaults.allow_source_file;
+    }
+    if (!dto.content_type) {
+      dto.content_type = defaults.content_type || 'normal';
     }
   }
 
@@ -1271,6 +1376,7 @@ export class AdminCourseService {
       value: dto.value,
       fields,
       selectAll: dto.selectAll === true,
+      virtual_pay_goods_sync: this.virtualPayGoodsService.buildAdminPriceSyncNotice(),
     };
   }
 
