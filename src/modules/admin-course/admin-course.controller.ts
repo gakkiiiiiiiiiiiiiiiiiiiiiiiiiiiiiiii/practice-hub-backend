@@ -59,11 +59,31 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Get('default-params')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '获取新增课程默认参数' })
+	async getCourseDefaultParams() {
+		const result = await this.adminCourseService.getCourseDefaultParams();
+		return CommonResponseDto.success(result);
+	}
+
+	@Put('default-params')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '设置新增课程默认参数' })
+	async setCourseDefaultParams(@Body() dto: SetCourseDefaultParamsDto) {
+		const result = await this.adminCourseService.setCourseDefaultParams(dto as Record<string, any>);
+		return CommonResponseDto.success(result);
+	}
+
 	@Put(':id')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 	@ApiOperation({ summary: '编辑课程' })
 	async updateCourse(@Param('id') id: number, @Body() dto: UpdateCourseDto, @CurrentUser() user: any) {
-		const result = await this.adminCourseService.saveCourse(dto, +id, user?.role);
+		const courseId = Number(id);
+		if (!Number.isInteger(courseId) || courseId <= 0) {
+			throw new BadRequestException('课程 ID 无效');
+		}
+		const result = await this.adminCourseService.saveCourse(dto, courseId, user?.role);
 		return CommonResponseDto.success(result);
 	}
 
@@ -210,22 +230,6 @@ export class AdminCourseController {
 	@ApiOperation({ summary: '同步全部付费课程的微信虚拟道具价格' })
 	async syncAllCourseVirtualPayGoods() {
 		const result = await this.adminCourseService.syncAllCourseVirtualPayGoods();
-		return CommonResponseDto.success(result);
-	}
-
-	@Get('default-params')
-	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '获取新增课程默认参数' })
-	async getCourseDefaultParams() {
-		const result = await this.adminCourseService.getCourseDefaultParams();
-		return CommonResponseDto.success(result);
-	}
-
-	@Put('default-params')
-	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '设置新增课程默认参数' })
-	async setCourseDefaultParams(@Body() dto: SetCourseDefaultParamsDto) {
-		const result = await this.adminCourseService.setCourseDefaultParams(dto as Record<string, any>);
 		return CommonResponseDto.success(result);
 	}
 
