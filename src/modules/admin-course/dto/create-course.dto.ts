@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsNumber, IsOptional } from 'class-validator';
+import { IsNotEmpty, IsString, IsNumber, IsOptional, IsIn } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateCourseDto {
@@ -114,4 +114,10 @@ export class CreateCourseDto {
 	@Type(() => Number)
 	@IsNumber()
 	allow_source_file?: number;
+
+	@ApiProperty({ description: '状态：0-禁用，1-启用', example: 1, required: false })
+	@IsOptional()
+	@Type(() => Number)
+	@IsIn([0, 1], { message: 'status 必须为 0 或 1' })
+	status?: number;
 }
