@@ -180,6 +180,63 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Post('batch-delete')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '批量删除课程' })
+	async batchDeleteCourses(@Body() dto: BatchDeleteCoursesDto) {
+		const result = await this.adminCourseService.batchDeleteCourses(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch-update-status')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '批量更新课程状态（启用/禁用）' })
+	async batchUpdateStatus(@Body() dto: BatchUpdateStatusDto, @CurrentUser() user: any) {
+		await this.systemRoleService.assertPermissionUsage(user?.role, 'course:status', user?.adminId);
+		const result = await this.adminCourseService.batchUpdateStatus(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch-adjust-price')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '批量调整课程价格' })
+	async batchAdjustPrice(@Body() dto: BatchAdjustCoursePriceDto) {
+		const result = await this.adminCourseService.batchAdjustPrice(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('virtual-pay-goods/sync-all')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '同步全部付费课程的微信虚拟道具价格' })
+	async syncAllCourseVirtualPayGoods() {
+		const result = await this.adminCourseService.syncAllCourseVirtualPayGoods();
+		return CommonResponseDto.success(result);
+	}
+
+	@Get('default-params')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '获取新增课程默认参数' })
+	async getCourseDefaultParams() {
+		const result = await this.adminCourseService.getCourseDefaultParams();
+		return CommonResponseDto.success(result);
+	}
+
+	@Put('default-params')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '设置新增课程默认参数' })
+	async setCourseDefaultParams(@Body() dto: SetCourseDefaultParamsDto) {
+		const result = await this.adminCourseService.setCourseDefaultParams(dto as Record<string, any>);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('preview-cache/missing')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '生成所有未缓存的课程文件图片预览缓存' })
+	async warmupMissingPreviewCaches() {
+		const result = await this.adminCourseService.warmupAllMissingPreviewCaches();
+		return CommonResponseDto.success(result);
+	}
+
 	private parseOptionalCourseId(value: unknown): number | null {
 		if (value === undefined || value === null || value === '') {
 			return null;
@@ -313,63 +370,6 @@ export class AdminCourseController {
 	@ApiOperation({ summary: '删除课程' })
 	async deleteCourse(@Param('id') id: number) {
 		const result = await this.adminCourseService.deleteCourse(+id);
-		return CommonResponseDto.success(result);
-	}
-
-	@Post('batch-delete')
-	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '批量删除课程' })
-	async batchDeleteCourses(@Body() dto: BatchDeleteCoursesDto) {
-		const result = await this.adminCourseService.batchDeleteCourses(dto);
-		return CommonResponseDto.success(result);
-	}
-
-	@Post('batch-update-status')
-	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '批量更新课程状态（启用/禁用）' })
-	async batchUpdateStatus(@Body() dto: BatchUpdateStatusDto, @CurrentUser() user: any) {
-		await this.systemRoleService.assertPermissionUsage(user?.role, 'course:status', user?.adminId);
-		const result = await this.adminCourseService.batchUpdateStatus(dto);
-		return CommonResponseDto.success(result);
-	}
-
-	@Post('batch-adjust-price')
-	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '批量调整课程价格' })
-	async batchAdjustPrice(@Body() dto: BatchAdjustCoursePriceDto) {
-		const result = await this.adminCourseService.batchAdjustPrice(dto);
-		return CommonResponseDto.success(result);
-	}
-
-	@Post('virtual-pay-goods/sync-all')
-	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '同步全部付费课程的微信虚拟道具价格' })
-	async syncAllCourseVirtualPayGoods() {
-		const result = await this.adminCourseService.syncAllCourseVirtualPayGoods();
-		return CommonResponseDto.success(result);
-	}
-
-	@Get('default-params')
-	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '获取新增课程默认参数' })
-	async getCourseDefaultParams() {
-		const result = await this.adminCourseService.getCourseDefaultParams();
-		return CommonResponseDto.success(result);
-	}
-
-	@Put('default-params')
-	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '设置新增课程默认参数' })
-	async setCourseDefaultParams(@Body() dto: SetCourseDefaultParamsDto) {
-		const result = await this.adminCourseService.setCourseDefaultParams(dto);
-		return CommonResponseDto.success(result);
-	}
-
-	@Post('preview-cache/missing')
-	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '生成所有未缓存的课程文件图片预览缓存' })
-	async warmupMissingPreviewCaches() {
-		const result = await this.adminCourseService.warmupAllMissingPreviewCaches();
 		return CommonResponseDto.success(result);
 	}
 

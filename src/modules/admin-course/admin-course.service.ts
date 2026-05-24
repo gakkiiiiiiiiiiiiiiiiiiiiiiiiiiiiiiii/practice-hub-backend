@@ -106,7 +106,7 @@ export class AdminCourseService {
       }
       return this.buildCourseSaveResult(saved, virtualPayGoodsSync);
     } else {
-      await this.applyCreateCourseDefaults(dto);
+      await this.applyCreateCourseDefaults(dto as CreateCourseDto);
       if (dto.sort === undefined || dto.sort === null) {
         dto.sort = await this.getNextSortValue();
       }
@@ -182,7 +182,7 @@ export class AdminCourseService {
     return this.systemService.getCourseDefaultParams();
   }
 
-  async setCourseDefaultParams(input: Record<string, unknown>) {
+  async setCourseDefaultParams(input: Record<string, any>) {
     return this.systemService.setCourseDefaultParams(input);
   }
 
