@@ -67,7 +67,15 @@ function getSqlFiles() {
 
 async function runMigration(conn, fileName) {
 	const sqlPath = path.join(migrationsDir, fileName);
-	let sql = fs.readFileSync(sqlPath, 'utf8');
+	const sql = fs.readFileSync(sqlPath, 'utf8');
+	const usesPreparedStatement = /\b(PREPARE|EXECUTE|DEALLOCATE PREPARE)\b/i.test(sql);
+
+	if (usesPreparedStatement) {
+		await conn.query({ sql, multipleStatements: true });
+		console.log('  ✓', fileName);
+		return;
+	}
+
 	// 按分号拆分并逐条执行，避免多语句报错
 	const statements = sql
 		.split(';')
@@ -84,9 +92,16 @@ async function runMigration(conn, fileName) {
 				code === 'ER_DUP_FIELDNAME' ||
 				code === 'ER_DUP_KEYNAME' ||
 				code === 'ER_TABLE_EXISTS_ERROR' ||
+				code === 'ER_CANT_DROP_FIELD_OR_KEY' ||
+				code === 'ER_DUP_ENTRY' ||
+				code === 'ER_NO_SUCH_TABLE' ||
+				code === 'ER_BAD_FIELD_ERROR' ||
+				msg.includes("doesn't exist") ||
+				msg.includes('Unknown column') ||
 				msg.includes('Duplicate column') ||
 				msg.includes('already exists') ||
-				msg.includes('Duplicate key');
+				msg.includes('Duplicate key') ||
+				msg.includes("check that column/key exists");
 			if (skip) continue;
 			throw err;
 		}
@@ -122,7 +137,7 @@ async function main() {
 		user: dbConfig.user,
 		password: dbConfig.password || undefined,
 		database: dbConfig.database,
-		multipleStatements: false,
+		multipleStatements: true,
 	});
 
 	try {
