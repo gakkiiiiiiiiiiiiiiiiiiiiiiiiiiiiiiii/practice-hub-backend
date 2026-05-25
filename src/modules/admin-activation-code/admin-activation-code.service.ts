@@ -1,10 +1,12 @@
 import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { ActivationCode, ActivationCodeSourceType, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
 import { Course } from '../../database/entities/course.entity';
 import { SysUser, AdminRole } from '../../database/entities/sys-user.entity';
+import { AppUser } from '../../database/entities/app-user.entity';
+import { Distributor } from '../../database/entities/distributor.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { GenerateCodeDto } from './dto/generate-code.dto';
@@ -16,6 +18,10 @@ export class AdminActivationCodeService {
     private activationCodeRepository: Repository<ActivationCode>,
     @InjectRepository(SysUser)
     private sysUserRepository: Repository<SysUser>,
+    @InjectRepository(AppUser)
+    private appUserRepository: Repository<AppUser>,
+    @InjectRepository(Distributor)
+    private distributorRepository: Repository<Distributor>,
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
     @InjectRepository(UserCourseAuth)
@@ -149,12 +155,15 @@ export class AdminActivationCodeService {
       .take(pageSize)
       .getManyAndCount();
 
+    const generatorUserMap = await this.buildGeneratorUserMap(codes);
+
     return {
       list: codes.map((code) => ({
         ...code,
         courseName: code.course?.name || '-',
         source_text: this.getSourceText(code),
         batch_prefix: code.batch_prefix || this.getBatchPrefix(code.batch_id),
+        generator_user: generatorUserMap.get(code.id) || '-',
       })),
       total,
       page,
@@ -183,7 +192,14 @@ export class AdminActivationCodeService {
       throw new BadRequestException('激活码不存在');
     }
 
-    return code;
+    const generatorUserMap = await this.buildGeneratorUserMap([code]);
+
+    return {
+      ...code,
+      source_text: this.getSourceText(code),
+      batch_prefix: code.batch_prefix || this.getBatchPrefix(code.batch_id),
+      generator_user: generatorUserMap.get(code.id) || '-',
+    };
   }
 
   /**
@@ -409,6 +425,83 @@ export class AdminActivationCodeService {
       [ActivationCodeSourceType.APP_ADMIN]: '小程序管理员生成',
     };
     return textMap[sourceType] || '未知来源';
+  }
+
+  private async buildGeneratorUserMap(codes: ActivationCode[]) {
+    const result = new Map<number, string>();
+    if (!codes.length) {
+      return result;
+    }
+
+    const sysUserIds = new Set<number>();
+    const appUserIds = new Set<number>();
+    const distributorIds = new Set<number>();
+
+    for (const code of codes) {
+      const sourceType =
+        code.source_type ||
+        (code.batch_id?.startsWith('D') ? ActivationCodeSourceType.DISTRIBUTOR : ActivationCodeSourceType.ADMIN);
+      const sourceId = code.source_id || code.agent_id;
+      if (!sourceId) continue;
+
+      if (sourceType === ActivationCodeSourceType.ADMIN || sourceType === ActivationCodeSourceType.AGENT) {
+        sysUserIds.add(sourceId);
+      } else if (sourceType === ActivationCodeSourceType.APP_ADMIN) {
+        appUserIds.add(sourceId);
+      } else if (sourceType === ActivationCodeSourceType.DISTRIBUTOR) {
+        distributorIds.add(sourceId);
+      }
+    }
+
+    const [sysUsers, appUsers, distributors] = await Promise.all([
+      sysUserIds.size
+        ? this.sysUserRepository.find({ where: { id: In([...sysUserIds]) }, select: ['id', 'username'] })
+        : Promise.resolve([]),
+      appUserIds.size
+        ? this.appUserRepository.find({ where: { id: In([...appUserIds]) }, select: ['id', 'nickname'] })
+        : Promise.resolve([]),
+      distributorIds.size
+        ? this.distributorRepository.find({
+            where: { id: In([...distributorIds]) },
+            relations: ['user'],
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const sysUserMap = new Map(sysUsers.map((item) => [item.id, item.username]));
+    const appUserMap = new Map(appUsers.map((item) => [item.id, item.nickname || `用户${item.id}`]));
+
+    for (const code of codes) {
+      const sourceType =
+        code.source_type ||
+        (code.batch_id?.startsWith('D') ? ActivationCodeSourceType.DISTRIBUTOR : ActivationCodeSourceType.ADMIN);
+      const sourceId = code.source_id || code.agent_id;
+      if (!sourceId) {
+        result.set(code.id, '-');
+        continue;
+      }
+
+      if (sourceType === ActivationCodeSourceType.ADMIN || sourceType === ActivationCodeSourceType.AGENT) {
+        result.set(code.id, sysUserMap.get(sourceId) || `管理员${sourceId}`);
+        continue;
+      }
+
+      if (sourceType === ActivationCodeSourceType.APP_ADMIN) {
+        result.set(code.id, appUserMap.get(sourceId) || `小程序用户${sourceId}`);
+        continue;
+      }
+
+      if (sourceType === ActivationCodeSourceType.DISTRIBUTOR) {
+        const distributor = distributors.find((item) => item.id === sourceId);
+        const nickname = distributor?.user?.nickname;
+        result.set(code.id, nickname || distributor?.distributor_code || `分销商${sourceId}`);
+        continue;
+      }
+
+      result.set(code.id, '-');
+    }
+
+    return result;
   }
 
   private getStatusText(status: ActivationCodeStatus) {
