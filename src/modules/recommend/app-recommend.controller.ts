@@ -4,7 +4,7 @@ import { Response } from 'express';
 import axios from 'axios';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In } from 'typeorm';
+import { Brackets, DataSource, Repository, In } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
 import { CourseCategory } from '../../database/entities/course-category.entity';
 import { HomeRecommendCategory } from '../../database/entities/home-recommend-category.entity';
@@ -112,24 +112,10 @@ export class AppRecommendController {
         list.push(category);
         secondaryByParent.set(category.parent_id || 0, list);
       });
-      const secondaryNames = secondaryCategories.map((category) => category.name).filter(Boolean);
-      const countRows =
-        secondaryNames.length > 0
-          ? await this.courseRepository
-              .createQueryBuilder('course')
-              .select('course.category', 'category')
-              .addSelect('course.sub_category', 'sub_category')
-              .addSelect('COUNT(course.id)', 'count')
-              .where('course.sub_category IN (:...secondaryNames)', { secondaryNames })
-              .andWhere('course.status = :status', { status: 1 })
-              .groupBy('course.category')
-              .addGroupBy('course.sub_category')
-              .getRawMany()
-          : [];
-      const courseCountMap = new Map<string, number>();
-      countRows.forEach((row) => {
-        courseCountMap.set(`${row.category || ''}__${row.sub_category || ''}`, Number(row.count) || 0);
-      });
+      const courseCountMap = await this.buildSubCategoryCourseCountMap(
+        secondaryCategories,
+        primaryCategoryMap,
+      );
 
       const authMap = new Map<number, Date | null>();
       if (user?.userId && courseIds.length > 0) {
@@ -168,7 +154,7 @@ export class AppRecommendController {
             parent_id: subCategory.parent_id,
             cover: subCategory.cover_img || '',
             cover_img: subCategory.cover_img || '',
-            course_count: courseCountMap.get(`${primaryName}__${subCategory.name}`) || 0,
+            course_count: courseCountMap.get(subCategory.id) || 0,
           }));
 
           return {
@@ -274,6 +260,75 @@ export class AppRecommendController {
       fields.splice(5, 0, `${alias}.columns`);
     }
     return this.categoryRepository.createQueryBuilder(alias).select(fields);
+  }
+
+  private async buildSubCategoryCourseCountMap(
+    secondaryCategories: CourseCategory[],
+    primaryCategoryMap: Map<number, CourseCategory>,
+  ) {
+    const countMap = new Map<number, number>();
+    if (secondaryCategories.length === 0) {
+      return countMap;
+    }
+
+    const pairs = secondaryCategories
+      .map((subCategory) => {
+        const primaryCategory = primaryCategoryMap.get(Number(subCategory.parent_id) || 0);
+        const category = String(primaryCategory?.name || '').trim();
+        const subCategoryName = String(subCategory.name || '').trim();
+        if (!category || !subCategoryName) {
+          return null;
+        }
+        return {
+          id: subCategory.id,
+          category,
+          subCategory: subCategoryName,
+        };
+      })
+      .filter(Boolean) as Array<{ id: number; category: string; subCategory: string }>;
+
+    if (pairs.length === 0) {
+      return countMap;
+    }
+
+    const queryBuilder = this.courseRepository
+      .createQueryBuilder('course')
+      .select('course.category', 'category')
+      .addSelect('course.sub_category', 'sub_category')
+      .addSelect('COUNT(course.id)', 'count')
+      .where('course.status = :status', { status: 1 })
+      .groupBy('course.category')
+      .addGroupBy('course.sub_category');
+
+    queryBuilder.andWhere(
+      new Brackets((whereBuilder) => {
+        pairs.forEach((pair, index) => {
+          const condition = '(course.category = :categoryName' + index + ' AND course.sub_category = :subCategoryName' + index + ')';
+          const parameters = {
+            ['categoryName' + index]: pair.category,
+            ['subCategoryName' + index]: pair.subCategory,
+          };
+          if (index === 0) {
+            whereBuilder.where(condition, parameters);
+            return;
+          }
+          whereBuilder.orWhere(condition, parameters);
+        });
+      }),
+    );
+
+    const countRows = await queryBuilder.getRawMany();
+    const countByKey = new Map<string, number>();
+    countRows.forEach((row) => {
+      const key = `${String(row.category || '').trim()}__${String(row.sub_category || '').trim()}`;
+      countByKey.set(key, Number(row.count) || 0);
+    });
+
+    pairs.forEach((pair) => {
+      countMap.set(pair.id, countByKey.get(`${pair.category}__${pair.subCategory}`) || 0);
+    });
+
+    return countMap;
   }
 
   private async hasColumnsColumn() {

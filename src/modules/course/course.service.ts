@@ -100,31 +100,39 @@ export class CourseService {
    */
   async getAllCourses(keyword?: string, category?: string, subCategory?: string, sortBy?: string, userId?: number) {
     const queryBuilder = this.courseRepository.createQueryBuilder('course');
+    const normalizedKeyword = String(keyword || '').trim();
+    const normalizedCategory = String(category || '').trim();
+    const normalizedSubCategory = String(subCategory || '').trim();
+    let hasWhere = false;
+
+    const appendWhere = (condition: string, parameters?: Record<string, unknown>) => {
+      if (hasWhere) {
+        queryBuilder.andWhere(condition, parameters);
+        return;
+      }
+      queryBuilder.where(condition, parameters);
+      hasWhere = true;
+    };
+
+    // 小程序端仅展示已启用课程，与首页分类课程数统计保持一致
+    appendWhere('course.status = :status', { status: 1 });
 
     // 关键词搜索
-    if (keyword) {
-      queryBuilder.where(
+    if (normalizedKeyword) {
+      appendWhere(
         '(course.name LIKE :keyword OR course.subject LIKE :keyword OR course.school LIKE :keyword OR course.major LIKE :keyword)',
-        { keyword: `%${keyword}%` },
+        { keyword: `%${normalizedKeyword}%` },
       );
     }
 
     // 分类筛选
-    if (category) {
-      if (keyword) {
-        queryBuilder.andWhere('course.category = :category', { category });
-      } else {
-        queryBuilder.where('course.category = :category', { category });
-      }
+    if (normalizedCategory) {
+      appendWhere('course.category = :category', { category: normalizedCategory });
     }
 
     // 二级分类筛选
-    if (subCategory) {
-      if (keyword || category) {
-        queryBuilder.andWhere('course.sub_category = :subCategory', { subCategory });
-      } else {
-        queryBuilder.where('course.sub_category = :subCategory', { subCategory });
-      }
+    if (normalizedSubCategory) {
+      appendWhere('course.sub_category = :subCategory', { subCategory: normalizedSubCategory });
     }
 
     // 排序

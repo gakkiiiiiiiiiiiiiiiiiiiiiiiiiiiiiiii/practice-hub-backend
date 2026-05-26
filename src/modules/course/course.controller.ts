@@ -310,7 +310,11 @@ export class CourseController {
             primaryCategory.children.map(async (subCategory) => {
               // 查询该二级分类下的所有课程
               const courses = await this.courseRepository.find({
-                where: { sub_category: subCategory.name },
+                where: {
+                  category: primaryCategory.name,
+                  sub_category: subCategory.name,
+                  status: 1,
+                },
                 order: { sort: 'ASC', id: 'ASC' },
               });
 
