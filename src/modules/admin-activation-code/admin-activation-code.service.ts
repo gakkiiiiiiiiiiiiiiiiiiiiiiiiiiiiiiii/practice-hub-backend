@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { Brackets, DataSource, In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import { ActivationCode, ActivationCodeSourceType, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
 import { Course } from '../../database/entities/course.entity';
@@ -130,6 +130,7 @@ export class AdminActivationCodeService {
     pageSize = 20,
     batchNo?: string,
     status?: ActivationCodeStatus,
+    generatorUser?: string,
   ) {
     const queryBuilder = this.activationCodeRepository.createQueryBuilder('code');
 
@@ -146,6 +147,10 @@ export class AdminActivationCodeService {
     // 状态筛选
     if (status !== undefined) {
       queryBuilder.andWhere('code.status = :status', { status });
+    }
+
+    if (generatorUser?.trim()) {
+      this.applyGeneratorUserFilter(queryBuilder, generatorUser.trim());
     }
 
     const [codes, total] = await queryBuilder
@@ -425,6 +430,54 @@ export class AdminActivationCodeService {
       [ActivationCodeSourceType.APP_ADMIN]: '小程序管理员生成',
     };
     return textMap[sourceType] || '未知来源';
+  }
+
+  private applyGeneratorUserFilter(
+    queryBuilder: ReturnType<Repository<ActivationCode>['createQueryBuilder']>,
+    generatorUser: string,
+  ) {
+    const keyword = `%${generatorUser}%`;
+    queryBuilder.andWhere(
+      new Brackets((qb) => {
+        qb.where(
+          `(
+            (code.source_type IN (:...sysTypes) OR (code.source_type IS NULL AND (code.batch_id NOT LIKE 'D%' OR code.batch_id IS NULL)))
+            AND EXISTS (
+              SELECT 1 FROM sys_user su
+              WHERE su.id = COALESCE(code.source_id, code.agent_id)
+              AND su.username LIKE :keyword
+            )
+          )`,
+          {
+            sysTypes: [ActivationCodeSourceType.ADMIN, ActivationCodeSourceType.AGENT],
+            keyword,
+          },
+        )
+          .orWhere(
+            `(
+              code.source_type = :appAdminType
+              AND EXISTS (
+                SELECT 1 FROM app_user au
+                WHERE au.id = COALESCE(code.source_id, code.agent_id)
+                AND au.nickname LIKE :keyword
+              )
+            )`,
+            { appAdminType: ActivationCodeSourceType.APP_ADMIN, keyword },
+          )
+          .orWhere(
+            `(
+              (code.source_type = :distributorType OR (code.source_type IS NULL AND code.batch_id LIKE 'D%'))
+              AND EXISTS (
+                SELECT 1 FROM distributor d
+                LEFT JOIN app_user au ON au.id = d.user_id
+                WHERE d.id = COALESCE(code.source_id, code.agent_id)
+                AND (au.nickname LIKE :keyword OR d.distributor_code LIKE :keyword)
+              )
+            )`,
+            { distributorType: ActivationCodeSourceType.DISTRIBUTOR, keyword },
+          );
+      }),
+    );
   }
 
   private async buildGeneratorUserMap(codes: ActivationCode[]) {

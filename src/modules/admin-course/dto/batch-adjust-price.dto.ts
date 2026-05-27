@@ -34,6 +34,11 @@ export class BatchAdjustCoursePriceDto {
   @IsString()
   subCategory?: string;
 
+  @ApiProperty({ description: '筛选：状态 0-禁用 1-启用（selectAll 时有效）', required: false })
+  @IsOptional()
+  @IsNumber({}, { message: '状态必须是数字' })
+  status?: number;
+
   @ApiProperty({
     description: '调价方式：delta=加减金额，percent=百分比，fixed=固定价格',
     example: 'delta',

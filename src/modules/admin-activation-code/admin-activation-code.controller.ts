@@ -97,6 +97,7 @@ export class AdminActivationCodeController {
       dto.pageSize || 20,
       dto.batchNo,
       dto.status,
+      dto.generatorUser,
     );
     return CommonResponseDto.success(result);
   }

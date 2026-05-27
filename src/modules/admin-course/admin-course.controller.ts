@@ -95,12 +95,16 @@ export class AdminCourseController {
 		@Query('subject') subject?: string,
 		@Query('category') category?: string,
 		@Query('subCategory') subCategory?: string,
+		@Query('status') status?: string,
 	) {
+		const parsedStatus =
+			status !== undefined && status !== '' ? Number(status) : undefined;
 		const result = await this.adminCourseService.getCourseList({
 			name,
 			subject,
 			category,
 			subCategory,
+			status: parsedStatus !== undefined && !Number.isNaN(parsedStatus) ? parsedStatus : undefined,
 		});
 		return CommonResponseDto.success(result);
 	}

@@ -1051,6 +1051,7 @@ export class AdminCourseService {
     subject?: string;
     category?: string;
     subCategory?: string;
+    status?: number;
   }) {
     const queryBuilder = this.courseRepository.createQueryBuilder('course');
 
@@ -1065,6 +1066,9 @@ export class AdminCourseService {
     }
     if (filters?.subCategory?.trim()) {
       queryBuilder.andWhere('course.sub_category = :subCategory', { subCategory: filters.subCategory.trim() });
+    }
+    if (filters?.status !== undefined && filters.status !== null && !Number.isNaN(filters.status)) {
+      queryBuilder.andWhere('course.status = :status', { status: filters.status });
     }
 
     return await queryBuilder
@@ -1338,6 +1342,7 @@ export class AdminCourseService {
         subject: dto.subject,
         category: dto.category,
         subCategory: dto.subCategory,
+        status: dto.status,
       });
     } else {
       if (!dto.ids?.length) {

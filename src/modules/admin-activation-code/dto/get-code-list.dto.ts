@@ -26,5 +26,10 @@ export class GetCodeListDto {
   @Type(() => Number)
   @IsEnum(ActivationCodeStatus)
   status?: ActivationCodeStatus;
+
+  @ApiProperty({ description: '生成用户（模糊搜索）', required: false })
+  @IsOptional()
+  @IsString()
+  generatorUser?: string;
 }
 
