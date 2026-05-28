@@ -1,11 +1,17 @@
-import { Controller, Post, Body, Get, UseGuards, Headers, Query, Param, ParseIntPipe } from '@nestjs/common';
+import { Controller, Post, Body, Get, UseGuards, Headers, Query, Param, ParseIntPipe, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Request } from 'express';
 import { OrderService } from './order.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
+
+function resolveClientIp(req: Request) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0]?.trim();
+  return forwarded || req.ip || '127.0.0.1';
+}
 
 @ApiTags('订单')
 @Controller('app/order')
@@ -16,15 +22,15 @@ export class OrderController {
 
   @Post('create')
   @ApiOperation({ summary: '创建预支付订单' })
-  async createOrder(@CurrentUser() user: any, @Body() dto: CreateOrderDto) {
-    const result = await this.orderService.createOrder(user.userId, dto);
+  async createOrder(@CurrentUser() user: any, @Body() dto: CreateOrderDto, @Req() req: Request) {
+    const result = await this.orderService.createOrder(user.userId, dto, resolveClientIp(req));
     return CommonResponseDto.success(result);
   }
 
   @Post('pay/confirm')
   @ApiOperation({ summary: '确认微信虚拟支付结果并开通课程权限' })
-  async confirmWechatPayment(@CurrentUser() user: any, @Body() dto: ConfirmPaymentDto) {
-    const result = await this.orderService.confirmWechatPayment(user.userId, dto.order_no);
+  async confirmWechatPayment(@CurrentUser() user: any, @Body() dto: ConfirmPaymentDto, @Req() req: Request) {
+    const result = await this.orderService.confirmWechatPayment(user.userId, dto.order_no, resolveClientIp(req));
     return CommonResponseDto.success(result);
   }
 
@@ -37,8 +43,8 @@ export class OrderController {
 
   @Post(':id/pay')
   @ApiOperation({ summary: '继续支付待支付订单' })
-  async payPendingOrder(@CurrentUser() user: any, @Param('id', ParseIntPipe) id: number) {
-    const result = await this.orderService.payPendingOrder(user.userId, id);
+  async payPendingOrder(@CurrentUser() user: any, @Param('id', ParseIntPipe) id: number, @Req() req: Request) {
+    const result = await this.orderService.payPendingOrder(user.userId, id, resolveClientIp(req));
     return CommonResponseDto.success(result);
   }
 
@@ -59,5 +65,17 @@ export class OrderPayNotifyController {
   @ApiOperation({ summary: '微信支付结果通知' })
   async notify(@Headers() headers: Record<string, any>, @Body() body: Record<string, any>) {
     return this.orderService.handleWechatPayNotify(headers, body);
+  }
+}
+
+@ApiTags('微信虚拟支付推送')
+@Controller('app/wechat/xpay')
+export class WechatXpayNotifyController {
+  constructor(private readonly orderService: OrderService) {}
+
+  @Post('notify')
+  @ApiOperation({ summary: '微信虚拟支付消息推送（xpay_coin_pay_notify 等）' })
+  async notify(@Body() body: Record<string, any>) {
+    return this.orderService.handleXpayNotify(body);
   }
 }

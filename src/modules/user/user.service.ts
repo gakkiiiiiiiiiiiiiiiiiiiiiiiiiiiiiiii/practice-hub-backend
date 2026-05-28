@@ -4,12 +4,14 @@ import { Repository } from 'typeorm';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { BindPhoneDto } from './dto/bind-phone.dto';
+import { CoinService } from '../order/coin.service';
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectRepository(AppUser)
     private appUserRepository: Repository<AppUser>,
+    private coinService: CoinService,
   ) {}
 
   /**
@@ -23,6 +25,14 @@ export class UserService {
     }
 
     const hasPackage = user.package_expire_time && user.package_expire_time > new Date();
+    let coinBalance = Math.max(0, Math.floor(Number(user.coin_balance || 0)));
+    if (user.session_key) {
+      try {
+        coinBalance = await this.coinService.queryWechatBalance(user);
+      } catch {
+        // 查询失败时使用本地缓存余额
+      }
+    }
 
     return {
       id: user.id,
@@ -37,7 +47,7 @@ export class UserService {
       has_password: !!user.password_hash,
       hasPackage,
       package_expire_time: user.package_expire_time,
-      coin_balance: Number(user.coin_balance || 0),
+      coin_balance: coinBalance,
     };
   }
 

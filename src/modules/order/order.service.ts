@@ -41,15 +41,15 @@ export class OrderService {
   /**
    * 创建预支付订单
    */
-  async createOrder(userId: number, dto: CreateOrderDto) {
+  async createOrder(userId: number, dto: CreateOrderDto, clientIp?: string) {
     const orderType = dto.order_type || 'course';
     if (orderType === 'package') {
-      return this.createPackageOrder(userId, dto);
+      return this.createPackageOrder(userId, dto, clientIp);
     }
-    return this.createCourseOrder(userId, dto);
+    return this.createCourseOrder(userId, dto, clientIp);
   }
 
-  private async createCourseOrder(userId: number, dto: CreateOrderDto) {
+  private async createCourseOrder(userId: number, dto: CreateOrderDto, clientIp?: string) {
     if (!dto.course_id) {
       throw new BadRequestException('课程ID不能为空');
     }
@@ -125,6 +125,7 @@ export class OrderService {
       order,
       payAmountYuan: amount,
       goodsTitle: course.name || '课程',
+      clientIp,
       responseExtras: {
         course_id: order.course_id,
         order_type: order.order_type,
@@ -132,7 +133,7 @@ export class OrderService {
     });
   }
 
-  private async createPackageOrder(userId: number, dto: CreateOrderDto) {
+  private async createPackageOrder(userId: number, dto: CreateOrderDto, clientIp?: string) {
     if (!dto.package_section_id || !dto.package_plan_id) {
       throw new BadRequestException('套餐信息不能为空');
     }
@@ -205,6 +206,7 @@ export class OrderService {
       order,
       payAmountYuan: amount,
       goodsTitle: `${plan.section.name}-${plan.name}`,
+      clientIp,
       responseExtras: {
         order_type: order.order_type,
         package_section_id: order.package_section_id,
@@ -214,7 +216,7 @@ export class OrderService {
   }
 
   /**
-   * 代币购课：余额足够则直接扣代币履约；不足则拉起微信充值差额。
+   * 官方代币购课：query_user_balance → 不足则 short_series_coin 充值 → currency_pay 扣代币 → 发货
    */
   private async processCoinBasedPayment({
     user,
@@ -222,6 +224,7 @@ export class OrderService {
     order,
     payAmountYuan,
     goodsTitle,
+    clientIp,
     responseExtras,
   }: {
     user: AppUser;
@@ -229,25 +232,34 @@ export class OrderService {
     order: Order;
     payAmountYuan: number;
     goodsTitle: string;
+    clientIp?: string;
     responseExtras: Record<string, unknown>;
   }) {
-    const balance = await this.coinService.getBalance(userId);
-    const coinCost = this.coinService.yuanToCoin(payAmountYuan);
+    const balance = await this.coinService.queryWechatBalance(user, clientIp);
+    const coinCost = this.coinService.yuanToCoinInt(payAmountYuan);
     const coinPurchase = this.coinService.buildCoinPurchasePlan(coinCost, balance);
 
-    if (coinPurchase.recharge_amount <= 0) {
-      order.pay_provider = 'coin';
+    if (coinPurchase.recharge_coins <= 0) {
+      const currencyPayOrderId = `${order.order_no}_COIN`;
+      await this.coinService.currencyPayForOrder({
+        user,
+        order,
+        coinAmount: coinCost,
+        clientIp,
+        currencyPayOrderId,
+      });
+
+      order.pay_provider = 'wechat_coin';
       order.amount = payAmountYuan;
       order.pay_payload = {
         coin_purchase: {
           ...coinPurchase,
-          balance_applied: coinPurchase.coin_cost,
-          recharge_amount: 0,
-          settled: true,
+          recharge_coins: 0,
+          currency_paid: true,
+          currency_pay_order_id: currencyPayOrderId,
         },
       };
       await this.orderRepository.save(order);
-      await this.coinService.deductForPurchase(userId, coinPurchase.coin_cost, order.id);
       await this.handlePaymentSuccess(order.id);
 
       return {
@@ -259,29 +271,30 @@ export class OrderService {
       };
     }
 
-    order.amount = coinPurchase.recharge_amount;
+    const rechargeOrderNo = this.generateRechargeOrderNo(order.order_no);
+    order.amount = payAmountYuan;
     order.pay_provider = 'virtual_payment';
-    order.pay_payload = { coin_purchase: coinPurchase };
+    order.pay_payload = {
+      coin_purchase: {
+        ...coinPurchase,
+        recharge_order_no: rechargeOrderNo,
+      },
+    };
     await this.orderRepository.save(order);
 
-    const coinGoodsReady = await this.virtualPayGoodsService.prepareCoinRechargeForPayment(
-      coinPurchase.recharge_amount,
-    );
-    if (!coinGoodsReady) {
-      throw new BadRequestException('支付准备失败，微信充值道具价格同步未成功，请稍后重试');
-    }
-
-    const paymentParams = await this.createVirtualPaymentParams({
+    const paymentParams = this.createCoinRechargePaymentParams({
       user,
       order,
-      buyQuantity: 1,
-      productId: this.virtualPayGoodsService.getCoinRechargeProductId(),
-      attachType: 'coin_recharge',
+      rechargeCoins: coinPurchase.recharge_coins,
+      rechargeOrderNo,
       goodsTitle,
     });
 
     order.pay_payload = {
-      coin_purchase: coinPurchase,
+      coin_purchase: {
+        ...coinPurchase,
+        recharge_order_no: rechargeOrderNo,
+      },
       virtual_payment: paymentParams.virtual_payment,
       payment_params: paymentParams.payment_params,
     };
@@ -293,7 +306,66 @@ export class OrderService {
       ...responseExtras,
       status: order.status,
       payment_params: paymentParams.payment_params,
-      virtual_pay_sync: paymentParams.virtual_pay_sync,
+    };
+  }
+
+  private generateRechargeOrderNo(orderNo: string) {
+    const suffix = Math.floor(Math.random() * 1000)
+      .toString()
+      .padStart(3, '0');
+    return `${orderNo}R${suffix}`.slice(0, 32);
+  }
+
+  /** 官方 short_series_coin 充值参数（无 productId / goodsPrice） */
+  private createCoinRechargePaymentParams({
+    user,
+    order,
+    rechargeCoins,
+    rechargeOrderNo,
+    goodsTitle,
+  }: {
+    user: AppUser;
+    order: Order;
+    rechargeCoins: number;
+    rechargeOrderNo: string;
+    goodsTitle: string;
+  }) {
+    const config = this.virtualPayGoodsService.getVirtualPayConfig();
+    const attach = JSON.stringify({
+      type: 'coin_recharge',
+      order_no: order.order_no,
+      user_id: order.user_id,
+      course_id: order.course_id,
+      package_section_id: order.package_section_id,
+      package_plan_id: order.package_plan_id,
+      goods_title: goodsTitle,
+    });
+    const signDataObject = {
+      offerId: config.offerId,
+      buyQuantity: Math.max(1, Math.floor(rechargeCoins)),
+      env: config.env,
+      currencyType: 'CNY',
+      outTradeNo: rechargeOrderNo,
+      attach,
+    };
+    const signData = JSON.stringify(signDataObject);
+    const mode = 'short_series_coin';
+    const paymentParams = {
+      signData,
+      mode,
+      paySig: this.createHmacSha256(config.appKey, `requestVirtualPayment&${signData}`),
+      signature: this.createHmacSha256(user.session_key, signData),
+    };
+
+    return {
+      virtual_payment: {
+        signData: signDataObject,
+        mode,
+        env: config.env,
+        offerId: config.offerId,
+        buyQuantity: signDataObject.buyQuantity,
+      },
+      payment_params: paymentParams,
     };
   }
 
@@ -702,7 +774,7 @@ export class OrderService {
     return { message: '订单支付成功' };
   }
 
-  async confirmWechatPayment(userId: number, orderNo: string) {
+  async confirmWechatPayment(userId: number, orderNo: string, clientIp?: string) {
     const order = await this.orderRepository.findOne({
       where: { order_no: orderNo },
     });
@@ -719,31 +791,54 @@ export class OrderService {
     if (order.status !== OrderStatus.PENDING) {
       throw new BadRequestException('当前订单状态不可确认支付');
     }
-    if (order.pay_provider !== 'virtual_payment') {
+    if (!['virtual_payment', 'wechat_coin'].includes(String(order.pay_provider || ''))) {
       throw new BadRequestException('订单支付方式不匹配');
     }
 
-    const coinPurchase = order.pay_payload?.coin_purchase;
-    if (coinPurchase && !coinPurchase.settled) {
-      await this.coinService.settleRechargeAndPurchase(userId, order, coinPurchase);
-      order.pay_payload = {
-        ...(order.pay_payload || {}),
-        coin_purchase: {
-          ...coinPurchase,
-          settled: true,
-        },
-        virtual_payment_success: {
-          confirmed_at: new Date().toISOString(),
-        },
-      };
-    } else {
-      order.pay_payload = {
-        ...(order.pay_payload || {}),
-        virtual_payment_success: {
-          confirmed_at: new Date().toISOString(),
-        },
-      };
+    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
     }
+
+    const coinPurchase = { ...(order.pay_payload?.coin_purchase || {}) } as Record<string, any>;
+
+    if (Number(coinPurchase.recharge_coins || 0) > 0 && !coinPurchase.recharge_settled) {
+      const rechargeOrderNo = String(coinPurchase.recharge_order_no || '');
+      if (!rechargeOrderNo) {
+        throw new BadRequestException('充值订单信息缺失');
+      }
+      const settled = await this.coinService.waitForRechargeSettled(
+        user,
+        rechargeOrderNo,
+        Number(coinPurchase.coin_cost || 0),
+        clientIp,
+      );
+      if (!settled) {
+        throw new BadRequestException('充值尚未到账，请稍后再试');
+      }
+      coinPurchase.recharge_settled = true;
+    }
+
+    if (!coinPurchase.currency_paid) {
+      const currencyPayOrderId = String(coinPurchase.currency_pay_order_id || `${order.order_no}_COIN`);
+      await this.coinService.currencyPayForOrder({
+        user,
+        order,
+        coinAmount: Number(coinPurchase.coin_cost || this.coinService.yuanToCoinInt(Number(order.amount || 0))),
+        clientIp,
+        currencyPayOrderId,
+      });
+      coinPurchase.currency_paid = true;
+      coinPurchase.currency_pay_order_id = currencyPayOrderId;
+    }
+
+    order.pay_payload = {
+      ...(order.pay_payload || {}),
+      coin_purchase: coinPurchase,
+      virtual_payment_success: {
+        confirmed_at: new Date().toISOString(),
+      },
+    };
     await this.orderRepository.save(order);
     await this.handlePaymentSuccess(order.id);
 
@@ -752,6 +847,51 @@ export class OrderService {
       order_no: order.order_no,
       status: OrderStatus.PAID,
     };
+  }
+
+  /** 微信虚拟支付消息推送（xpay_coin_pay_notify 等） */
+  async handleXpayNotify(body: Record<string, any>) {
+    const event = body?.Event || body?.event;
+    if (event === 'xpay_coin_pay_notify') {
+      await this.handleXpayCoinPayNotify(body);
+    }
+    return { ErrCode: 0, ErrMsg: 'success' };
+  }
+
+  private async handleXpayCoinPayNotify(body: Record<string, any>) {
+    const outTradeNo = String(body?.OutTradeNo || body?.out_trade_no || '').trim();
+    const openId = String(body?.OpenId || body?.openid || '').trim();
+    if (!outTradeNo) {
+      return;
+    }
+
+    const order = await this.orderRepository
+      .createQueryBuilder('o')
+      .where("JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.coin_purchase.currency_pay_order_id')) = :outTradeNo", {
+        outTradeNo,
+      })
+      .orWhere('o.order_no = :outTradeNo', { outTradeNo })
+      .getOne();
+
+    if (!order || order.status === OrderStatus.PAID) {
+      return;
+    }
+
+    const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
+    if (!user || (openId && user.openid !== openId)) {
+      return;
+    }
+
+    const coinPurchase = { ...(order.pay_payload?.coin_purchase || {}) };
+    coinPurchase.currency_paid = true;
+    coinPurchase.currency_pay_order_id = outTradeNo;
+    order.pay_payload = {
+      ...(order.pay_payload || {}),
+      coin_purchase: coinPurchase,
+      xpay_coin_pay_notify: body,
+    };
+    await this.orderRepository.save(order);
+    await this.handlePaymentSuccess(order.id);
   }
 
   private async queryWechatPayOrder(orderNo: string) {
@@ -821,7 +961,7 @@ export class OrderService {
     }));
   }
 
-  async payPendingOrder(userId: number, orderId: number) {
+  async payPendingOrder(userId: number, orderId: number, clientIp?: string) {
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
     });
@@ -863,6 +1003,7 @@ export class OrderService {
         order,
         payAmountYuan: this.getOrderPayAmountYuan(order),
         goodsTitle: plan ? `${plan.section.name}-${plan.name}` : '套餐',
+        clientIp,
         responseExtras: {
           order_type: order.order_type,
           package_section_id: order.package_section_id,
@@ -916,6 +1057,7 @@ export class OrderService {
       order,
       payAmountYuan: this.getOrderPayAmountYuan(order),
       goodsTitle: course.name || '课程',
+      clientIp,
       responseExtras: {
         course_id: order.course_id,
         order_type: order.order_type,

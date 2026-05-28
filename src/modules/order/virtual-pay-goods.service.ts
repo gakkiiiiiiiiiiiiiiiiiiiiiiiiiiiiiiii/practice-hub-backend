@@ -853,6 +853,56 @@ export class VirtualPayGoodsService {
     throw lastError;
   }
 
+  /**
+   * 调用微信 xpay 接口（query_user_balance / currency_pay 等，可选用户态 signature）。
+   */
+  async callXpayApi(
+    endpoint: string,
+    payload: Record<string, any>,
+    options?: { sessionKey?: string | null; accessToken?: string | null },
+  ): Promise<Record<string, any>> {
+    const config = this.getVirtualPayConfig();
+    const bodyPayload = { ...payload, env: Number(payload.env ?? config.env) };
+    const body = JSON.stringify(bodyPayload);
+    const accessToken = options?.accessToken ?? (await this.getWechatAccessTokenWithFallback());
+    if (!accessToken) {
+      throw new BadRequestException('微信 access_token 获取失败，请稍后重试');
+    }
+    const paySig = this.createHmacSha256(config.appKey, `${endpoint}&${body}`);
+    const params: Record<string, string> = {
+      access_token: accessToken,
+      pay_sig: paySig,
+    };
+    if (options?.sessionKey) {
+      params.signature = this.createHmacSha256(options.sessionKey, body);
+    }
+
+    const urls = this.getWechatApiUrls(endpoint);
+    let lastError: unknown;
+    for (let urlIndex = 0; urlIndex < urls.length; urlIndex += 1) {
+      try {
+        const response = await this.requestWechatPublicApi(urls[urlIndex], body, params);
+        const data = response.data || {};
+        if (data.errcode) {
+          return data;
+        }
+        return data;
+      } catch (error) {
+        lastError = error;
+        if (urlIndex < urls.length - 1 && this.isTransientWechatApiError(error)) {
+          this.logger.warn(`xpay ${endpoint} 调用失败，尝试备用线路: ${this.getErrorMessage(error)}`);
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError;
+  }
+
+  isXpayDuplicateSuccess(errcode: number) {
+    return Number(errcode) === 268490004;
+  }
+
   private isInvalidAccessTokenError(error: { message?: string }) {
     const message = this.getErrorMessage(error).toLowerCase();
     return (

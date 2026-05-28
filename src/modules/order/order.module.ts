@@ -1,6 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { OrderService } from './order.service';
-import { OrderController, OrderPayNotifyController } from './order.controller';
+import { OrderController, OrderPayNotifyController, WechatXpayNotifyController } from './order.controller';
 import { DatabaseModule } from '../../database/database.module';
 import { DistributorModule } from '../distributor/distributor.module';
 import { UploadModule } from '../upload/upload.module';
@@ -18,7 +18,7 @@ import { PackageModule } from '../package/package.module';
     MarketingModule,
     PackageModule,
   ],
-  controllers: [OrderController, OrderPayNotifyController],
+  controllers: [OrderController, OrderPayNotifyController, WechatXpayNotifyController],
   providers: [OrderService, VirtualPayGoodsService, VirtualPayGoodsSyncScheduler, CoinService],
   exports: [OrderService, VirtualPayGoodsService, CoinService],
 })

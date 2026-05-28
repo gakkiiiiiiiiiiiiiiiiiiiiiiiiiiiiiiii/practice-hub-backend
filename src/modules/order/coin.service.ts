@@ -1,165 +1,191 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { AppUser } from '../../database/entities/app-user.entity';
-import { CoinTransaction, CoinTransactionType } from '../../database/entities/coin-transaction.entity';
 import { Order } from '../../database/entities/order.entity';
+import { VirtualPayGoodsService } from './virtual-pay-goods.service';
 
 export type CoinPurchasePayload = {
   coin_cost: number;
   balance_applied: number;
-  recharge_amount: number;
-  settled?: boolean;
+  recharge_coins: number;
+  recharge_order_no?: string;
+  currency_pay_order_id?: string;
+  recharge_settled?: boolean;
+  currency_paid?: boolean;
 };
 
 @Injectable()
 export class CoinService {
+  private readonly logger = new Logger(CoinService.name);
+
   constructor(
     private readonly configService: ConfigService,
-    private readonly dataSource: DataSource,
+    private readonly virtualPayGoodsService: VirtualPayGoodsService,
     @InjectRepository(AppUser)
     private readonly appUserRepository: Repository<AppUser>,
-    @InjectRepository(CoinTransaction)
-    private readonly coinTransactionRepository: Repository<CoinTransaction>,
   ) {}
 
-  /** 1 元人民币兑换代币数量，默认 1:1 */
+  /** 业务价（元）→ 微信代币数量（整数，与小程序后台代币兑换比例一致，默认 1 元 = 1 代币） */
   getCoinPerYuan() {
     const value = Number(this.configService.get<string>('COIN_PER_YUAN') ?? 1);
     return Number.isFinite(value) && value > 0 ? value : 1;
   }
 
-  yuanToCoin(yuan: number) {
-    return Number((Number(yuan || 0) * this.getCoinPerYuan()).toFixed(2));
+  yuanToCoinInt(yuan: number) {
+    return Math.max(1, Math.round(Number(yuan || 0) * this.getCoinPerYuan()));
   }
 
-  async getBalance(userId: number) {
+  getDefaultUserIp(clientIp?: string) {
+    const ip = String(clientIp || this.configService.get<string>('WECHAT_PAY_SPBILL_CREATE_IP') || '127.0.0.1').trim();
+    return ip || '127.0.0.1';
+  }
+
+  buildCoinPurchasePlan(coinCost: number, currentBalance: number): CoinPurchasePayload {
+    const normalizedCost = Math.max(1, Math.floor(Number(coinCost || 0)));
+    const balance = Math.max(0, Math.floor(Number(currentBalance || 0)));
+    const balanceApplied = Math.min(balance, normalizedCost);
+    const rechargeCoins = Math.max(0, normalizedCost - balanceApplied);
+    return {
+      coin_cost: normalizedCost,
+      balance_applied: balanceApplied,
+      recharge_coins: rechargeCoins,
+    };
+  }
+
+  /** 官方：/xpay/query_user_balance */
+  async queryWechatBalance(user: AppUser, clientIp?: string) {
+    if (!user.session_key) {
+      throw new BadRequestException('登录态已过期，请重新登录后再试');
+    }
+    const config = this.virtualPayGoodsService.getVirtualPayConfig();
+    const userIp = this.getDefaultUserIp(clientIp);
+    const result = await this.virtualPayGoodsService.callXpayApi(
+      '/xpay/query_user_balance',
+      {
+        openid: user.openid,
+        user_ip: userIp,
+        env: config.env,
+      },
+      { sessionKey: user.session_key },
+    );
+    if (result.errcode && !this.virtualPayGoodsService.isXpayDuplicateSuccess(Number(result.errcode))) {
+      throw new BadRequestException(result.errmsg || `查询微信代币余额失败(${result.errcode})`);
+    }
+    const balance = Math.max(0, Math.floor(Number(result.balance || 0)));
+    await this.cacheWechatBalance(user.id, balance);
+    return balance;
+  }
+
+  async getBalance(userId: number, clientIp?: string) {
     const user = await this.appUserRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new BadRequestException('用户不存在');
     }
-    return Number(user.coin_balance || 0);
+    try {
+      return await this.queryWechatBalance(user, clientIp);
+    } catch (error) {
+      this.logger.warn(`查询微信代币余额失败，使用本地缓存: ${error?.message || error}`);
+      return Math.max(0, Math.floor(Number(user.coin_balance || 0)));
+    }
   }
 
-  buildCoinPurchasePlan(coinCost: number, currentBalance: number): CoinPurchasePayload {
-    const coinPerYuan = this.getCoinPerYuan();
-    const normalizedCost = Number(Number(coinCost || 0).toFixed(2));
-    const balance = Number(Number(currentBalance || 0).toFixed(2));
-    const balanceApplied = Math.min(balance, normalizedCost);
-    const coinShortfall = Math.max(0, Number((normalizedCost - balanceApplied).toFixed(2)));
-    const rechargeAmount = Number((coinShortfall / coinPerYuan).toFixed(2));
+  /** 官方：充值现金单 /xpay/query_order，status >= 2 表示已支付 */
+  async isRechargeOrderPaid(user: AppUser, rechargeOrderNo: string) {
+    const config = this.virtualPayGoodsService.getVirtualPayConfig();
+    const result = await this.virtualPayGoodsService.callXpayApi('/xpay/query_order', {
+      openid: user.openid,
+      order_id: rechargeOrderNo,
+      env: config.env,
+    });
+    if (result.errcode) {
+      this.logger.warn(`查询充值单 ${rechargeOrderNo} 失败: ${result.errmsg || result.errcode}`);
+      return false;
+    }
+    const status = Number(result.order?.status ?? 0);
+    return status >= 2;
+  }
+
+  async waitForRechargeSettled(user: AppUser, rechargeOrderNo: string, coinCost: number, clientIp?: string) {
+    const maxAttempts = Math.max(1, Number(this.configService.get<string>('WECHAT_COIN_RECHARGE_QUERY_ATTEMPTS') || 5));
+    const intervalMs = Math.max(500, Number(this.configService.get<string>('WECHAT_COIN_RECHARGE_QUERY_INTERVAL_MS') || 1500));
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const paid = await this.isRechargeOrderPaid(user, rechargeOrderNo);
+      const balance = await this.queryWechatBalance(user, clientIp);
+      if (paid && balance >= coinCost) {
+        return true;
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
+    }
+    return false;
+  }
+
+  /** 官方：/xpay/currency_pay 扣减代币购课 */
+  async currencyPayForOrder(params: {
+    user: AppUser;
+    order: Order;
+    coinAmount: number;
+    clientIp?: string;
+    currencyPayOrderId?: string;
+  }) {
+    const { user, order, clientIp } = params;
+    const coinAmount = Math.max(1, Math.floor(Number(params.coinAmount || 0)));
+    if (!user.session_key) {
+      throw new BadRequestException('登录态已过期，请重新登录后再试');
+    }
+
+    const currencyPayOrderId = params.currencyPayOrderId || `${order.order_no}_COIN`;
+    const config = this.virtualPayGoodsService.getVirtualPayConfig();
+    const userIp = this.getDefaultUserIp(clientIp);
+    const unitPriceCents = Math.max(1, Math.round(Number(order.original_amount || order.amount || 0) * 100));
+    const productId =
+      order.order_type === 'package'
+        ? `package_${order.package_plan_id || 0}`
+        : order.course_id
+          ? `course_${order.course_id}`
+          : 'course';
+    const payitem = JSON.stringify([
+      {
+        productid: productId,
+        unit_price: unitPriceCents,
+        quantity: 1,
+      },
+    ]);
+
+    const result = await this.virtualPayGoodsService.callXpayApi(
+      '/xpay/currency_pay',
+      {
+        openid: user.openid,
+        user_ip: userIp,
+        env: config.env,
+        amount: coinAmount,
+        order_id: currencyPayOrderId,
+        payitem,
+        remark: order.order_type === 'package' ? '购买套餐' : '购买课程',
+      },
+      { sessionKey: user.session_key },
+    );
+
+    const errcode = Number(result.errcode || 0);
+    if (errcode && !this.virtualPayGoodsService.isXpayDuplicateSuccess(errcode)) {
+      throw new BadRequestException(result.errmsg || `微信代币扣减失败(${errcode})`);
+    }
+
+    const balance = Math.max(0, Math.floor(Number(result.balance || 0)));
+    await this.cacheWechatBalance(user.id, balance);
+
     return {
-      coin_cost: normalizedCost,
-      balance_applied: balanceApplied,
-      recharge_amount: rechargeAmount,
+      currencyPayOrderId,
+      balance,
+      result,
     };
   }
 
-  async deductForPurchase(userId: number, coinAmount: number, orderId: number, remark?: string) {
-    const amount = Number(Number(coinAmount || 0).toFixed(2));
-    if (amount <= 0) {
-      return;
-    }
-
-    await this.dataSource.transaction(async (manager) => {
-      const user = await this.lockUser(manager, userId);
-      const balance = Number(user.coin_balance || 0);
-      if (balance < amount) {
-        throw new BadRequestException('代币余额不足');
-      }
-      user.coin_balance = Number((balance - amount).toFixed(2));
-      await manager.save(user);
-      await this.createTransaction(manager, {
-        userId,
-        type: CoinTransactionType.PURCHASE,
-        amount: -amount,
-        balanceAfter: Number(user.coin_balance),
-        orderId,
-        remark: remark || '购买课程/套餐',
-      });
-    });
-  }
-
-  /**
-   * 微信充值确认后：入账充值金额，再扣减购课所需全部代币。
-   */
-  async settleRechargeAndPurchase(userId: number, order: Order, coinPurchase: CoinPurchasePayload) {
-    if (coinPurchase.settled) {
-      return;
-    }
-
-    const rechargeAmount = Number(Number(order.amount || 0).toFixed(2));
-    const coinCost = Number(Number(coinPurchase.coin_cost || 0).toFixed(2));
-    if (coinCost <= 0) {
-      throw new BadRequestException('代币订单信息无效');
-    }
-
-    await this.dataSource.transaction(async (manager) => {
-      const user = await this.lockUser(manager, userId);
-      let balance = Number(user.coin_balance || 0);
-
-      if (rechargeAmount > 0) {
-        const rechargeCoins = this.yuanToCoin(rechargeAmount);
-        balance = Number((balance + rechargeCoins).toFixed(2));
-        await this.createTransaction(manager, {
-          userId,
-          type: CoinTransactionType.RECHARGE,
-          amount: rechargeCoins,
-          balanceAfter: balance,
-          orderId: order.id,
-          remark: '微信充值代币',
-        });
-      }
-
-      if (balance < coinCost) {
-        throw new BadRequestException('代币结算失败，余额不足');
-      }
-
-      balance = Number((balance - coinCost).toFixed(2));
-      user.coin_balance = balance;
-      await manager.save(user);
-      await this.createTransaction(manager, {
-        userId,
-        type: CoinTransactionType.PURCHASE,
-        amount: -coinCost,
-        balanceAfter: balance,
-        orderId: order.id,
-        remark: '充值后购买课程/套餐',
-      });
-    });
-  }
-
-  private async lockUser(manager: EntityManager, userId: number) {
-    const user = await manager.findOne(AppUser, {
-      where: { id: userId },
-      lock: { mode: 'pessimistic_write' },
-    });
-    if (!user) {
-      throw new BadRequestException('用户不存在');
-    }
-    return user;
-  }
-
-  private async createTransaction(
-    manager: EntityManager,
-    params: {
-      userId: number;
-      type: CoinTransactionType;
-      amount: number;
-      balanceAfter: number;
-      orderId?: number | null;
-      remark?: string;
-    },
-  ) {
-    const tx = manager.create(CoinTransaction, {
-      user_id: params.userId,
-      type: params.type,
-      amount: params.amount,
-      balance_after: params.balanceAfter,
-      order_id: params.orderId ?? null,
-      remark: params.remark ?? null,
-    });
-    await manager.save(tx);
+  private async cacheWechatBalance(userId: number, balance: number) {
+    await this.appUserRepository.update({ id: userId }, { coin_balance: balance });
   }
 }
