@@ -1,8 +1,9 @@
-import { IsArray, IsIn, IsNumber, IsObject, IsOptional, IsString, Min, ValidateIf, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, Min, ValidateIf, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PackagePlanType } from '../../../database/entities/package-plan.entity';
 import { PackageScopeType } from '../../../database/entities/package-section-scope.entity';
+import { IsIntegerYuanPrice } from '../../../common/validators/is-integer-yuan-price.validator';
 
 class PackageScopeDto {
 	@ApiProperty({ enum: PackageScopeType })
@@ -41,9 +42,11 @@ class PackagePlanDto {
 	@IsString()
 	name: string;
 
-	@ApiProperty()
+	@ApiProperty({ description: '价格（整数元）' })
 	@IsNumber()
-	@Min(0)
+	@IsInt({ message: '套餐价格必须为整数元' })
+	@Min(1, { message: '套餐价格至少为 1 元' })
+	@IsIntegerYuanPrice({ message: '套餐价格必须为整数元' })
 	price: number;
 
 	@ApiProperty()

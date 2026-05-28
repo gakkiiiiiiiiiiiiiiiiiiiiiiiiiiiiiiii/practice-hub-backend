@@ -15,6 +15,7 @@ import { VirtualPayGoodsService } from './virtual-pay-goods.service';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
 import { PackageService } from '../package/package.service';
 import { CoinService } from './coin.service';
+import { normalizePayAmountYuan, assertIntegerYuanPrice } from '../../common/utils/price.util';
 
 @Injectable()
 export class OrderService {
@@ -61,6 +62,9 @@ export class OrderService {
     }
 
     const originalAmount = Number(course.price || 0);
+    if (course.is_free !== 1 && originalAmount > 0) {
+      assertIntegerYuanPrice(originalAmount, '课程价格');
+    }
     let discountAmount = 0;
     let couponId: number | null = null;
 
@@ -70,7 +74,7 @@ export class OrderService {
       couponId = couponResult.coupon.id;
     }
 
-    const amount = Math.max(0, Number((originalAmount - discountAmount).toFixed(2)));
+    const amount = normalizePayAmountYuan(Math.max(0, originalAmount - discountAmount));
 
     if (amount <= 0 || course.is_free === 1) {
       const freeOrder = this.orderRepository.create({
@@ -140,6 +144,9 @@ export class OrderService {
 
     const plan = await this.packageService.getPlanForOrder(dto.package_section_id, dto.package_plan_id);
     const originalAmount = Number(plan.price || 0);
+    if (originalAmount > 0) {
+      assertIntegerYuanPrice(originalAmount, '套餐价格');
+    }
     let discountAmount = 0;
     let couponId: number | null = null;
 
@@ -149,7 +156,7 @@ export class OrderService {
       couponId = couponResult.coupon.id;
     }
 
-    const amount = Math.max(0, Number((originalAmount - discountAmount).toFixed(2)));
+    const amount = normalizePayAmountYuan(Math.max(0, originalAmount - discountAmount));
 
     if (amount <= 0) {
       const freeOrder = this.orderRepository.create({

@@ -8,6 +8,7 @@ import { SetCountdownDto } from './dto/set-countdown.dto';
 import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
 import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
 import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
+import { ceilIntegerYuanPrice } from '../../common/utils/price.util';
 
 @Injectable()
 export class SystemService {
@@ -304,8 +305,8 @@ export class SystemService {
       major: '',
       exam_year: '',
       answer_year: '',
-      price: 0.5,
-      agent_price: 0.1,
+      price: 1,
+      agent_price: 1,
       is_free: 0,
       validity_days: 365,
       allow_source_file: 0,
@@ -324,8 +325,8 @@ export class SystemService {
       major: String(source.major || '').trim(),
       exam_year: String(source.exam_year || '').trim(),
       answer_year: String(source.answer_year || '').trim(),
-      price: Math.max(0, Number(source.price ?? fallback.price) || 0),
-      agent_price: Math.max(0, Number(source.agent_price ?? fallback.agent_price) || 0),
+      price: Math.max(0, ceilIntegerYuanPrice(Number(source.price ?? fallback.price) || 0)),
+      agent_price: Math.max(0, ceilIntegerYuanPrice(Number(source.agent_price ?? fallback.agent_price) || 0)),
       is_free: isFree,
       validity_days:
         isFree === 1 ? null : Math.max(1, Number(source.validity_days ?? fallback.validity_days) || 365),

@@ -44,7 +44,7 @@ export class AppUser {
   @Column({ type: 'datetime', nullable: true })
   package_expire_time: Date;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, comment: '微信代币余额缓存' })
   coin_balance: number;
 
   @CreateDateColumn()

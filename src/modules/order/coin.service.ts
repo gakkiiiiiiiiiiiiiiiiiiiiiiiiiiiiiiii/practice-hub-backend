@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { Order } from '../../database/entities/order.entity';
+import { normalizePayAmountYuan } from '../../common/utils/price.util';
 import { VirtualPayGoodsService } from './virtual-pay-goods.service';
 
 export type CoinPurchasePayload = {
@@ -19,6 +20,8 @@ export type CoinPurchasePayload = {
 @Injectable()
 export class CoinService {
   private readonly logger = new Logger(CoinService.name);
+  private readonly wechatBalanceCache = new Map<number, { balance: number; at: number }>();
+  private static readonly WECHAT_CACHE_TTL_MS = 5 * 60 * 1000;
 
   constructor(
     private readonly configService: ConfigService,
@@ -27,30 +30,19 @@ export class CoinService {
     private readonly appUserRepository: Repository<AppUser>,
   ) {}
 
-  /**
-   * 1 元人民币对应多少微信代币（须与小程序后台「代币配置」兑换比例一致）。
-   * 默认 100：1 元 = 100 代币（1 代币 = 1 分），可精确表示 4.5 元 = 450 代币。
-   * 若后台为 1 元 = 10 代币，请设 COIN_PER_YUAN=10。
-   */
+  /** 1 元人民币对应微信代币数（与小程序后台一致，默认 1 元 = 1 代币） */
   getCoinPerYuan() {
-    const value = Number(this.configService.get<string>('COIN_PER_YUAN') ?? 100);
-    return Number.isFinite(value) && value > 0 ? value : 100;
+    const value = Number(this.configService.get<string>('WECHAT_COIN_PER_YUAN') ?? 1);
+    return Number.isFinite(value) && value > 0 ? value : 1;
   }
 
+  /** 支付金额（元）→ 微信代币整数 */
   yuanToCoinInt(yuan: number) {
-    const rate = this.getCoinPerYuan();
-    const amount = Number(yuan || 0);
+    const amount = normalizePayAmountYuan(Number(yuan || 0));
     if (amount <= 0) {
       return 1;
     }
-    const coins = Math.round(amount * rate);
-    if (rate === 1 && !Number.isInteger(amount)) {
-      this.logger.warn(
-        `价格 ${amount} 元含小数，COIN_PER_YUAN=1 会四舍五入为 ${coins} 代币；` +
-          `建议微信后台设 1元=100代币 并配置 COIN_PER_YUAN=100`,
-      );
-    }
-    return Math.max(1, coins);
+    return Math.max(1, Math.round(amount * this.getCoinPerYuan()));
   }
 
   getDefaultUserIp(clientIp?: string) {
@@ -70,19 +62,17 @@ export class CoinService {
     };
   }
 
-  /** 查询余额，失败时回退本地缓存（下单流程不因 502 直接中断） */
   async resolveBalanceForOrder(user: AppUser, clientIp?: string) {
     try {
       const balance = await this.queryWechatBalance(user, clientIp);
       return { balance, fromCache: false };
     } catch (error) {
-      const cached = Math.max(0, Math.floor(Number(user.coin_balance || 0)));
+      const cached = this.getCachedWechatBalance(user.id) ?? Math.max(0, Math.floor(Number(user.coin_balance || 0)));
       this.logger.warn(`query_user_balance 失败，使用缓存余额 ${cached}: ${error?.message || error}`);
       return { balance: cached, fromCache: true };
     }
   }
 
-  /** 官方：/xpay/query_user_balance */
   async queryWechatBalance(user: AppUser, clientIp?: string) {
     if (!user.session_key) {
       throw new BadRequestException('登录态已过期，请重新登录后再试');
@@ -115,11 +105,31 @@ export class CoinService {
       return await this.queryWechatBalance(user, clientIp);
     } catch (error) {
       this.logger.warn(`查询微信代币余额失败，使用本地缓存: ${error?.message || error}`);
-      return Math.max(0, Math.floor(Number(user.coin_balance || 0)));
+      return this.getCachedWechatBalance(userId) ?? Math.max(0, Math.floor(Number(user.coin_balance || 0)));
     }
   }
 
-  /** 官方：充值现金单 /xpay/query_order，status >= 2 表示已支付 */
+  private getCachedWechatBalance(userId: number) {
+    const cached = this.wechatBalanceCache.get(userId);
+    if (!cached) {
+      return null;
+    }
+    if (Date.now() - cached.at > CoinService.WECHAT_CACHE_TTL_MS) {
+      this.wechatBalanceCache.delete(userId);
+      return null;
+    }
+    return cached.balance;
+  }
+
+  private setCachedWechatBalance(userId: number, balance: number) {
+    this.wechatBalanceCache.set(userId, { balance, at: Date.now() });
+  }
+
+  private async cacheWechatBalance(userId: number, balance: number) {
+    this.setCachedWechatBalance(userId, balance);
+    await this.appUserRepository.update({ id: userId }, { coin_balance: balance });
+  }
+
   async isRechargeOrderPaid(user: AppUser, rechargeOrderNo: string) {
     const config = this.virtualPayGoodsService.getVirtualPayConfig();
     const result = await this.virtualPayGoodsService.callXpayApi('/xpay/query_order', {
@@ -138,6 +148,7 @@ export class CoinService {
   async waitForRechargeSettled(user: AppUser, rechargeOrderNo: string, coinCost: number, clientIp?: string) {
     const maxAttempts = Math.max(1, Number(this.configService.get<string>('WECHAT_COIN_RECHARGE_QUERY_ATTEMPTS') || 5));
     const intervalMs = Math.max(500, Number(this.configService.get<string>('WECHAT_COIN_RECHARGE_QUERY_INTERVAL_MS') || 1500));
+    const cost = Math.max(1, Math.floor(Number(coinCost || 0)));
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const paid = await this.isRechargeOrderPaid(user, rechargeOrderNo);
@@ -146,9 +157,9 @@ export class CoinService {
         balance = await this.queryWechatBalance(user, clientIp);
       } catch (error) {
         this.logger.warn(`轮询充值结果时查询余额失败: ${error?.message || error}`);
-        balance = Math.max(0, Math.floor(Number(user.coin_balance || 0)));
+        balance = this.getCachedWechatBalance(user.id) ?? Math.max(0, Math.floor(Number(user.coin_balance || 0)));
       }
-      if (paid && balance >= coinCost) {
+      if (paid && balance >= cost) {
         return true;
       }
       if (attempt < maxAttempts) {
@@ -158,7 +169,6 @@ export class CoinService {
     return false;
   }
 
-  /** 官方：/xpay/currency_pay 扣减代币购课 */
   async currencyPayForOrder(params: {
     user: AppUser;
     order: Order;
@@ -175,7 +185,8 @@ export class CoinService {
     const currencyPayOrderId = params.currencyPayOrderId || `${order.order_no}_COIN`;
     const config = this.virtualPayGoodsService.getVirtualPayConfig();
     const userIp = this.getDefaultUserIp(clientIp);
-    const unitPriceCents = Math.max(1, Math.round(Number(order.original_amount || order.amount || 0) * 100));
+    const payYuan = normalizePayAmountYuan(Number(order.original_amount || order.amount || 0));
+    const unitPriceCents = Math.max(1, payYuan * 100);
     const productId =
       order.order_type === 'package'
         ? `package_${order.package_plan_id || 0}`
@@ -217,9 +228,5 @@ export class CoinService {
       balance,
       result,
     };
-  }
-
-  private async cacheWechatBalance(userId: number, balance: number) {
-    await this.appUserRepository.update({ id: userId }, { coin_balance: balance });
   }
 }

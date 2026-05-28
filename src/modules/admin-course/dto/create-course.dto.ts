@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsNumber, IsOptional, IsIn } from 'class-validator';
+import { IsNotEmpty, IsString, IsNumber, IsOptional, IsIn, Min, ValidateIf, IsInt } from 'class-validator';
 import { Type } from 'class-transformer';
+import { IsIntegerYuanPrice } from '../../../common/validators/is-integer-yuan-price.validator';
 
 export class CreateCourseDto {
 	@ApiProperty({ description: '课程名称', example: '2024年考研数学一' })
@@ -48,16 +49,21 @@ export class CreateCourseDto {
 	@IsString()
 	cover_img?: string;
 
-	@ApiProperty({ description: '价格', example: 99.99 })
+	@ApiProperty({ description: '价格（整数元）', example: 99 })
+	@ValidateIf((dto) => dto.is_free !== 1)
 	@IsOptional()
 	@Type(() => Number)
-	@IsNumber()
+	@IsInt({ message: '价格必须为整数元' })
+	@Min(1, { message: '付费课程价格至少为 1 元' })
+	@IsIntegerYuanPrice({ message: '价格必须为整数元' })
 	price?: number;
 
-	@ApiProperty({ description: '代理商售价', example: 79.99, required: false })
+	@ApiProperty({ description: '代理商售价（整数元）', example: 79, required: false })
 	@IsOptional()
 	@Type(() => Number)
-	@IsNumber()
+	@IsInt({ message: '代理商售价必须为整数元' })
+	@Min(0, { message: '代理商售价不能为负数' })
+	@IsIntegerYuanPrice({ message: '代理商售价必须为整数元' })
 	agent_price?: number;
 
 	@ApiProperty({ description: '是否免费', example: 0, enum: [0, 1] })

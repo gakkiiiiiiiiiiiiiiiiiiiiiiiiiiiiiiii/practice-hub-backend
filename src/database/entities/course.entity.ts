@@ -34,10 +34,10 @@ export class Course {
 	cover_img: string; // 封面图片
 
 	@Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-	price: number; // 价格
+	price: number; // 价格（整数元）
 
 	@Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-	agent_price: number; // 代理商售价
+	agent_price: number; // 代理商售价（整数元）
 
 	@Column({ type: 'tinyint', default: 0 })
 	is_free: number; // 0-付费, 1-免费

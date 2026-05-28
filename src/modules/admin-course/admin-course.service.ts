@@ -23,6 +23,7 @@ import { CourseFileService, CourseFileInput } from '../course/course-file.servic
 import { AdminRole } from '../../database/entities/sys-user.entity';
 import { VirtualPayGoodsService } from '../order/virtual-pay-goods.service';
 import { queryWithRetry } from '../../common/utils/database-retry';
+import { assertIntegerYuanPrice, ceilIntegerYuanPrice } from '../../common/utils/price.util';
 
 class PreviewCacheTaskInterruptedError extends Error {
   constructor() {
@@ -76,6 +77,7 @@ export class AdminCourseService {
    */
   async saveCourse(dto: CreateCourseDto | UpdateCourseDto, id?: number, actorRole?: AdminRole | string) {
     await this.applyDefaultIntroduction(dto, Boolean(id));
+    this.validateCoursePriceFields(dto);
     if (id) {
       const course = await this.courseRepository.findOne({ where: { id } });
       if (!course) {
@@ -1426,8 +1428,22 @@ export class AdminCourseService {
     };
   }
 
+  private validateCoursePriceFields(dto: CreateCourseDto | UpdateCourseDto) {
+    const isFree = Number(dto.is_free) === 1;
+    if (!isFree && dto.price !== undefined && dto.price !== null) {
+      assertIntegerYuanPrice(Number(dto.price), '价格');
+    }
+    if (dto.agent_price !== undefined && dto.agent_price !== null) {
+      assertIntegerYuanPrice(Number(dto.agent_price), '代理商售价');
+    }
+  }
+
+  private normalizeCoursePrice(value: number): number {
+    return ceilIntegerYuanPrice(value);
+  }
+
   private roundCoursePrice(value: number): number {
-    return Math.round(Math.max(0, value) * 100) / 100;
+    return this.normalizeCoursePrice(value);
   }
 
   private computeAdjustedPrice(current: number, mode: BatchAdjustCoursePriceDto['mode'], value: number): number {

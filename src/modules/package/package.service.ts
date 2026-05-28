@@ -8,6 +8,7 @@ import { UserPackageSubscription } from '../../database/entities/user-package-su
 import { Course } from '../../database/entities/course.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { Order } from '../../database/entities/order.entity';
+import { assertIntegerYuanPrice } from '../../common/utils/price.util';
 
 @Injectable()
 export class PackageService {
@@ -252,9 +253,9 @@ export class PackageService {
 
 	private defaultPlans() {
 		return [
-			{ plan_type: PackagePlanType.MONTHLY, name: '月卡', price: 29.9, duration_days: 30, status: 1, sort: 1 },
-			{ plan_type: PackagePlanType.QUARTERLY, name: '季卡', price: 79.9, duration_days: 90, status: 1, sort: 2 },
-			{ plan_type: PackagePlanType.YEARLY, name: '年卡', price: 199.9, duration_days: 365, status: 1, sort: 3 },
+			{ plan_type: PackagePlanType.MONTHLY, name: '月卡', price: 30, duration_days: 30, status: 1, sort: 1 },
+			{ plan_type: PackagePlanType.QUARTERLY, name: '季卡', price: 80, duration_days: 90, status: 1, sort: 2 },
+			{ plan_type: PackagePlanType.YEARLY, name: '年卡', price: 200, duration_days: 365, status: 1, sort: 3 },
 		];
 	}
 
@@ -280,15 +281,21 @@ export class PackageService {
 		plans: Array<{ plan_type: PackagePlanType; name: string; price: number; duration_days: number; status?: number; sort?: number }>,
 	) {
 		await this.packagePlanRepository.delete({ section_id: sectionId });
-		const safePlans = plans.map((plan, index) => ({
-			section_id: sectionId,
-			plan_type: plan.plan_type,
-			name: plan.name.trim(),
-			price: Math.max(0, Number(plan.price) || 0),
-			duration_days: Math.max(1, Number(plan.duration_days) || 30),
-			status: plan.status ?? 1,
-			sort: plan.sort ?? index + 1,
-		}));
+		const safePlans = plans.map((plan, index) => {
+			const rawPrice = Number(plan.price) || 0;
+			if (rawPrice > 0) {
+				assertIntegerYuanPrice(rawPrice, '套餐价格');
+			}
+			return {
+				section_id: sectionId,
+				plan_type: plan.plan_type,
+				name: plan.name.trim(),
+				price: Math.max(0, rawPrice),
+				duration_days: Math.max(1, Number(plan.duration_days) || 30),
+				status: plan.status ?? 1,
+				sort: plan.sort ?? index + 1,
+			};
+		});
 		if (safePlans.length > 0) {
 			await this.packagePlanRepository.save(safePlans);
 		}
