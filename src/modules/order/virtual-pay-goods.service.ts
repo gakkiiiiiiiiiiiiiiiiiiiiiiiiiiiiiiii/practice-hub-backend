@@ -79,23 +79,35 @@ export class VirtualPayGoodsService {
     };
   }
 
-  getVirtualPayProductId(type: 'course' | 'activation_code' | 'package', resourceId?: number) {
+  getVirtualPayProductId(type: 'course' | 'activation_code' | 'package' | 'coin_recharge', resourceId?: number) {
     const specificKey =
       type === 'activation_code'
         ? 'WECHAT_VIRTUAL_PAY_ACTIVATION_PRODUCT_ID'
         : type === 'package'
           ? 'WECHAT_VIRTUAL_PAY_PACKAGE_PRODUCT_ID'
-          : 'WECHAT_VIRTUAL_PAY_COURSE_PRODUCT_ID';
+          : type === 'coin_recharge'
+            ? 'WECHAT_VIRTUAL_PAY_COIN_PRODUCT_ID'
+            : 'WECHAT_VIRTUAL_PAY_COURSE_PRODUCT_ID';
     const productId =
       this.configService.get<string>(specificKey) ||
       this.configService.get<string>('WECHAT_VIRTUAL_PAY_PRODUCT_ID') ||
-      (resourceId ? `${type}_${resourceId}` : type === 'package' ? 'vip_default' : '');
+      (type === 'coin_recharge'
+        ? 'coin_recharge'
+        : resourceId
+          ? `${type}_${resourceId}`
+          : type === 'package'
+            ? 'vip_default'
+            : '');
 
     if (!productId) {
       throw new BadRequestException(`微信虚拟支付商品ID缺失，请配置 ${specificKey} 或 WECHAT_VIRTUAL_PAY_PRODUCT_ID`);
     }
 
     return productId;
+  }
+
+  getCoinRechargeProductId() {
+    return this.getVirtualPayProductId('coin_recharge');
   }
 
   buildVirtualPaySyncInfo(productId: string, config: { env: number }) {
@@ -382,9 +394,12 @@ export class VirtualPayGoodsService {
   }
 
   /**
-   * 下单/拉起支付前：若本地缓存价格与课程现价不一致，强制重新 upload/publish 微信道具。
+   * 下单/拉起支付前：将 course_{id} 或 activation_code_{id} 道具价与实付单价对齐。
    */
-  async prepareCourseGoodsForPayment(course: Course) {
+  async prepareCourseGoodsForPayment(
+    course: Course,
+    options?: { payAmount?: number | string; attachType?: 'course' | 'activation_code' },
+  ) {
     if (this.configService.get<string>('WECHAT_VIRTUAL_PAY_AUTO_UPLOAD_GOODS') === 'false') {
       return;
     }
@@ -392,24 +407,81 @@ export class VirtualPayGoodsService {
       return;
     }
 
-    const config = this.getVirtualPayConfig();
-    const coursePriceCents = Math.max(1, Math.round(Number(course.price || 0) * 100));
-    const agentPriceCents = Math.max(1, Math.round(Number(course.agent_price || course.price || 0) * 100));
-    const courseProductId = this.getVirtualPayProductId('course', course.id);
-    const activationProductId = this.getVirtualPayProductId('activation_code', course.id);
-    const courseCacheKey = `${config.env}:${courseProductId}`;
-    const activationCacheKey = `${config.env}:${activationProductId}`;
-    const force =
-      this.virtualPayGoodsSyncedPrice.get(courseCacheKey) !== coursePriceCents ||
-      this.virtualPayGoodsSyncedPrice.get(activationCacheKey) !== agentPriceCents;
+    const attachType = options?.attachType || 'course';
+    const listPrice =
+      attachType === 'activation_code'
+        ? Number(course.agent_price || course.price || 0)
+        : Number(course.price || 0);
+    const payAmount = options?.payAmount !== undefined ? Number(options.payAmount) : listPrice;
+    const effectivePrice = payAmount > 0 ? payAmount : listPrice;
+    if (effectivePrice <= 0) {
+      return;
+    }
 
     try {
-      await this.syncCourseGoods(course, { force });
+      await this.syncSingleCourseProductForPayment(course, attachType, effectivePrice);
     } catch (error) {
       this.logger.warn(
         `下单前课程 ${course.id} 虚拟道具同步失败，继续尝试拉起支付: ${this.getErrorMessage(error)}`,
       );
     }
+  }
+
+  /**
+   * 代币充值：下单/拉起支付前同步 coin_recharge 道具价格为本次充值金额（元）。
+   */
+  async prepareCoinRechargeForPayment(rechargeYuan: number) {
+    if (this.configService.get<string>('WECHAT_VIRTUAL_PAY_AUTO_UPLOAD_GOODS') === 'false') {
+      return;
+    }
+
+    const amount = Number(rechargeYuan || 0);
+    if (amount <= 0) {
+      return;
+    }
+
+    const config = this.getVirtualPayConfig();
+    const priceCents = Math.max(1, Math.round(amount * 100));
+    const productId = this.getCoinRechargeProductId();
+    const cacheKey = `${config.env}:${productId}`;
+    const force = this.virtualPayGoodsSyncedPrice.get(cacheKey) !== priceCents;
+
+    try {
+      await this.ensureGoodsPublished({
+        config,
+        productId,
+        name: this.buildVirtualPayGoodsName('学习代币', '充值', 0),
+        price: priceCents,
+        remark: this.buildVirtualPayGoodsRemark('代币', '充值'),
+        force,
+      });
+    } catch (error) {
+      this.logger.warn(`下单前代币充值道具同步失败，继续尝试拉起支付: ${this.getErrorMessage(error)}`);
+    }
+  }
+
+  private async syncSingleCourseProductForPayment(
+    course: Course,
+    productType: 'course' | 'activation_code',
+    payAmount: number,
+  ) {
+    const config = this.getVirtualPayConfig();
+    const priceCents = Math.max(1, Math.round(Number(payAmount || 0) * 100));
+    const productId = this.getVirtualPayProductId(productType, course.id);
+    const cacheKey = `${config.env}:${productId}`;
+    const force = this.virtualPayGoodsSyncedPrice.get(cacheKey) !== priceCents;
+    const courseName = String(course.name || `课程${course.id}`);
+    const suffix = productType === 'activation_code' ? '激活码' : '';
+    const remarkPrefix = productType === 'activation_code' ? '激活码' : '课程';
+
+    await this.ensureGoodsPublished({
+      config,
+      productId,
+      name: this.buildVirtualPayGoodsName(courseName, suffix, course.id),
+      price: priceCents,
+      remark: this.buildVirtualPayGoodsRemark(remarkPrefix, courseName),
+      force,
+    });
   }
 
   /**

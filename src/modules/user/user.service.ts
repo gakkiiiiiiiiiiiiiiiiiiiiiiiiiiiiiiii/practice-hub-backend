@@ -37,6 +37,7 @@ export class UserService {
       has_password: !!user.password_hash,
       hasPackage,
       package_expire_time: user.package_expire_time,
+      coin_balance: Number(user.coin_balance || 0),
     };
   }
 

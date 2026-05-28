@@ -44,6 +44,9 @@ export class AppUser {
   @Column({ type: 'datetime', nullable: true })
   package_expire_time: Date;
 
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  coin_balance: number;
+
   @CreateDateColumn()
   create_time: Date;
 

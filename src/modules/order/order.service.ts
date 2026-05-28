@@ -14,6 +14,7 @@ import { DistributorService } from '../distributor/distributor.service';
 import { VirtualPayGoodsService } from './virtual-pay-goods.service';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
 import { PackageService } from '../package/package.service';
+import { CoinService } from './coin.service';
 
 @Injectable()
 export class OrderService {
@@ -33,6 +34,7 @@ export class OrderService {
     private virtualPayGoodsService: VirtualPayGoodsService,
     private referralCouponService: ReferralCouponService,
     private packageService: PackageService,
+    private coinService: CoinService,
     private configService: ConfigService,
   ) {}
 
@@ -116,32 +118,18 @@ export class OrderService {
     });
 
     await this.orderRepository.save(order);
-    await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course);
 
-    const paymentParams = await this.createVirtualPaymentParams({
+    return this.processCoinBasedPayment({
       user,
-      course,
+      userId,
       order,
-      buyQuantity: 1,
-      productId: this.virtualPayGoodsService.getVirtualPayProductId('course', course.id),
-      attachType: 'course',
+      payAmountYuan: amount,
+      goodsTitle: course.name || '课程',
+      responseExtras: {
+        course_id: order.course_id,
+        order_type: order.order_type,
+      },
     });
-
-    order.pay_payload = {
-      virtual_payment: paymentParams.virtual_payment,
-      payment_params: paymentParams.payment_params,
-    };
-    await this.orderRepository.save(order);
-
-    return {
-      order_no: order.order_no,
-      amount: order.amount,
-      course_id: order.course_id,
-      order_type: order.order_type,
-      status: order.status,
-      payment_params: paymentParams.payment_params,
-      virtual_pay_sync: paymentParams.virtual_pay_sync,
-    };
   }
 
   private async createPackageOrder(userId: number, dto: CreateOrderDto) {
@@ -211,18 +199,84 @@ export class OrderService {
     });
     await this.orderRepository.save(order);
 
-    await this.virtualPayGoodsService.preparePackageGoodsForPayment(plan, { payAmount: amount });
+    return this.processCoinBasedPayment({
+      user,
+      userId,
+      order,
+      payAmountYuan: amount,
+      goodsTitle: `${plan.section.name}-${plan.name}`,
+      responseExtras: {
+        order_type: order.order_type,
+        package_section_id: order.package_section_id,
+        package_plan_id: order.package_plan_id,
+      },
+    });
+  }
+
+  /**
+   * 代币购课：余额足够则直接扣代币履约；不足则拉起微信充值差额。
+   */
+  private async processCoinBasedPayment({
+    user,
+    userId,
+    order,
+    payAmountYuan,
+    goodsTitle,
+    responseExtras,
+  }: {
+    user: AppUser;
+    userId: number;
+    order: Order;
+    payAmountYuan: number;
+    goodsTitle: string;
+    responseExtras: Record<string, unknown>;
+  }) {
+    const balance = await this.coinService.getBalance(userId);
+    const coinCost = this.coinService.yuanToCoin(payAmountYuan);
+    const coinPurchase = this.coinService.buildCoinPurchasePlan(coinCost, balance);
+
+    if (coinPurchase.recharge_amount <= 0) {
+      order.pay_provider = 'coin';
+      order.amount = payAmountYuan;
+      order.pay_payload = {
+        coin_purchase: {
+          ...coinPurchase,
+          balance_applied: coinPurchase.coin_cost,
+          recharge_amount: 0,
+          settled: true,
+        },
+      };
+      await this.orderRepository.save(order);
+      await this.coinService.deductForPurchase(userId, coinPurchase.coin_cost, order.id);
+      await this.handlePaymentSuccess(order.id);
+
+      return {
+        order_no: order.order_no,
+        amount: order.amount,
+        ...responseExtras,
+        status: OrderStatus.PAID,
+        payment_params: null,
+      };
+    }
+
+    order.amount = coinPurchase.recharge_amount;
+    order.pay_provider = 'virtual_payment';
+    order.pay_payload = { coin_purchase: coinPurchase };
+    await this.orderRepository.save(order);
+
+    await this.virtualPayGoodsService.prepareCoinRechargeForPayment(coinPurchase.recharge_amount);
 
     const paymentParams = await this.createVirtualPaymentParams({
       user,
       order,
       buyQuantity: 1,
-      productId: this.virtualPayGoodsService.getVirtualPayProductId('package', plan.id),
-      attachType: 'package',
-      goodsTitle: `${plan.section.name}-${plan.name}`,
+      productId: this.virtualPayGoodsService.getCoinRechargeProductId(),
+      attachType: 'coin_recharge',
+      goodsTitle,
     });
 
     order.pay_payload = {
+      coin_purchase: coinPurchase,
       virtual_payment: paymentParams.virtual_payment,
       payment_params: paymentParams.payment_params,
     };
@@ -231,9 +285,7 @@ export class OrderService {
     return {
       order_no: order.order_no,
       amount: order.amount,
-      order_type: order.order_type,
-      package_section_id: order.package_section_id,
-      package_plan_id: order.package_plan_id,
+      ...responseExtras,
       status: order.status,
       payment_params: paymentParams.payment_params,
       virtual_pay_sync: paymentParams.virtual_pay_sync,
@@ -355,13 +407,19 @@ export class OrderService {
       throw new NotFoundException('课程不存在');
     }
 
-    await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course);
+    const buyQuantity = Math.max(1, Math.floor(Number(options?.buyQuantity || 1)));
+    const attachType = options?.attachType === 'activation_code' ? 'activation_code' : 'course';
+    const unitPayAmount = Number(order.amount || 0) / buyQuantity;
+    await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course, {
+      payAmount: unitPayAmount,
+      attachType,
+    });
 
     const paymentParams = await this.createVirtualPaymentParams({
       user,
       course,
       order,
-      buyQuantity: options?.buyQuantity || 1,
+      buyQuantity,
       productId:
         options?.productId ||
         this.virtualPayGoodsService.getVirtualPayProductId(
@@ -660,12 +718,27 @@ export class OrderService {
       throw new BadRequestException('订单支付方式不匹配');
     }
 
-    order.pay_payload = {
-      ...(order.pay_payload || {}),
-      virtual_payment_success: {
-        confirmed_at: new Date().toISOString(),
-      },
-    };
+    const coinPurchase = order.pay_payload?.coin_purchase;
+    if (coinPurchase && !coinPurchase.settled) {
+      await this.coinService.settleRechargeAndPurchase(userId, order, coinPurchase);
+      order.pay_payload = {
+        ...(order.pay_payload || {}),
+        coin_purchase: {
+          ...coinPurchase,
+          settled: true,
+        },
+        virtual_payment_success: {
+          confirmed_at: new Date().toISOString(),
+        },
+      };
+    } else {
+      order.pay_payload = {
+        ...(order.pay_payload || {}),
+        virtual_payment_success: {
+          confirmed_at: new Date().toISOString(),
+        },
+      };
+    }
     await this.orderRepository.save(order);
     await this.handlePaymentSuccess(order.id);
 
@@ -778,31 +851,19 @@ export class OrderService {
       const plan = order.package_plan_id && order.package_section_id
         ? await this.packageService.getPlanForOrder(order.package_section_id, order.package_plan_id)
         : null;
-      if (plan) {
-        await this.virtualPayGoodsService.preparePackageGoodsForPayment(plan, { payAmount: order.amount });
-      }
-      const paymentParams = await this.createVirtualPaymentParams({
+
+      return this.processCoinBasedPayment({
         user,
+        userId,
         order,
-        buyQuantity: 1,
-        productId: this.virtualPayGoodsService.getVirtualPayProductId('package', plan?.id),
-        attachType: 'package',
+        payAmountYuan: this.getOrderPayAmountYuan(order),
         goodsTitle: plan ? `${plan.section.name}-${plan.name}` : '套餐',
+        responseExtras: {
+          order_type: order.order_type,
+          package_section_id: order.package_section_id,
+          package_plan_id: order.package_plan_id,
+        },
       });
-      order.pay_payload = {
-        ...(order.pay_payload || {}),
-        virtual_payment: paymentParams.virtual_payment,
-        payment_params: paymentParams.payment_params,
-      };
-      await this.orderRepository.save(order);
-      return {
-        order_no: order.order_no,
-        amount: order.amount,
-        order_type: order.order_type,
-        status: order.status,
-        payment_params: paymentParams.payment_params,
-        virtual_pay_sync: paymentParams.virtual_pay_sync,
-      };
     }
 
     if (!course) {
@@ -810,34 +871,58 @@ export class OrderService {
     }
 
     const activationPurchase = order.pay_payload?.activation_code_purchase;
-    await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course);
+    if (activationPurchase) {
+      const buyQuantity = Math.max(1, Math.floor(Number(activationPurchase?.count || 1)));
+      const unitPayAmount = Number(order.amount || 0) / buyQuantity;
+      await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course, {
+        payAmount: unitPayAmount,
+        attachType: 'activation_code',
+      });
 
-    const paymentParams = await this.createVirtualPaymentParams({
+      const paymentParams = await this.createVirtualPaymentParams({
+        user,
+        course,
+        order,
+        buyQuantity,
+        productId: this.virtualPayGoodsService.getVirtualPayProductId('activation_code', course.id),
+        attachType: 'activation_code',
+      });
+      order.pay_payload = {
+        ...(order.pay_payload || {}),
+        virtual_payment: paymentParams.virtual_payment,
+        payment_params: paymentParams.payment_params,
+      };
+      await this.orderRepository.save(order);
+
+      return {
+        order_no: order.order_no,
+        amount: order.amount,
+        course_id: order.course_id,
+        order_type: order.order_type,
+        status: order.status,
+        payment_params: paymentParams.payment_params,
+        virtual_pay_sync: paymentParams.virtual_pay_sync,
+      };
+    }
+
+    return this.processCoinBasedPayment({
       user,
-      course,
+      userId,
       order,
-      buyQuantity: activationPurchase?.count || 1,
-      productId: this.virtualPayGoodsService.getVirtualPayProductId(
-        activationPurchase ? 'activation_code' : 'course',
-        course.id,
-      ),
-      attachType: activationPurchase ? 'activation_code' : 'course',
+      payAmountYuan: this.getOrderPayAmountYuan(order),
+      goodsTitle: course.name || '课程',
+      responseExtras: {
+        course_id: order.course_id,
+        order_type: order.order_type,
+      },
     });
-    order.pay_payload = {
-      ...(order.pay_payload || {}),
-      virtual_payment: paymentParams.virtual_payment,
-      payment_params: paymentParams.payment_params,
-    };
-    await this.orderRepository.save(order);
+  }
 
-    return {
-      order_no: order.order_no,
-      amount: order.amount,
-      course_id: order.course_id,
-      status: order.status,
-      payment_params: paymentParams.payment_params,
-      virtual_pay_sync: paymentParams.virtual_pay_sync,
-    };
+  private getOrderPayAmountYuan(order: Order) {
+    return Math.max(
+      0,
+      Number((Number(order.original_amount || 0) - Number(order.discount_amount || 0)).toFixed(2)),
+    );
   }
 
   async getOrderCounts(userId: number) {

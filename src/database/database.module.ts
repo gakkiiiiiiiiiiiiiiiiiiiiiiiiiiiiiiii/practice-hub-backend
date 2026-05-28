@@ -41,6 +41,7 @@ import { PackageSection } from './entities/package-section.entity';
 import { PackageSectionScope } from './entities/package-section-scope.entity';
 import { PackagePlan } from './entities/package-plan.entity';
 import { UserPackageSubscription } from './entities/user-package-subscription.entity';
+import { CoinTransaction } from './entities/coin-transaction.entity';
 
 @Module({
 	imports: [
@@ -86,6 +87,7 @@ import { UserPackageSubscription } from './entities/user-package-subscription.en
 			PackageSectionScope,
 			PackagePlan,
 			UserPackageSubscription,
+			CoinTransaction,
 		]),
 	],
 	exports: [TypeOrmModule],
