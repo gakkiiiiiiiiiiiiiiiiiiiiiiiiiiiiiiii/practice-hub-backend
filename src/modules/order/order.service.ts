@@ -235,11 +235,14 @@ export class OrderService {
     clientIp?: string;
     responseExtras: Record<string, unknown>;
   }) {
-    const balance = await this.coinService.queryWechatBalance(user, clientIp);
+    const { balance, fromCache } = await this.coinService.resolveBalanceForOrder(user, clientIp);
     const coinCost = this.coinService.yuanToCoinInt(payAmountYuan);
     const coinPurchase = this.coinService.buildCoinPurchasePlan(coinCost, balance);
 
     if (coinPurchase.recharge_coins <= 0) {
+      if (fromCache) {
+        throw new BadRequestException('微信服务繁忙，暂时无法确认代币余额，请稍后重试');
+      }
       const currencyPayOrderId = `${order.order_no}_COIN`;
       await this.coinService.currencyPayForOrder({
         user,

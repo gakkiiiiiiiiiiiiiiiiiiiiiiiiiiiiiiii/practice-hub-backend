@@ -54,6 +54,18 @@ export class CoinService {
     };
   }
 
+  /** 查询余额，失败时回退本地缓存（下单流程不因 502 直接中断） */
+  async resolveBalanceForOrder(user: AppUser, clientIp?: string) {
+    try {
+      const balance = await this.queryWechatBalance(user, clientIp);
+      return { balance, fromCache: false };
+    } catch (error) {
+      const cached = Math.max(0, Math.floor(Number(user.coin_balance || 0)));
+      this.logger.warn(`query_user_balance 失败，使用缓存余额 ${cached}: ${error?.message || error}`);
+      return { balance: cached, fromCache: true };
+    }
+  }
+
   /** 官方：/xpay/query_user_balance */
   async queryWechatBalance(user: AppUser, clientIp?: string) {
     if (!user.session_key) {
@@ -113,7 +125,13 @@ export class CoinService {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const paid = await this.isRechargeOrderPaid(user, rechargeOrderNo);
-      const balance = await this.queryWechatBalance(user, clientIp);
+      let balance = 0;
+      try {
+        balance = await this.queryWechatBalance(user, clientIp);
+      } catch (error) {
+        this.logger.warn(`轮询充值结果时查询余额失败: ${error?.message || error}`);
+        balance = Math.max(0, Math.floor(Number(user.coin_balance || 0)));
+      }
       if (paid && balance >= coinCost) {
         return true;
       }

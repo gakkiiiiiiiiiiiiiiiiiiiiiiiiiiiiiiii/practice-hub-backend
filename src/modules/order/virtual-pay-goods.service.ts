@@ -676,6 +676,10 @@ export class VirtualPayGoodsService {
     try {
       return await this.getWechatAccessToken(forceRefresh);
     } catch (error) {
+      if (this.wechatAccessTokenCache?.token) {
+        this.logger.warn(`获取微信 access_token 失败，使用内存缓存 token 兜底: ${this.getErrorMessage(error)}`);
+        return this.wechatAccessTokenCache.token;
+      }
       if (this.isTransientWechatApiError(error)) {
         this.logger.warn(`获取微信 access_token 失败，跳过本次道具同步: ${this.getErrorMessage(error)}`);
         return null;
@@ -864,9 +868,12 @@ export class VirtualPayGoodsService {
     const config = this.getVirtualPayConfig();
     const bodyPayload = { ...payload, env: Number(payload.env ?? config.env) };
     const body = JSON.stringify(bodyPayload);
-    const accessToken = options?.accessToken ?? (await this.getWechatAccessTokenWithFallback());
+    const accessToken =
+      options?.accessToken ??
+      (await this.getWechatAccessTokenWithFallback()) ??
+      (await this.getWechatAccessTokenWithFallback(true));
     if (!accessToken) {
-      throw new BadRequestException('微信 access_token 获取失败，请稍后重试');
+      throw new BadRequestException('微信服务繁忙，暂时无法连接，请稍后重试');
     }
     const paySig = this.createHmacSha256(config.appKey, `${endpoint}&${body}`);
     const params: Record<string, string> = {
@@ -954,7 +961,7 @@ export class VirtualPayGoodsService {
           if (!this.isTransientWechatApiError(error) || attempt >= maxAttempts) {
             break;
           }
-          const delayMs = Math.min(5000, 500 * attempt);
+          const delayMs = Math.min(8000, 800 * attempt);
           this.logger.warn(
             `获取微信 access_token 失败，准备重试 (${attempt}/${maxAttempts}): ${this.getErrorMessage(error)}`,
           );
@@ -969,6 +976,44 @@ export class VirtualPayGoodsService {
       }
     }
 
+    try {
+      this.logger.warn('stable_token 不可用，尝试 cgi-bin/token 兜底');
+      return await this.fetchClassicAccessToken(appid, secret);
+    } catch (classicError) {
+      lastError = classicError;
+    }
+
+    throw lastError;
+  }
+
+  private async fetchClassicAccessToken(appid: string, secret: string) {
+    const now = Date.now();
+    const urls = this.getWechatApiUrls('/cgi-bin/token');
+    let lastError: unknown;
+    for (const url of urls) {
+      try {
+        const response = await this.requestWechatPublicApi(url, null, {
+          grant_type: 'client_credential',
+          appid,
+          secret,
+        });
+        const data = response.data || {};
+        if (data.errcode || !data.access_token) {
+          throw new BadRequestException(data.errmsg || `获取微信 access_token 失败: ${data.errcode || 'unknown'}`);
+        }
+        this.wechatAccessTokenCache = {
+          token: data.access_token,
+          expireAt: now + Math.max(60, Number(data.expires_in || 7200) - 300) * 1000,
+        };
+        return data.access_token;
+      } catch (error) {
+        lastError = error;
+        if (url !== urls[urls.length - 1] && this.isTransientWechatApiError(error)) {
+          this.logger.warn(`cgi-bin/token 调用失败，尝试备用线路: ${this.getErrorMessage(error)}`);
+          continue;
+        }
+      }
+    }
     throw lastError;
   }
 
