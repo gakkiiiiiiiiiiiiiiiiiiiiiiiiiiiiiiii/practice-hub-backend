@@ -414,25 +414,6 @@ export class AppUploadController {
 }
 
 /**
- * 公网静态资源（供微信虚拟支付等外部服务拉取，无需登录）
- */
-@ApiTags('文件上传')
-@Controller('app/public')
-export class PublicAssetController {
-  constructor(private readonly uploadService: UploadService) {}
-
-  @Get('virtual-pay-goods-cover')
-  @ApiOperation({ summary: '虚拟支付默认商品图（内置，小于 200KB）' })
-  @Header('Cache-Control', 'public, max-age=86400')
-  @Header('Access-Control-Allow-Origin', '*')
-  async virtualPayGoodsCover(@Res() res: Response) {
-    const { data, contentType } = this.uploadService.readBuiltinVirtualPayCover();
-    res.setHeader('Content-Type', contentType);
-    res.send(data);
-  }
-}
-
-/**
  * 图片代理：解决管理端跨域无法直接显示 TCB 图片的问题（无需登录）
  */
 @ApiTags('文件上传')

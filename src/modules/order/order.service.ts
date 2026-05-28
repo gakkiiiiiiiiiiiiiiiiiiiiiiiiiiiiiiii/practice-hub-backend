@@ -11,7 +11,7 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { DistributorService } from '../distributor/distributor.service';
-import { VirtualPayGoodsService } from './virtual-pay-goods.service';
+import { XpayService } from './xpay.service';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
 import { PackageService } from '../package/package.service';
 import { CoinService } from './coin.service';
@@ -32,7 +32,7 @@ export class OrderService {
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     @Inject(forwardRef(() => DistributorService))
     private distributorService: DistributorService,
-    private virtualPayGoodsService: VirtualPayGoodsService,
+    private xpayService: XpayService,
     private referralCouponService: ReferralCouponService,
     private packageService: PackageService,
     private coinService: CoinService,
@@ -340,7 +340,7 @@ export class OrderService {
     rechargeOrderNo: string;
     goodsTitle: string;
   }) {
-    const config = this.virtualPayGoodsService.getVirtualPayConfig();
+    const config = this.xpayService.getVirtualPayConfig();
     const attach = JSON.stringify({
       type: 'coin_recharge',
       order_no: order.order_no,
@@ -388,88 +388,16 @@ export class OrderService {
     return `ORDER${timestamp}${random}`;
   }
 
-  private async createVirtualPaymentParams({
-    user,
-    course,
-    order,
-    buyQuantity,
-    productId,
-    attachType = 'course',
-    goodsTitle,
-  }: {
-    user: AppUser;
-    course?: Course | null;
-    order: Order;
-    buyQuantity: number;
-    productId: string;
-    attachType?: string;
-    goodsTitle?: string;
-  }) {
-    const config = this.virtualPayGoodsService.getVirtualPayConfig();
-    const amountInCents = Math.max(1, Math.round(Number(order.amount || 0) * 100));
-    const attach = JSON.stringify({
-      type: attachType,
-      order_no: order.order_no,
-      user_id: order.user_id,
-      course_id: order.course_id,
-      package_section_id: order.package_section_id,
-      package_plan_id: order.package_plan_id,
-      goods_title: goodsTitle || course?.name || attachType,
-    });
-    const normalizedBuyQuantity = Math.max(1, Math.floor(Number(buyQuantity || 1)));
-    const unitPriceInCents = Math.max(1, Math.round(amountInCents / normalizedBuyQuantity));
-    const signDataObject = {
-      offerId: config.offerId,
-      buyQuantity: normalizedBuyQuantity,
-      env: config.env,
-      currencyType: 'CNY',
-      productId,
-      goodsPrice: unitPriceInCents,
-      outTradeNo: order.order_no,
-      attach,
-    };
-    const signData = JSON.stringify(signDataObject);
-    const paymentParams = {
-      signData,
-      mode: config.mode,
-      paySig: this.createHmacSha256(config.appKey, `requestVirtualPayment&${signData}`),
-      signature: this.createHmacSha256(user.session_key, signData),
-    };
-
-    return {
-      virtual_payment: {
-        signData: signDataObject,
-        mode: config.mode,
-        env: config.env,
-        offerId: config.offerId,
-        productId,
-        buyQuantity: normalizedBuyQuantity,
-        goodsPrice: unitPriceInCents,
-      },
-      payment_params: paymentParams,
-      virtual_pay_sync: this.virtualPayGoodsService.buildVirtualPaySyncInfo(productId, config),
-    };
-  }
-
-  private createHmacSha256(secret: string | undefined | null, data: string) {
-    if (!secret) {
-      throw new BadRequestException('微信虚拟支付签名配置缺失，请重新登录后再试');
-    }
-    return crypto.createHmac('sha256', secret).update(data).digest('hex');
-  }
-
-  async createVirtualPaymentParamsForExistingOrder(
+  /**
+   * 为已创建订单拉起代币支付（课程/套餐/激活码等）
+   */
+  async startCoinPaymentForOrder(
     userId: number,
     orderNo: string,
-    options?: { buyQuantity?: number; productId?: string; attachType?: string },
+    clientIp?: string,
+    options?: { goodsTitle?: string },
   ) {
-    const [user, order] = await Promise.all([
-      this.appUserRepository.findOne({ where: { id: userId } }),
-      this.orderRepository.findOne({ where: { order_no: orderNo } }),
-    ]);
-    if (!user) {
-      throw new NotFoundException('用户不存在');
-    }
+    const order = await this.orderRepository.findOne({ where: { order_no: orderNo } });
     if (!order) {
       throw new NotFoundException('订单不存在');
     }
@@ -485,51 +413,54 @@ export class OrderService {
         payment_params: null,
       };
     }
-    if (order.status !== OrderStatus.PENDING || order.pay_provider !== 'virtual_payment') {
+    if (order.status !== OrderStatus.PENDING) {
       throw new BadRequestException('当前订单不可支付');
     }
 
-    const course = await this.courseRepository.findOne({ where: { id: order.course_id } });
-    if (!course) {
-      throw new NotFoundException('课程不存在');
+    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
     }
 
-    const buyQuantity = Math.max(1, Math.floor(Number(options?.buyQuantity || 1)));
-    const attachType = options?.attachType === 'activation_code' ? 'activation_code' : 'course';
-    const unitPayAmount = Number(order.amount || 0) / buyQuantity;
-    await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course, {
-      payAmount: unitPayAmount,
-      attachType,
-    });
-
-    const paymentParams = await this.createVirtualPaymentParams({
-      user,
-      course,
-      order,
-      buyQuantity,
-      productId:
-        options?.productId ||
-        this.virtualPayGoodsService.getVirtualPayProductId(
-          options?.attachType === 'activation_code' ? 'activation_code' : 'course',
-          course.id,
-        ),
-      attachType: options?.attachType || 'course',
-    });
-    order.pay_payload = {
-      ...(order.pay_payload || {}),
-      virtual_payment: paymentParams.virtual_payment,
-      payment_params: paymentParams.payment_params,
-    };
-    await this.orderRepository.save(order);
-
-    return {
-      order_no: order.order_no,
-      amount: order.amount,
+    let goodsTitle = options?.goodsTitle || '订单支付';
+    const responseExtras: Record<string, unknown> = {
       course_id: order.course_id,
-      status: order.status,
-      payment_params: paymentParams.payment_params,
-      virtual_pay_sync: paymentParams.virtual_pay_sync,
+      order_type: order.order_type,
     };
+
+    if (order.order_type === 'package') {
+      const plan =
+        order.package_plan_id && order.package_section_id
+          ? await this.packageService.getPlanForOrder(order.package_section_id, order.package_plan_id)
+          : null;
+      goodsTitle = plan ? `${plan.section.name}-${plan.name}` : '套餐';
+      responseExtras.package_section_id = order.package_section_id;
+      responseExtras.package_plan_id = order.package_plan_id;
+    } else if (order.course_id) {
+      const course = await this.courseRepository.findOne({ where: { id: order.course_id } });
+      if (order.pay_payload?.activation_code_purchase) {
+        goodsTitle = course?.name ? `${course.name}-激活码` : '激活码';
+      } else {
+        goodsTitle = course?.name || '课程';
+      }
+    }
+
+    return this.processCoinBasedPayment({
+      user,
+      userId,
+      order,
+      payAmountYuan: this.getOrderPayAmountYuan(order),
+      goodsTitle,
+      clientIp,
+      responseExtras,
+    });
+  }
+
+  private createHmacSha256(secret: string | undefined | null, data: string) {
+    if (!secret) {
+      throw new BadRequestException('微信虚拟支付签名配置缺失，请重新登录后再试');
+    }
+    return crypto.createHmac('sha256', secret).update(data).digest('hex');
   }
 
   private getCloudPayConfig() {
@@ -994,10 +925,7 @@ export class OrderService {
       throw new BadRequestException('当前订单不可继续支付');
     }
 
-    const [user, course] = await Promise.all([
-      this.appUserRepository.findOne({ where: { id: userId } }),
-      order.course_id ? this.courseRepository.findOne({ where: { id: order.course_id } }) : Promise.resolve(null),
-    ]);
+    const user = await this.appUserRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
@@ -1022,51 +950,22 @@ export class OrderService {
       });
     }
 
+    const course = order.course_id
+      ? await this.courseRepository.findOne({ where: { id: order.course_id } })
+      : null;
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
 
     const activationPurchase = order.pay_payload?.activation_code_purchase;
-    if (activationPurchase) {
-      const buyQuantity = Math.max(1, Math.floor(Number(activationPurchase?.count || 1)));
-      const unitPayAmount = Number(order.amount || 0) / buyQuantity;
-      await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course, {
-        payAmount: unitPayAmount,
-        attachType: 'activation_code',
-      });
-
-      const paymentParams = await this.createVirtualPaymentParams({
-        user,
-        course,
-        order,
-        buyQuantity,
-        productId: this.virtualPayGoodsService.getVirtualPayProductId('activation_code', course.id),
-        attachType: 'activation_code',
-      });
-      order.pay_payload = {
-        ...(order.pay_payload || {}),
-        virtual_payment: paymentParams.virtual_payment,
-        payment_params: paymentParams.payment_params,
-      };
-      await this.orderRepository.save(order);
-
-      return {
-        order_no: order.order_no,
-        amount: order.amount,
-        course_id: order.course_id,
-        order_type: order.order_type,
-        status: order.status,
-        payment_params: paymentParams.payment_params,
-        virtual_pay_sync: paymentParams.virtual_pay_sync,
-      };
-    }
+    const goodsTitle = activationPurchase ? `${course.name || '课程'}-激活码` : course.name || '课程';
 
     return this.processCoinBasedPayment({
       user,
       userId,
       order,
       payAmountYuan: this.getOrderPayAmountYuan(order),
-      goodsTitle: course.name || '课程',
+      goodsTitle,
       clientIp,
       responseExtras: {
         course_id: order.course_id,
@@ -1076,9 +975,8 @@ export class OrderService {
   }
 
   private getOrderPayAmountYuan(order: Order) {
-    return Math.max(
-      0,
-      Number((Number(order.original_amount || 0) - Number(order.discount_amount || 0)).toFixed(2)),
+    return normalizePayAmountYuan(
+      Math.max(0, Number(order.original_amount || 0) - Number(order.discount_amount || 0)),
     );
   }
 

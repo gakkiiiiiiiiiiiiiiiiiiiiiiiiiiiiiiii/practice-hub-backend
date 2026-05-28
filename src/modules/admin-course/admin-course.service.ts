@@ -21,7 +21,6 @@ import { SystemService } from '../system/system.service';
 import { CourseService } from '../course/course.service';
 import { CourseFileService, CourseFileInput } from '../course/course-file.service';
 import { AdminRole } from '../../database/entities/sys-user.entity';
-import { VirtualPayGoodsService } from '../order/virtual-pay-goods.service';
 import { queryWithRetry } from '../../common/utils/database-retry';
 import { assertIntegerYuanPrice, ceilIntegerYuanPrice } from '../../common/utils/price.util';
 
@@ -69,7 +68,6 @@ export class AdminCourseService {
     private systemService: SystemService,
     private courseService: CourseService,
     private courseFileService: CourseFileService,
-    private virtualPayGoodsService: VirtualPayGoodsService,
   ) {}
 
   /**
@@ -83,9 +81,6 @@ export class AdminCourseService {
       if (!course) {
         throw new NotFoundException('课程不存在');
       }
-      const previousPrice = this.roundCoursePrice(Number(course.price || 0));
-      const previousAgentPrice = this.roundCoursePrice(Number(course.agent_price || 0));
-      const previousIsFree = Number(course.is_free || 0);
       if (dto.is_free === 0 && dto.validity_days === undefined && course.validity_days == null) {
         dto.validity_days = 365;
       }
@@ -97,17 +92,7 @@ export class AdminCourseService {
       const saved = await this.courseRepository.save(course);
       await this.ensureCourseFilesFromLegacyFields(saved);
       await this.courseFileService.syncPrimaryMirror(saved.id);
-      const priceRelatedChanged = this.isCoursePriceRelatedChanged(saved, {
-        price: previousPrice,
-        agent_price: previousAgentPrice,
-        is_free: previousIsFree,
-      });
-      let virtualPayGoodsSync;
-      if (this.shouldSyncVirtualPayGoods(saved) && priceRelatedChanged) {
-        this.virtualPayGoodsService.scheduleSyncCourseGoods(saved, { force: true });
-        virtualPayGoodsSync = this.virtualPayGoodsService.buildAdminPriceSyncNotice();
-      }
-      return this.buildCourseSaveResult(saved, virtualPayGoodsSync);
+      return saved;
     } else {
       await this.applyCreateCourseDefaults(dto as CreateCourseDto);
       if (dto.sort === undefined || dto.sort === null) {
@@ -120,41 +105,8 @@ export class AdminCourseService {
       const saved = await this.courseRepository.save(course);
       await this.ensureCourseFilesFromLegacyFields(saved);
       await this.courseFileService.syncPrimaryMirror(saved.id);
-      let virtualPayGoodsSync;
-      if (this.shouldSyncVirtualPayGoods(saved)) {
-        this.virtualPayGoodsService.scheduleSyncCourseGoods(saved, { force: true });
-        virtualPayGoodsSync = this.virtualPayGoodsService.buildAdminPriceSyncNotice();
-      }
-      return this.buildCourseSaveResult(saved, virtualPayGoodsSync);
+      return saved;
     }
-  }
-
-  async syncAllCourseVirtualPayGoods() {
-    const counts = await this.virtualPayGoodsService.countVirtualPaySyncTargets();
-    this.virtualPayGoodsService.scheduleSyncAllGoods({ force: true });
-    return this.virtualPayGoodsService.buildAdminBatchSyncResponse(counts);
-  }
-
-  private shouldSyncVirtualPayGoods(course: Course) {
-    return course.is_free !== 1 && Number(course.price) > 0;
-  }
-
-  private isCoursePriceRelatedChanged(
-    course: Course,
-    previous: { price: number; agent_price: number; is_free: number },
-  ) {
-    return (
-      this.roundCoursePrice(Number(course.price || 0)) !== previous.price ||
-      this.roundCoursePrice(Number(course.agent_price || 0)) !== previous.agent_price ||
-      Number(course.is_free || 0) !== previous.is_free
-    );
-  }
-
-  private buildCourseSaveResult(course: Course, virtualPayGoodsSync?: Record<string, unknown>) {
-    return {
-      ...course,
-      virtual_pay_goods_sync: virtualPayGoodsSync,
-    };
   }
 
   async getCourseDefaultParams() {
@@ -1414,7 +1366,6 @@ export class AdminCourseService {
       }
       const saved = await this.courseRepository.save(course);
       updatedCourses.push(saved);
-      this.virtualPayGoodsService.scheduleSyncCourseGoods(saved, { force: true });
     }
 
     return {
@@ -1424,7 +1375,6 @@ export class AdminCourseService {
       value: dto.value,
       fields,
       selectAll: dto.selectAll === true,
-      virtual_pay_goods_sync: this.virtualPayGoodsService.buildAdminPriceSyncNotice(),
     };
   }
 

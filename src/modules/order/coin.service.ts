@@ -5,7 +5,7 @@ import { Repository } from 'typeorm';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { Order } from '../../database/entities/order.entity';
 import { normalizePayAmountYuan } from '../../common/utils/price.util';
-import { VirtualPayGoodsService } from './virtual-pay-goods.service';
+import { XpayService } from './xpay.service';
 
 export type CoinPurchasePayload = {
   coin_cost: number;
@@ -25,7 +25,7 @@ export class CoinService {
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly virtualPayGoodsService: VirtualPayGoodsService,
+    private readonly xpayService: XpayService,
     @InjectRepository(AppUser)
     private readonly appUserRepository: Repository<AppUser>,
   ) {}
@@ -77,9 +77,9 @@ export class CoinService {
     if (!user.session_key) {
       throw new BadRequestException('登录态已过期，请重新登录后再试');
     }
-    const config = this.virtualPayGoodsService.getVirtualPayConfig();
+    const config = this.xpayService.getVirtualPayConfig();
     const userIp = this.getDefaultUserIp(clientIp);
-    const result = await this.virtualPayGoodsService.callXpayApi(
+    const result = await this.xpayService.callXpayApi(
       '/xpay/query_user_balance',
       {
         openid: user.openid,
@@ -88,7 +88,7 @@ export class CoinService {
       },
       { sessionKey: user.session_key },
     );
-    if (result.errcode && !this.virtualPayGoodsService.isXpayDuplicateSuccess(Number(result.errcode))) {
+    if (result.errcode && !this.xpayService.isXpayDuplicateSuccess(Number(result.errcode))) {
       throw new BadRequestException(result.errmsg || `查询微信代币余额失败(${result.errcode})`);
     }
     const balance = Math.max(0, Math.floor(Number(result.balance || 0)));
@@ -131,8 +131,8 @@ export class CoinService {
   }
 
   async isRechargeOrderPaid(user: AppUser, rechargeOrderNo: string) {
-    const config = this.virtualPayGoodsService.getVirtualPayConfig();
-    const result = await this.virtualPayGoodsService.callXpayApi('/xpay/query_order', {
+    const config = this.xpayService.getVirtualPayConfig();
+    const result = await this.xpayService.callXpayApi('/xpay/query_order', {
       openid: user.openid,
       order_id: rechargeOrderNo,
       env: config.env,
@@ -183,7 +183,7 @@ export class CoinService {
     }
 
     const currencyPayOrderId = params.currencyPayOrderId || `${order.order_no}_COIN`;
-    const config = this.virtualPayGoodsService.getVirtualPayConfig();
+    const config = this.xpayService.getVirtualPayConfig();
     const userIp = this.getDefaultUserIp(clientIp);
     const payYuan = normalizePayAmountYuan(Number(order.original_amount || order.amount || 0));
     const unitPriceCents = Math.max(1, payYuan * 100);
@@ -201,7 +201,7 @@ export class CoinService {
       },
     ]);
 
-    const result = await this.virtualPayGoodsService.callXpayApi(
+    const result = await this.xpayService.callXpayApi(
       '/xpay/currency_pay',
       {
         openid: user.openid,
@@ -216,7 +216,7 @@ export class CoinService {
     );
 
     const errcode = Number(result.errcode || 0);
-    if (errcode && !this.virtualPayGoodsService.isXpayDuplicateSuccess(errcode)) {
+    if (errcode && !this.xpayService.isXpayDuplicateSuccess(errcode)) {
       throw new BadRequestException(result.errmsg || `微信代币扣减失败(${errcode})`);
     }
 

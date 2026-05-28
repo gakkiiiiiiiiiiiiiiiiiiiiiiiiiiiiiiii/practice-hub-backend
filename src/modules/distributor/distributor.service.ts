@@ -766,7 +766,7 @@ export class DistributorService {
 
 		// 获取代理商价格（如果有），否则使用原价
 		const agentPrice = Number(course.agent_price || course.price || 0);
-		const totalPrice = Number((agentPrice * normalizedCount).toFixed(2));
+		const totalPrice = agentPrice * normalizedCount;
 		if (totalPrice <= 0) {
 			throw new BadRequestException('激活码购买金额异常，请检查课程代理商售价');
 		}
@@ -778,6 +778,7 @@ export class DistributorService {
 			user_id: userId,
 			course_id: courseId,
 			amount: totalPrice,
+			original_amount: totalPrice,
 			status: OrderStatus.PENDING,
 			pay_provider: 'virtual_payment',
 			pay_payload: {
@@ -798,9 +799,8 @@ export class DistributorService {
 		});
 		await this.orderRepository.save(order);
 
-		const payment = await this.orderService.createVirtualPaymentParamsForExistingOrder(userId, order.order_no, {
-			buyQuantity: normalizedCount,
-			attachType: 'activation_code',
+		const payment = await this.orderService.startCoinPaymentForOrder(userId, order.order_no, undefined, {
+			goodsTitle: `${course.name}-激活码`,
 		});
 
 		return {

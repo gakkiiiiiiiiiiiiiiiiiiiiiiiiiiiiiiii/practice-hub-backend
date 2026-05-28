@@ -3,23 +3,15 @@ import { OrderService } from './order.service';
 import { OrderController, OrderPayNotifyController, WechatXpayNotifyController } from './order.controller';
 import { DatabaseModule } from '../../database/database.module';
 import { DistributorModule } from '../distributor/distributor.module';
-import { UploadModule } from '../upload/upload.module';
-import { VirtualPayGoodsService } from './virtual-pay-goods.service';
-import { VirtualPayGoodsSyncScheduler } from './virtual-pay-goods-sync.scheduler';
+import { XpayService } from './xpay.service';
 import { CoinService } from './coin.service';
 import { MarketingModule } from '../marketing/marketing.module';
 import { PackageModule } from '../package/package.module';
 
 @Module({
-  imports: [
-    DatabaseModule,
-    UploadModule,
-    forwardRef(() => DistributorModule),
-    MarketingModule,
-    PackageModule,
-  ],
+  imports: [DatabaseModule, forwardRef(() => DistributorModule), MarketingModule, PackageModule],
   controllers: [OrderController, OrderPayNotifyController, WechatXpayNotifyController],
-  providers: [OrderService, VirtualPayGoodsService, VirtualPayGoodsSyncScheduler, CoinService],
-  exports: [OrderService, VirtualPayGoodsService, CoinService],
+  providers: [OrderService, XpayService, CoinService],
+  exports: [OrderService, XpayService, CoinService],
 })
 export class OrderModule {}
