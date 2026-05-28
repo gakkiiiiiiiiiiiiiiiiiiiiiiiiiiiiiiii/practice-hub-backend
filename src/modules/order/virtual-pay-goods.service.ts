@@ -26,7 +26,7 @@ export class VirtualPayGoodsService {
   private readonly logger = new Logger(VirtualPayGoodsService.name);
   /** `${env}:${productId}` -> 已同步到微信侧的价格（分） */
   private readonly virtualPayGoodsSyncedPrice = new Map<string, number>();
-  private readonly virtualPayGoodsPending = new Map<string, Promise<void>>();
+  private readonly virtualPayGoodsPending = new Map<string, Promise<boolean>>();
   private readonly virtualPayGoodsSyncedAt = new Map<string, number>();
   private wechatAccessTokenCache: { token: string; expireAt: number } | null = null;
   private wechatTlsCompatWarned = false;
@@ -429,15 +429,16 @@ export class VirtualPayGoodsService {
 
   /**
    * 代币充值：下单/拉起支付前同步 coin_recharge 道具价格为本次充值金额（元）。
+   * @returns 微信侧价格是否已确认与本次充值金额一致
    */
-  async prepareCoinRechargeForPayment(rechargeYuan: number) {
+  async prepareCoinRechargeForPayment(rechargeYuan: number): Promise<boolean> {
     if (this.configService.get<string>('WECHAT_VIRTUAL_PAY_AUTO_UPLOAD_GOODS') === 'false') {
-      return;
+      return true;
     }
 
     const amount = Number(rechargeYuan || 0);
     if (amount <= 0) {
-      return;
+      return true;
     }
 
     const config = this.getVirtualPayConfig();
@@ -447,7 +448,7 @@ export class VirtualPayGoodsService {
     const force = this.virtualPayGoodsSyncedPrice.get(cacheKey) !== priceCents;
 
     try {
-      await this.ensureGoodsPublished({
+      return await this.ensureGoodsPublished({
         config,
         productId,
         name: this.buildVirtualPayGoodsName('学习代币', '充值', 0),
@@ -456,7 +457,8 @@ export class VirtualPayGoodsService {
         force,
       });
     } catch (error) {
-      this.logger.warn(`下单前代币充值道具同步失败，继续尝试拉起支付: ${this.getErrorMessage(error)}`);
+      this.logger.warn(`下单前代币充值道具同步失败: ${this.getErrorMessage(error)}`);
+      return this.virtualPayGoodsSyncedPrice.get(cacheKey) === priceCents;
     }
   }
 
@@ -559,22 +561,20 @@ export class VirtualPayGoodsService {
     price: number;
     remark: string;
     force?: boolean;
-  }) {
+  }): Promise<boolean> {
     const cacheKey = `${config.env}:${productId}`;
     const normalizedPrice = Math.max(1, Math.round(Number(price || 0)));
 
     if (this.isVirtualPayProductPrePublished(productId) && !force) {
-      return;
+      return true;
     }
     if (!force && this.virtualPayGoodsSyncedPrice.get(cacheKey) === normalizedPrice) {
-      return;
+      return true;
     }
     const running = this.virtualPayGoodsPending.get(cacheKey);
     if (running) {
       await running;
-      if (!force && this.virtualPayGoodsSyncedPrice.get(cacheKey) === normalizedPrice) {
-        return;
-      }
+      return this.virtualPayGoodsSyncedPrice.get(cacheKey) === normalizedPrice;
     }
 
     const task = this.uploadAndPublishVirtualPayGoods({
@@ -588,19 +588,21 @@ export class VirtualPayGoodsService {
         if (didSync) {
           this.virtualPayGoodsSyncedPrice.set(cacheKey, normalizedPrice);
           this.markVirtualPayGoodsSynced(productId, config);
-          return;
+          return true;
         }
-        if (force) {
+        const cached = this.virtualPayGoodsSyncedPrice.get(cacheKey) === normalizedPrice;
+        if (force && !cached) {
           this.logger.warn(
             `微信虚拟支付道具 ${productId} 改价同步未确认成功（${normalizedPrice} 分），支付可能报 GOODS_PRICE_INVALID`,
           );
         }
+        return cached;
       })
       .finally(() => {
         this.virtualPayGoodsPending.delete(cacheKey);
       });
     this.virtualPayGoodsPending.set(cacheKey, task);
-    await task;
+    return task;
   }
 
   private async uploadAndPublishVirtualPayGoods({
@@ -680,6 +682,24 @@ export class VirtualPayGoodsService {
       }
       throw error;
     }
+  }
+
+  private isWeChatCloudRun() {
+    return !!(
+      process.env.WX_CLOUD_RUN_ENV === 'true' ||
+      process.env.WX_CLOUD_ENV ||
+      process.env.WX_CLOUDBASE_ENV ||
+      process.env.CBR_ENV_ID ||
+      this.configService.get<string>('WECHAT_PAY_CLOUDRUN_ENV_ID')
+    );
+  }
+
+  private getWechatApiUrls(pathname: string) {
+    const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
+    if (this.isWeChatCloudRun()) {
+      return [`http://api.weixin.qq.com${normalizedPath}`, `https://api.weixin.qq.com${normalizedPath}`];
+    }
+    return [`https://api.weixin.qq.com${normalizedPath}`];
   }
 
   private getVirtualPayGoodsCooldownMinutes() {
@@ -799,24 +819,38 @@ export class VirtualPayGoodsService {
   ) {
     const body = JSON.stringify({ ...payload, env: config.env });
     const paySig = this.createHmacSha256(config.appKey, `${endpoint}&${body}`);
-    const response = await this.requestWechatPublicApi(`https://api.weixin.qq.com${endpoint}`, body, {
-      access_token: accessToken,
-      pay_sig: paySig,
-    });
-    const data = response.data || {};
-    if (data.errcode) {
-      const errmsg = data.errmsg || `微信虚拟支付接口失败: ${data.errcode}`;
-      if (!retried && this.isInvalidAccessTokenError({ message: errmsg })) {
-        this.logger.warn(`微信 access_token 失效，stable_token 强制刷新后重试: ${endpoint}`);
-        const freshToken = await this.getWechatAccessToken(true);
-        return this.callVirtualPayApi(endpoint, payload, freshToken, config, true);
+    const urls = this.getWechatApiUrls(endpoint);
+    let lastError: unknown;
+    for (let urlIndex = 0; urlIndex < urls.length; urlIndex += 1) {
+      try {
+        const response = await this.requestWechatPublicApi(urls[urlIndex], body, {
+          access_token: accessToken,
+          pay_sig: paySig,
+        });
+        const data = response.data || {};
+        if (data.errcode) {
+          const errmsg = data.errmsg || `微信虚拟支付接口失败: ${data.errcode}`;
+          if (!retried && this.isInvalidAccessTokenError({ message: errmsg })) {
+            this.logger.warn(`微信 access_token 失效，stable_token 强制刷新后重试: ${endpoint}`);
+            const freshToken = await this.getWechatAccessToken(true);
+            return this.callVirtualPayApi(endpoint, payload, freshToken, config, true);
+          }
+          if (this.isVirtualPayRateLimitError({ message: errmsg })) {
+            throw new BadRequestException(`频率限制 ${errmsg}`);
+          }
+          throw new BadRequestException(errmsg);
+        }
+        return data;
+      } catch (error) {
+        lastError = error;
+        if (urlIndex < urls.length - 1 && this.isTransientWechatApiError(error)) {
+          this.logger.warn(`微信虚拟支付 ${endpoint} 调用失败，尝试备用线路: ${this.getErrorMessage(error)}`);
+          continue;
+        }
+        throw error;
       }
-      if (this.isVirtualPayRateLimitError({ message: errmsg })) {
-        throw new BadRequestException(`频率限制 ${errmsg}`);
-      }
-      throw new BadRequestException(errmsg);
     }
-    return data;
+    throw lastError;
   }
 
   private isInvalidAccessTokenError(error: { message?: string }) {
@@ -843,38 +877,45 @@ export class VirtualPayGoodsService {
       throw new BadRequestException('微信虚拟支付商品上传失败：缺少 WECHAT_APPID 或 WECHAT_SECRET');
     }
 
-    const maxAttempts = Math.max(1, Number(this.configService.get<string>('WECHAT_ACCESS_TOKEN_RETRY') || 3));
+    const maxAttempts = Math.max(1, Number(this.configService.get<string>('WECHAT_ACCESS_TOKEN_RETRY') || 5));
+    const tokenUrls = this.getWechatApiUrls('/cgi-bin/stable_token');
+    const tokenBody = JSON.stringify({
+      grant_type: 'client_credential',
+      appid,
+      secret,
+      force_refresh: !!forceRefresh,
+    });
     let lastError: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        const response = await this.requestWechatPublicApi(
-          'https://api.weixin.qq.com/cgi-bin/stable_token',
-          JSON.stringify({
-            grant_type: 'client_credential',
-            appid,
-            secret,
-            force_refresh: !!forceRefresh,
-          }),
-          {},
-        );
-        const data = response.data || {};
-        if (data.errcode || !data.access_token) {
-          throw new BadRequestException(data.errmsg || `获取微信 stable access_token 失败: ${data.errcode || 'unknown'}`);
+    for (const tokenUrl of tokenUrls) {
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          const response = await this.requestWechatPublicApi(tokenUrl, tokenBody, {});
+          const data = response.data || {};
+          if (data.errcode || !data.access_token) {
+            throw new BadRequestException(data.errmsg || `获取微信 stable access_token 失败: ${data.errcode || 'unknown'}`);
+          }
+          this.wechatAccessTokenCache = {
+            token: data.access_token,
+            expireAt: now + Math.max(60, Number(data.expires_in || 7200) - 300) * 1000,
+          };
+          return data.access_token;
+        } catch (error) {
+          lastError = error;
+          if (!this.isTransientWechatApiError(error) || attempt >= maxAttempts) {
+            break;
+          }
+          const delayMs = Math.min(5000, 500 * attempt);
+          this.logger.warn(
+            `获取微信 access_token 失败，准备重试 (${attempt}/${maxAttempts}): ${this.getErrorMessage(error)}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
-        this.wechatAccessTokenCache = {
-          token: data.access_token,
-          expireAt: now + Math.max(60, Number(data.expires_in || 7200) - 300) * 1000,
-        };
-        return data.access_token;
-      } catch (error) {
-        lastError = error;
-        if (!this.isTransientWechatApiError(error) || attempt >= maxAttempts) {
-          throw error;
-        }
-        this.logger.warn(
-          `获取微信 access_token 失败，准备重试 (${attempt}/${maxAttempts}): ${this.getErrorMessage(error)}`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+      }
+      if (lastError && !this.isTransientWechatApiError(lastError)) {
+        throw lastError;
+      }
+      if (tokenUrl !== tokenUrls[tokenUrls.length - 1]) {
+        this.logger.warn(`获取微信 access_token 失败，尝试备用线路: ${this.getErrorMessage(lastError)}`);
       }
     }
 

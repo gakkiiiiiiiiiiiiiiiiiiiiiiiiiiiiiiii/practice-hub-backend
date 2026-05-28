@@ -13,7 +13,8 @@
  *   node scripts/upload-xpay-goods.js --remote --course-id=92 --refresh-token
  *   node scripts/upload-xpay-goods.js --remote --from-course-id=39
  *   node scripts/upload-xpay-goods.js --remote --from-course-id=105 --delay-ms=5000
- *   node scripts/upload-xpay-goods.js --remote --product-ids=course_105,activation_code_105
+ *   node scripts/upload-xpay-goods.js --remote --type=coin --price-yuan=4.50
+ *   node scripts/upload-xpay-goods.js --remote --product-ids=coin_recharge --price-yuan=4.50
  *   node scripts/upload-xpay-goods.js --remote --only-failed-log=test-files/xpay-retry-from-105.log
  *   node scripts/upload-xpay-goods.js --remote --product-ids-file=test-files/xpay-failed-ids.txt
  */
@@ -54,7 +55,7 @@ function parseFailedIdsFromLog(logPath) {
 	const content = fs.readFileSync(logPath, 'utf8');
 	const ids = new Set();
 	for (const line of content.split('\n')) {
-		const match = line.match(/^\s*✗\s+(course_\d+|activation_code_\d+|package_\d+)\s+失败/);
+		const match = line.match(/^\s*✗\s+(course_\d+|activation_code_\d+|package_\d+|coin_recharge)\s+失败/);
 		if (match) {
 			ids.add(match[1]);
 		}
@@ -70,7 +71,7 @@ function loadProductIdsFromFile(filePath) {
 		.readFileSync(filePath, 'utf8')
 		.split(/[\s,]+/)
 		.map((item) => item.trim())
-		.filter((item) => /^course_\d+$/.test(item) || /^activation_code_\d+$/.test(item) || /^package_\d+$/.test(item));
+		.filter((item) => /^course_\d+$/.test(item) || /^activation_code_\d+$/.test(item) || /^package_\d+$/.test(item) || item === 'coin_recharge');
 }
 
 function getRequiredEnv(keys, label) {
@@ -342,6 +343,24 @@ function buildPackageGoodsItem(plan, defaultItemUrl) {
 	};
 }
 
+function buildCoinGoodsItem(defaultItemUrl, priceYuan, productId = 'coin_recharge') {
+	const priceCents = Math.max(1, yuanToCents(priceYuan));
+	const itemUrl = normalizeUrl(defaultItemUrl);
+	if (!itemUrl || !itemUrl.includes('virtual-pay-goods-cover')) {
+		throw new Error(
+			`缺少 virtual-pay-goods-cover 商品图 URL，请配置 WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL 或上传 images/virtual-pay-goods-cover.png 到 COS`,
+		);
+	}
+	return {
+		id: productId,
+		name: buildVirtualPayGoodsName('学习代币', '充值', 0),
+		price: priceCents,
+		priceYuan: Number(priceYuan || 0),
+		remark: buildVirtualPayGoodsRemark('代币', '充值'),
+		item_url: itemUrl,
+	};
+}
+
 function buildGoodsItems(course, type, defaultItemUrl) {
 	const priceYuan = type === 'activation' ? course.agent_price || course.price : course.price;
 	const priceCents = Math.max(1, yuanToCents(priceYuan));
@@ -399,8 +418,11 @@ async function main() {
 	const delayMs = Math.max(0, Number(getArg('delay-ms', '2500')) || 2500);
 	const continueOnError = !process.argv.includes('--fail-fast');
 
-	if (!['all', 'course', 'activation', 'package'].includes(type)) {
-		throw new Error('--type 只能是 all、course、activation 或 package');
+	const priceYuan = getArg('price-yuan', '1');
+	const coinProductId = process.env.WECHAT_VIRTUAL_PAY_COIN_PRODUCT_ID || 'coin_recharge';
+
+	if (!['all', 'course', 'activation', 'package', 'coin'].includes(type)) {
+		throw new Error('--type 只能是 all、course、activation、package 或 coin');
 	}
 
 	const appId = getRequiredEnv(['WECHAT_APPID', 'AppID'], '小程序 AppID');
@@ -436,8 +458,8 @@ async function main() {
 		throw new Error('缺少数据库配置');
 	}
 
-	const courses = type === 'package' ? [] : await getCourses(dbConfig, { courseId, fromCourseId });
-	const packagePlans = type === 'course' || type === 'activation' ? [] : await getPackagePlans(dbConfig, { planId });
+	const courses = type === 'package' || type === 'coin' ? [] : await getCourses(dbConfig, { courseId, fromCourseId });
+	const packagePlans = type === 'course' || type === 'activation' || type === 'coin' ? [] : await getPackagePlans(dbConfig, { planId });
 	const scopedCourses = limit > 0 ? courses.slice(0, limit) : courses;
 	const scopedPlans = limit > 0 ? packagePlans.slice(0, limit) : packagePlans;
 	const defaultItemUrl = normalizeUrl(configuredDefaultItemUrl);
@@ -452,7 +474,11 @@ async function main() {
 		return items;
 	});
 	const packageGoods = scopedPlans.map((plan) => buildPackageGoodsItem(plan, defaultItemUrl));
-	const goods = [...courseGoods, ...packageGoods];
+	const coinGoods =
+		type === 'coin'
+			? [buildCoinGoodsItem(defaultItemUrl, priceYuan, coinProductId)]
+			: [];
+	const goods = [...courseGoods, ...packageGoods, ...coinGoods];
 
 	const targetGoods =
 		productIds.length > 0 ? goods.filter((item) => productIds.includes(item.id)) : goods;

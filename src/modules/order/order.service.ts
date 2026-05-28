@@ -264,7 +264,12 @@ export class OrderService {
     order.pay_payload = { coin_purchase: coinPurchase };
     await this.orderRepository.save(order);
 
-    await this.virtualPayGoodsService.prepareCoinRechargeForPayment(coinPurchase.recharge_amount);
+    const coinGoodsReady = await this.virtualPayGoodsService.prepareCoinRechargeForPayment(
+      coinPurchase.recharge_amount,
+    );
+    if (!coinGoodsReady) {
+      throw new BadRequestException('支付准备失败，微信充值道具价格同步未成功，请稍后重试');
+    }
 
     const paymentParams = await this.createVirtualPaymentParams({
       user,
