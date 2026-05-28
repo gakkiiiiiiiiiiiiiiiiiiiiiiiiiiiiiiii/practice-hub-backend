@@ -140,7 +140,7 @@ export class PackageService {
 			relations: ['scopes', 'plans'],
 			order: { sort: 'ASC', id: 'DESC' },
 		});
-		return sections.map((section) => this.formatSection(section));
+		return Promise.all(sections.map((section) => this.formatSection(section)));
 	}
 
 	async adminGetSection(id: number) {
@@ -251,12 +251,62 @@ export class PackageService {
 		}
 	}
 
-	private formatSection(section: PackageSection) {
+	private async resolveScopeCategoryLabels(scopes: PackageSectionScope[] = []) {
+		const labels: string[] = [];
+		const seen = new Set<string>();
+		const pushLabel = (label: string) => {
+			const normalized = String(label || '').trim();
+			if (!normalized || seen.has(normalized)) return;
+			seen.add(normalized);
+			labels.push(normalized);
+		};
+
+		const courseIds = scopes
+			.filter((scope) => scope.scope_type === PackageScopeType.COURSE)
+			.map((scope) => Number(scope.scope_value))
+			.filter((id) => Number.isInteger(id) && id > 0);
+		const courseMap = new Map<number, Course>();
+		if (courseIds.length > 0) {
+			const courses = await this.courseRepository.find({ where: { id: In(courseIds) } });
+			courses.forEach((course) => courseMap.set(course.id, course));
+		}
+
+		for (const scope of scopes) {
+			const value = String(scope.scope_value || '').trim();
+			if (!value) continue;
+			if (scope.scope_type === PackageScopeType.CATEGORY) {
+				pushLabel(value);
+				continue;
+			}
+			if (scope.scope_type === PackageScopeType.SUB_CATEGORY) {
+				pushLabel(value);
+				continue;
+			}
+			if (scope.scope_type === PackageScopeType.COURSE) {
+				const course = courseMap.get(Number(value));
+				if (!course) continue;
+				if (course.category && course.sub_category) {
+					pushLabel(`${course.category} · ${course.sub_category}`);
+				} else if (course.category) {
+					pushLabel(course.category);
+				} else if (course.sub_category) {
+					pushLabel(course.sub_category);
+				}
+			}
+		}
+
+		return labels;
+	}
+
+	private async formatSection(section: PackageSection) {
+		const scopeCategoryLabels = await this.resolveScopeCategoryLabels(section.scopes || []);
 		return {
 			id: section.id,
 			name: section.name,
 			description: section.description,
 			coverImg: section.cover_img,
+			coverFallbackText: scopeCategoryLabels.join('、'),
+			scopeCategoryLabels,
 			status: section.status,
 			sort: section.sort,
 			scopes: (section.scopes || []).map((scope) => ({
@@ -295,31 +345,35 @@ export class PackageService {
 			subscriptionMap = new Map(subscriptions.map((item) => [item.section_id, item]));
 		}
 
-		return matchedSections.map((section) => {
-			const subscription = subscriptionMap.get(section.id);
-			const active = subscription && subscription.expire_time > new Date();
-			const plans = (section.plans || [])
-				.filter((plan) => plan.status === 1)
-				.sort((a, b) => a.sort - b.sort)
-				.map((plan) => ({
-					id: plan.id,
-					planType: plan.plan_type,
-					name: plan.name,
-					price: Number(plan.price),
-					durationDays: plan.duration_days,
-				}));
-			const minPrice = plans.length ? Math.min(...plans.map((plan) => plan.price)) : 0;
-			return {
-				id: section.id,
-				name: section.name,
-				description: section.description,
-				coverImg: section.cover_img,
-				plans,
-				minPrice,
-				subscribed: !!active,
-				expireTime: active ? subscription?.expire_time : null,
-			};
-		});
+		return Promise.all(
+			matchedSections.map(async (section) => {
+				const subscription = subscriptionMap.get(section.id);
+				const active = subscription && subscription.expire_time > new Date();
+				const plans = (section.plans || [])
+					.filter((plan) => plan.status === 1)
+					.sort((a, b) => a.sort - b.sort)
+					.map((plan) => ({
+						id: plan.id,
+						planType: plan.plan_type,
+						name: plan.name,
+						price: Number(plan.price),
+						durationDays: plan.duration_days,
+					}));
+				const minPrice = plans.length ? Math.min(...plans.map((plan) => plan.price)) : 0;
+				const scopeCategoryLabels = await this.resolveScopeCategoryLabels(section.scopes || []);
+				return {
+					id: section.id,
+					name: section.name,
+					description: section.description,
+					coverImg: section.cover_img,
+					coverFallbackText: scopeCategoryLabels.join('、'),
+					plans,
+					minPrice,
+					subscribed: !!active,
+					expireTime: active ? subscription?.expire_time : null,
+				};
+			}),
+		);
 	}
 
 	async getAppSectionList(userId?: number) {
@@ -334,28 +388,32 @@ export class PackageService {
 			subscriptionMap = new Map(subscriptions.map((item) => [item.section_id, item]));
 		}
 
-		return sections.map((section) => {
-			const subscription = subscriptionMap.get(section.id);
-			const active = subscription && subscription.expire_time > new Date();
-			return {
-				id: section.id,
-				name: section.name,
-				description: section.description,
-				coverImg: section.cover_img,
-				plans: (section.plans || [])
-					.filter((plan) => plan.status === 1)
-					.sort((a, b) => a.sort - b.sort)
-					.map((plan) => ({
-						id: plan.id,
-						planType: plan.plan_type,
-						name: plan.name,
-						price: Number(plan.price),
-						durationDays: plan.duration_days,
-					})),
-				subscribed: !!active,
-				expireTime: active ? subscription?.expire_time : null,
-			};
-		});
+		return Promise.all(
+			sections.map(async (section) => {
+				const subscription = subscriptionMap.get(section.id);
+				const active = subscription && subscription.expire_time > new Date();
+				const scopeCategoryLabels = await this.resolveScopeCategoryLabels(section.scopes || []);
+				return {
+					id: section.id,
+					name: section.name,
+					description: section.description,
+					coverImg: section.cover_img,
+					coverFallbackText: scopeCategoryLabels.join('、'),
+					plans: (section.plans || [])
+						.filter((plan) => plan.status === 1)
+						.sort((a, b) => a.sort - b.sort)
+						.map((plan) => ({
+							id: plan.id,
+							planType: plan.plan_type,
+							name: plan.name,
+							price: Number(plan.price),
+							durationDays: plan.duration_days,
+						})),
+					subscribed: !!active,
+					expireTime: active ? subscription?.expire_time : null,
+				};
+			}),
+		);
 	}
 
 	async getAppSectionDetail(sectionId: number, userId?: number) {
@@ -396,7 +454,7 @@ export class PackageService {
 		const active = subscription && subscription.expire_time > new Date();
 
 		return {
-			...this.formatSection(section),
+			...(await this.formatSection(section)),
 			courses: Array.from(courseMap.values()).map((course) => ({
 				id: course.id,
 				name: course.name,
