@@ -48,7 +48,7 @@
 		"fix:foreign-key": "node scripts/fix-chapter-foreign-key.js",
 		"fix:foreign-key:remote": "node scripts/fix-chapter-foreign-key.js --remote",
 		"parse:pdf": "ts-node -r tsconfig-paths/register scripts/parse-pdf-to-excel.ts",
-		"process-pdf:server": "node dist/src/modules/process-pdf/server.js"
+		"process-pdf:server": "node dist/modules/process-pdf/server.js"
 	},
 	"dependencies": {
 		"@nestjs/common": "^10.3.0",

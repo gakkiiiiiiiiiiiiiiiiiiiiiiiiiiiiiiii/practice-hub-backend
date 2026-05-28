@@ -71,8 +71,8 @@ ENV NODE_ENV=production
 ENV PORT=8080
 
 # 健康检查（微信云托管会使用此检查服务状态）
-HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:8080/api', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
+HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
+  CMD node -e "require('http').get('http://127.0.0.1:8080/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)}).on('error', () => process.exit(1))"
 
-# 启动应用
+# 启动应用（须与 nest build 产物路径一致）
 CMD ["node", "dist/main.js"]

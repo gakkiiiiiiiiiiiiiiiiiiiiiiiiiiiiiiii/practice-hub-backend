@@ -7,7 +7,8 @@ import * as express from 'express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-	const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+	try {
+		const app = await NestFactory.create<NestExpressApplication>(AppModule, {
 		bodyParser: false, // 自行配置以增大 JSON/urlencoded 限制
 	});
 	// 提高请求体大小限制：JSON/表单 50mb；文件上传由各接口 Multer 限制（如 process-pdf 为 50mb）
@@ -91,6 +92,13 @@ async function bootstrap() {
 	await app.listen(port, '0.0.0.0');
 	console.log(`🚀 服务启动成功: http://0.0.0.0:${port}`);
 	console.log(`📚 API 文档: http://0.0.0.0:${port}/api-docs`);
+	} catch (error) {
+		console.error('服务启动失败:', error);
+		process.exit(1);
+	}
 }
 
-bootstrap();
+bootstrap().catch((error) => {
+	console.error('bootstrap 未捕获异常:', error);
+	process.exit(1);
+});
