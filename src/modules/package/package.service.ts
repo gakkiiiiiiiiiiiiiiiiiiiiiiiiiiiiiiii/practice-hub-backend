@@ -412,12 +412,15 @@ export class PackageService {
 					}));
 				const minPrice = plans.length ? Math.min(...plans.map((plan) => plan.price)) : 0;
 				const scopeCategoryLabels = await this.resolveScopeCategoryLabels(section.scopes || []);
+				const coversAllCourses = this.sectionHasAllCoursesScope(section.scopes || []);
 				return {
 					id: section.id,
 					name: section.name,
 					description: section.description,
 					coverImg: section.cover_img,
 					coverFallbackText: scopeCategoryLabels.join('、'),
+					coversAllCourses,
+					isVip: coversAllCourses,
 					plans,
 					minPrice,
 					subscribed: !!active,
