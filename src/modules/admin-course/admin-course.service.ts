@@ -22,6 +22,7 @@ import { CourseService } from '../course/course.service';
 import { CourseFileService, CourseFileInput } from '../course/course-file.service';
 import { AdminRole } from '../../database/entities/sys-user.entity';
 import { VirtualPayGoodsService } from '../order/virtual-pay-goods.service';
+import { queryWithRetry } from '../../common/utils/database-retry';
 
 class PreviewCacheTaskInterruptedError extends Error {
   constructor() {
@@ -1020,6 +1021,39 @@ export class AdminCourseService {
   }
 
   /**
+   * 下拉选项：仅返回必要字段，避免拉取 introduction 等大字段
+   */
+  async getCourseOptions(filters?: { name?: string; status?: number }) {
+    const queryBuilder = this.courseRepository
+      .createQueryBuilder('course')
+      .select([
+        'course.id',
+        'course.name',
+        'course.status',
+        'course.category',
+        'course.sub_category',
+        'course.price',
+        'course.is_free',
+      ]);
+
+    if (filters?.name?.trim()) {
+      queryBuilder.andWhere('course.name LIKE :name', { name: `%${filters.name.trim()}%` });
+    }
+    if (filters?.status !== undefined && filters?.status !== null && !Number.isNaN(filters.status)) {
+      queryBuilder.andWhere('course.status = :status', { status: filters.status });
+    }
+
+    return queryWithRetry(
+      () =>
+        queryBuilder
+          .orderBy('course.sort', 'ASC')
+          .addOrderBy('course.id', 'ASC')
+          .getMany(),
+      { action: '获取课程选项', logger: this.logger },
+    );
+  }
+
+  /**
    * 获取课程列表
    */
   async getCourseList(filters?: {
@@ -1029,7 +1063,34 @@ export class AdminCourseService {
     subCategory?: string;
     status?: number;
   }) {
-    const queryBuilder = this.courseRepository.createQueryBuilder('course');
+    const queryBuilder = this.courseRepository.createQueryBuilder('course').select([
+      'course.id',
+      'course.name',
+      'course.subject',
+      'course.category',
+      'course.sub_category',
+      'course.school',
+      'course.major',
+      'course.exam_year',
+      'course.answer_year',
+      'course.cover_img',
+      'course.price',
+      'course.agent_price',
+      'course.is_free',
+      'course.validity_days',
+      'course.student_count',
+      'course.sort',
+      'course.status',
+      'course.content_type',
+      'course.file_name',
+      'course.file_type',
+      'course.file_size',
+      'course.file_page_count',
+      'course.allow_source_file',
+      'course.recommended_course_ids',
+      'course.create_time',
+      'course.update_time',
+    ]);
 
     if (filters?.name?.trim()) {
       queryBuilder.andWhere('course.name LIKE :name', { name: `%${filters.name.trim()}%` });
@@ -1047,10 +1108,14 @@ export class AdminCourseService {
       queryBuilder.andWhere('course.status = :status', { status: filters.status });
     }
 
-    return await queryBuilder
-      .orderBy('course.sort', 'ASC')
-      .addOrderBy('course.id', 'ASC')
-      .getMany();
+    return queryWithRetry(
+      () =>
+        queryBuilder
+          .orderBy('course.sort', 'ASC')
+          .addOrderBy('course.id', 'ASC')
+          .getMany(),
+      { action: '获取课程列表', logger: this.logger },
+    );
   }
 
   /**

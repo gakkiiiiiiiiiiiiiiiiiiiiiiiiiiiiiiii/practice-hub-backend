@@ -87,6 +87,19 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Get('options')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN, AdminRole.AGENT)
+	@ApiOperation({ summary: '获取课程下拉选项（轻量）' })
+	async getCourseOptions(@Query('name') name?: string, @Query('status') status?: string) {
+		const parsedStatus =
+			status !== undefined && status !== '' ? Number(status) : undefined;
+		const result = await this.adminCourseService.getCourseOptions({
+			name,
+			status: parsedStatus !== undefined && !Number.isNaN(parsedStatus) ? parsedStatus : undefined,
+		});
+		return CommonResponseDto.success(result);
+	}
+
 	@Get()
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN, AdminRole.AGENT)
 	@ApiOperation({ summary: '获取课程列表' })

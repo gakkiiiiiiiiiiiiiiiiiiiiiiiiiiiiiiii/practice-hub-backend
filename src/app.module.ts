@@ -59,7 +59,7 @@ import { AdminPackageModule } from './modules/admin-package/admin-package.module
 				const nodeEnv = configService.get('NODE_ENV', 'development');
 				const dbConnectionLimit = configService.get<number>('DB_CONNECTION_LIMIT', 10);
 				const dbMaxIdle = configService.get<number>('DB_MAX_IDLE', Math.max(1, Math.floor(dbConnectionLimit / 2)));
-				const dbIdleTimeout = configService.get<number>('DB_IDLE_TIMEOUT', 60000);
+				const dbIdleTimeout = configService.get<number>('DB_IDLE_TIMEOUT', 30000);
 
 				// 安全：不在日志中打印敏感信息（如密码）
 				console.log(`[数据库配置] 连接地址: ${dbHost}:${dbPort}, 数据库: ${dbDatabase}`);
@@ -90,7 +90,7 @@ import { AdminPackageModule } from './modules/admin-package/admin-package.module
 						connectTimeout: 60000, // 连接超时时间（毫秒）
 						// 启用 keep-alive，保持连接活跃
 						enableKeepAlive: true,
-						keepAliveInitialDelay: 10000,
+						keepAliveInitialDelay: 0,
 						// 注意：acquireTimeout / timeout / maxLifetime 为 TypeORM 池级选项，mysql2 Connection 不支持，已移除
 					},
 				};
