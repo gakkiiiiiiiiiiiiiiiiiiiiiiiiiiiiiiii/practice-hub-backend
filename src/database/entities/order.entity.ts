@@ -28,8 +28,26 @@ export class Order {
 	})
 	status: OrderStatus;
 
-	@Column()
-	course_id: number; // 从 subject_id 改为 course_id
+	@Column({ nullable: true })
+	course_id: number | null;
+
+	@Column({ type: 'varchar', length: 20, default: 'course' })
+	order_type: 'course' | 'package';
+
+	@Column({ nullable: true })
+	package_section_id: number | null;
+
+	@Column({ nullable: true })
+	package_plan_id: number | null;
+
+	@Column({ nullable: true })
+	coupon_id: number | null;
+
+	@Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+	discount_amount: number;
+
+	@Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
+	original_amount: number | null;
 
 	@Column({ length: 30, nullable: true })
 	pay_provider: string | null;

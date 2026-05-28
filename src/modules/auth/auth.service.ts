@@ -5,11 +5,16 @@ import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import axios from 'axios';
 import * as https from 'https';
+import { randomUUID } from 'crypto';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { SysUser } from '../../database/entities/sys-user.entity';
 import { ConfigService } from '@nestjs/config';
 import { DistributorService } from '../distributor/distributor.service';
 import { SystemRoleService } from '../system-role/system-role.service';
+import { AppUserSessionService } from './app-user-session.service';
+import { AppRegisterDto } from './dto/app-register.dto';
+import { AppPasswordLoginDto } from './dto/app-password-login.dto';
+import { ReferralCouponService } from '../marketing/referral-coupon.service';
 
 @Injectable()
 export class AuthService {
@@ -25,12 +30,14 @@ export class AuthService {
 		private distributorService: DistributorService,
 		@Inject(forwardRef(() => SystemRoleService))
 		private systemRoleService: SystemRoleService,
+		private appUserSessionService: AppUserSessionService,
+		private referralCouponService: ReferralCouponService,
 	) {}
 
 	/**
 	 * 小程序端 - 微信一键登录
 	 */
-	async appLogin(code: string, distributorCode?: string, profile?: { nickname?: string; avatar?: string }) {
+	async appLogin(code: string, distributorCode?: string, profile?: { nickname?: string; avatar?: string }, referralUserId?: number) {
 		if (!code) {
 			throw new BadRequestException('code 不能为空');
 		}
@@ -134,28 +141,21 @@ export class AuthService {
 				}
 			}
 
+			if (isNewUser && referralUserId) {
+				try {
+					await this.referralCouponService.bindReferralOnRegister(user.id, referralUserId);
+				} catch (error) {
+					console.warn('绑定拉新关系失败:', error.message);
+				}
+			}
+
 			// 生成 Token
-			const token = this.jwtService.sign({
-					userId: user.id,
-					openid: user.openid,
-					role: user.role || AppUserRole.USER,
-					type: 'app',
-				});
+			const token = this.issueAppToken(user);
 
 			return {
 				token,
-				user: {
-					id: user.id,
-					openid: user.openid,
-					nickname: user.nickname,
-						avatar: user.avatar,
-						phone: user.phone,
-						vip_expire_time: user.vip_expire_time,
-						role: user.role || AppUserRole.USER,
-						is_admin: user.role === AppUserRole.ADMIN,
-						is_bank_admin: user.role === AppUserRole.BANK_ADMIN,
-					},
-				};
+				user: this.buildAppUserResponse(user),
+			};
 		} catch (error) {
 			// 如果是已定义的异常，直接抛出
 			if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
@@ -190,6 +190,7 @@ export class AuthService {
 		phoneCode: string,
 		distributorCode?: string,
 		profile?: { nickname?: string; avatar?: string },
+		referralUserId?: number,
 	) {
 		if (!loginCode) {
 			throw new BadRequestException('loginCode 不能为空');
@@ -244,26 +245,19 @@ export class AuthService {
 				}
 			}
 
-			const token = this.jwtService.sign({
-				userId: user.id,
-				openid: user.openid,
-				role: user.role || AppUserRole.USER,
-				type: 'app',
-			});
+			if (isNewUser && referralUserId) {
+				try {
+					await this.referralCouponService.bindReferralOnRegister(user.id, referralUserId);
+				} catch (error) {
+					console.warn('绑定拉新关系失败:', error.message);
+				}
+			}
+
+			const token = this.issueAppToken(user);
 
 			return {
 				token,
-				user: {
-					id: user.id,
-					openid: user.openid,
-					nickname: user.nickname,
-					avatar: user.avatar,
-					phone: user.phone,
-					vip_expire_time: user.vip_expire_time,
-					role: user.role || AppUserRole.USER,
-					is_admin: user.role === AppUserRole.ADMIN,
-					is_bank_admin: user.role === AppUserRole.BANK_ADMIN,
-				},
+				user: this.buildAppUserResponse(user),
 			};
 		} catch (error) {
 			if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
@@ -388,6 +382,145 @@ export class AuthService {
 
 	private normalizeOptionalString(value?: string): string {
 		return String(value || '').trim();
+	}
+
+	parseReferralUserIdPublic(value?: string | number | null) {
+		return this.parseReferralUserId(value);
+	}
+
+	private parseReferralUserId(value?: string | number | null) {
+		const parsed = Number(value);
+		if (!Number.isInteger(parsed) || parsed <= 0) {
+			return null;
+		}
+		return parsed;
+	}
+
+	/**
+	 * 小程序端 - 账号注册（注册后自动登录）
+	 */
+	async appRegister(dto: AppRegisterDto) {
+		const username = dto.username.trim().toLowerCase();
+		const existing = await this.appUserRepository.findOne({ where: { username } });
+		if (existing) {
+			throw new BadRequestException('用户名已被占用');
+		}
+
+		const passwordHash = await bcrypt.hash(dto.password, 10);
+		const user = this.appUserRepository.create({
+			openid: `acct_${randomUUID()}`,
+			username,
+			password_hash: passwordHash,
+			nickname: this.normalizeOptionalString(dto.nickname) || username,
+			avatar: null,
+			role: AppUserRole.USER,
+		});
+		await this.appUserRepository.save(user);
+
+		const referralUserId = this.parseReferralUserId(dto.referral_user_id);
+		if (referralUserId) {
+			try {
+				await this.referralCouponService.bindReferralOnRegister(user.id, referralUserId);
+			} catch (error) {
+				console.warn('绑定拉新关系失败:', error.message);
+			}
+		}
+
+		const sessionId = await this.appUserSessionService.createPasswordSession(
+			user.id,
+			dto.device_id,
+			dto.device_name,
+			dto.platform,
+		);
+
+		const token = this.issueAppToken(user, {
+			authMethod: 'password',
+			sessionId,
+		});
+
+		return {
+			token,
+			user: this.buildAppUserResponse(user),
+		};
+	}
+
+	/**
+	 * 小程序端 - 账号密码登录（最多3台设备同时在线）
+	 */
+	async appPasswordLogin(dto: AppPasswordLoginDto) {
+		const username = dto.username.trim().toLowerCase();
+		const user = await this.appUserRepository.findOne({ where: { username } });
+		if (!user || !user.password_hash) {
+			throw new UnauthorizedException('用户名或密码错误');
+		}
+
+		const isPasswordValid = await bcrypt.compare(dto.password, user.password_hash);
+		if (!isPasswordValid) {
+			throw new UnauthorizedException('用户名或密码错误');
+		}
+
+		const sessionId = await this.appUserSessionService.createPasswordSession(
+			user.id,
+			dto.device_id,
+			dto.device_name,
+			dto.platform,
+		);
+
+		const token = this.issueAppToken(user, {
+			authMethod: 'password',
+			sessionId,
+		});
+
+		return {
+			token,
+			user: this.buildAppUserResponse(user),
+		};
+	}
+
+	/**
+	 * 小程序端 - 账号登录退出（仅撤销当前设备会话）
+	 */
+	async appLogout(userId: number, sessionId?: string) {
+		if (sessionId) {
+			await this.appUserSessionService.revokeSession(sessionId, userId);
+		}
+		return { success: true };
+	}
+
+	private issueAppToken(
+		user: AppUser,
+		options?: {
+			authMethod?: 'password' | 'wechat';
+			sessionId?: string;
+		},
+	) {
+		const payload: Record<string, unknown> = {
+			userId: user.id,
+			openid: user.openid,
+			role: user.role || AppUserRole.USER,
+			type: 'app',
+		};
+		if (options?.authMethod === 'password' && options.sessionId) {
+			payload.authMethod = 'password';
+			payload.sessionId = options.sessionId;
+		}
+		return this.jwtService.sign(payload);
+	}
+
+	private buildAppUserResponse(user: AppUser) {
+		return {
+			id: user.id,
+			openid: user.openid,
+			username: user.username || null,
+			nickname: user.nickname,
+			avatar: user.avatar,
+			phone: user.phone,
+			package_expire_time: user.package_expire_time,
+			role: user.role || AppUserRole.USER,
+			is_admin: user.role === AppUserRole.ADMIN,
+			is_bank_admin: user.role === AppUserRole.BANK_ADMIN,
+			has_password: !!user.password_hash,
+		};
 	}
 
 	/**

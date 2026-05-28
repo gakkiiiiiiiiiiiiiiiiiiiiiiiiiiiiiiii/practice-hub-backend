@@ -19,6 +19,7 @@ import { UserCourseAuth } from '../../database/entities/user-course-auth.entity'
 import { CourseRecommendation } from '../../database/entities/course-recommendation.entity';
 import { UserFileCourseProgress } from '../../database/entities/user-file-course-progress.entity';
 import { UploadService } from '../upload/upload.service';
+import { PackageService } from '../package/package.service';
 
 const execFileAsync = promisify(execFile);
 const PREVIEW_IMAGE_WIDTH = 1440;
@@ -93,6 +94,7 @@ export class CourseService {
     private jwtService: JwtService,
     private uploadService: UploadService,
     private courseFileService: CourseFileService,
+    private packageService: PackageService,
   ) {}
 
   /**
@@ -202,6 +204,9 @@ export class CourseService {
       '获取课程章节列表',
     );
 
+    if (course.content_type === 'file') {
+      await this.courseFileService.ensureFromLegacyCourse(course);
+    }
     const courseFiles =
       course.content_type === 'file'
         ? (await this.courseFileService.listByCourseId(courseId)).map((file) =>
@@ -216,17 +221,24 @@ export class CourseService {
     const needPreviewUrl =
       isFileCourse && !hasAuth && price > 0 && (fileType === 'pdf' || fileType === 'doc' || fileType === 'docx');
 
+    const relatedPackageSections =
+      !hasAuth && price > 0 && course.is_free !== 1
+        ? await this.packageService.getRelatedSectionsForCourse(course, userId)
+        : [];
+
     return {
       ...course,
       files: courseFiles,
       file_url: allowSourceFile ? primaryFile?.file_url || course.file_url : null,
       file_name: primaryFile?.file_name || course.file_name,
+      file_display_name: primaryFile?.display_name || null,
       file_type: primaryFile?.file_type || course.file_type,
       file_size: primaryFile?.file_size ?? course.file_size,
       allow_source_file: allowSourceFile ? 1 : 0,
       chapters,
       hasAuth,
       expireTime,
+      relatedPackageSections,
       /** 付费未购买时，试读用：PDF 为前 3 页地址，Word 暂不提供试读 */
       file_preview_url:
         needPreviewUrl && fileType === 'pdf'
@@ -263,7 +275,7 @@ export class CourseService {
     return {
       url: courseFile.file_url,
       fileType,
-      fileName: courseFile.file_name || courseFile.display_name || `course.${fileType}`,
+      fileName: courseFile.display_name || courseFile.file_name || `course.${fileType}`,
       fileId: courseFile.id,
     };
   }
@@ -294,6 +306,9 @@ export class CourseService {
       if (auth) {
         hasAuth = !auth.expire_time || auth.expire_time > new Date();
         expireTime = auth.expire_time;
+      }
+      if (!hasAuth) {
+        hasAuth = await this.packageService.userHasCourseAccessViaPackage(userId, course);
       }
     }
 

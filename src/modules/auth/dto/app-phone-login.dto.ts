@@ -17,6 +17,11 @@ export class AppPhoneLoginDto {
   @IsString()
   distributor_code?: string;
 
+  @ApiProperty({ description: '邀请人用户ID（拉新活动）', required: false })
+  @IsOptional()
+  @IsString()
+  referral_user_id?: string;
+
   @ApiProperty({ description: '微信昵称', required: false })
   @IsOptional()
   @IsString()

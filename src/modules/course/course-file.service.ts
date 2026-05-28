@@ -22,6 +22,29 @@ export class CourseFileService {
     private readonly courseRepository: Repository<Course>,
   ) {}
 
+  stripFileExtension(name?: string | null): string {
+    const base = String(name || '').trim();
+    return base.replace(/\.(pdf|docx?)$/i, '') || base;
+  }
+
+  async ensureFromLegacyCourse(
+    course: Pick<Course, 'id' | 'content_type' | 'file_url' | 'file_name' | 'file_type' | 'file_size' | 'name'>,
+  ): Promise<void> {
+    if (course.content_type !== 'file') return;
+    const files = await this.listByCourseId(course.id);
+    if (files.length > 0) return;
+    const fileUrl = String(course.file_url || '').trim();
+    if (!fileUrl) return;
+    await this.create(course.id, {
+      display_name: this.stripFileExtension(course.file_name) || course.name || '课程文件',
+      file_url: fileUrl,
+      file_name: course.file_name,
+      file_type: (course.file_type || 'pdf').toLowerCase(),
+      file_size: Number(course.file_size || 0),
+      sort: 0,
+    });
+  }
+
   async listByCourseId(courseId: number): Promise<CourseFile[]> {
     return this.courseFileRepository.find({
       where: { course_id: courseId, status: 1 },

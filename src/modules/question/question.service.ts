@@ -9,6 +9,7 @@ import { UserWrongBook } from '../../database/entities/user-wrong-book.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
 import { BatchSubmitDto } from './dto/batch-submit.dto';
+import { PackageService } from '../package/package.service';
 
 @Injectable()
 export class QuestionService {
@@ -26,7 +27,8 @@ export class QuestionService {
 		private wrongBookRepository: Repository<UserWrongBook>,
 		@InjectRepository(UserCourseAuth)
 		private userCourseAuthRepository: Repository<UserCourseAuth>,
-		private dataSource: DataSource
+		private dataSource: DataSource,
+		private packageService: PackageService,
 	) {}
 
 	/**
@@ -635,7 +637,11 @@ export class QuestionService {
 		});
 
 		if (!auth) {
-			throw new ForbiddenException('请先购买课程或使用激活码');
+			const hasPackageAccess = await this.packageService.userHasCourseAccessViaPackage(userId, course);
+			if (!hasPackageAccess) {
+				throw new ForbiddenException('请先购买课程、购买套餐或使用激活码');
+			}
+			return;
 		}
 
 		// 检查是否过期

@@ -61,15 +61,17 @@ export class VirtualPayGoodsService {
     };
   }
 
-  getVirtualPayProductId(type: 'course' | 'activation_code', courseId?: number) {
+  getVirtualPayProductId(type: 'course' | 'activation_code' | 'package', resourceId?: number) {
     const specificKey =
       type === 'activation_code'
         ? 'WECHAT_VIRTUAL_PAY_ACTIVATION_PRODUCT_ID'
-        : 'WECHAT_VIRTUAL_PAY_COURSE_PRODUCT_ID';
+        : type === 'package'
+          ? 'WECHAT_VIRTUAL_PAY_PACKAGE_PRODUCT_ID'
+          : 'WECHAT_VIRTUAL_PAY_COURSE_PRODUCT_ID';
     const productId =
       this.configService.get<string>(specificKey) ||
       this.configService.get<string>('WECHAT_VIRTUAL_PAY_PRODUCT_ID') ||
-      (courseId ? `${type}_${courseId}` : '');
+      (resourceId ? `${type}_${resourceId}` : type === 'package' ? 'vip_default' : '');
 
     if (!productId) {
       throw new BadRequestException(`微信虚拟支付商品ID缺失，请配置 ${specificKey} 或 WECHAT_VIRTUAL_PAY_PRODUCT_ID`);

@@ -5,12 +5,16 @@ import { DatabaseModule } from '../../database/database.module';
 import { DistributorModule } from '../distributor/distributor.module';
 import { UploadModule } from '../upload/upload.module';
 import { VirtualPayGoodsService } from './virtual-pay-goods.service';
+import { MarketingModule } from '../marketing/marketing.module';
+import { PackageModule } from '../package/package.module';
 
 @Module({
   imports: [
     DatabaseModule,
     UploadModule,
     forwardRef(() => DistributorModule),
+    MarketingModule,
+    PackageModule,
   ],
   controllers: [OrderController, OrderPayNotifyController],
   providers: [OrderService, VirtualPayGoodsService],

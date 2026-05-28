@@ -22,19 +22,21 @@ export class UserService {
       throw new NotFoundException('用户不存在');
     }
 
-    const isVip = user.vip_expire_time && user.vip_expire_time > new Date();
+    const hasPackage = user.package_expire_time && user.package_expire_time > new Date();
 
     return {
       id: user.id,
       openid: user.openid,
+      username: user.username || null,
       nickname: user.nickname,
       avatar: user.avatar,
       phone: user.phone,
       role: user.role || AppUserRole.USER,
       is_admin: user.role === AppUserRole.ADMIN,
       is_bank_admin: user.role === AppUserRole.BANK_ADMIN,
-      isVip,
-      vip_expire_time: user.vip_expire_time,
+      has_password: !!user.password_hash,
+      hasPackage,
+      package_expire_time: user.package_expire_time,
     };
   }
 

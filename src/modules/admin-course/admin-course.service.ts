@@ -276,7 +276,7 @@ export class AdminCourseService {
     const fileUrl = String(course.file_url || '').trim();
     if (!fileUrl) return;
     await this.courseFileService.create(course.id, {
-      display_name: course.file_name || course.name,
+      display_name: this.courseFileService.stripFileExtension(course.file_name) || course.name || '课程文件',
       file_url: fileUrl,
       file_name: course.file_name,
       file_type: (course.file_type || 'pdf').toLowerCase(),

@@ -11,13 +11,17 @@ import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
 import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
 import { SetCheckinMinutesDto } from './dto/set-checkin-minutes.dto';
 import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
+import { ReferralCouponService } from '../marketing/referral-coupon.service';
 
 @ApiTags('系统管理')
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth()
 export class SystemController {
-  constructor(private readonly systemService: SystemService) {}
+  constructor(
+    private readonly systemService: SystemService,
+    private readonly referralCouponService: ReferralCouponService,
+  ) {}
 
   @Put('settings/countdown')
   @Roles(AdminRole.SUPER_ADMIN)
@@ -128,6 +132,31 @@ export class SystemController {
   @ApiOperation({ summary: '设置小程序常见问题配置' })
   async setFaqConfig(@Body() body: { items?: Array<{ question: string; answer: string }> }) {
     const result = await this.systemService.setFaqConfig(body?.items || []);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('settings/referral-coupon')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取拉新优惠券配置' })
+  async getReferralCouponConfig() {
+    const result = await this.referralCouponService.getConfig();
+    return CommonResponseDto.success(result);
+  }
+
+  @Put('settings/referral-coupon')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '设置拉新优惠券配置' })
+  async setReferralCouponConfig(
+    @Body()
+    body: {
+      enabled?: boolean;
+      invite_count_per_reward?: number;
+      coupon_amount?: number;
+      max_coupons_per_user?: number;
+      coupon_valid_days?: number | null;
+    },
+  ) {
+    const result = await this.referralCouponService.setConfig(body || {});
     return CommonResponseDto.success(result);
   }
 }

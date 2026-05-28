@@ -12,6 +12,8 @@ import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-
 import { CreateOrderDto } from './dto/create-order.dto';
 import { DistributorService } from '../distributor/distributor.service';
 import { VirtualPayGoodsService } from './virtual-pay-goods.service';
+import { ReferralCouponService } from '../marketing/referral-coupon.service';
+import { PackageService } from '../package/package.service';
 
 @Injectable()
 export class OrderService {
@@ -29,6 +31,8 @@ export class OrderService {
     @Inject(forwardRef(() => DistributorService))
     private distributorService: DistributorService,
     private virtualPayGoodsService: VirtualPayGoodsService,
+    private referralCouponService: ReferralCouponService,
+    private packageService: PackageService,
     private configService: ConfigService,
   ) {}
 
@@ -36,19 +40,46 @@ export class OrderService {
    * 创建预支付订单
    */
   async createOrder(userId: number, dto: CreateOrderDto) {
+    const orderType = dto.order_type || 'course';
+    if (orderType === 'package') {
+      return this.createPackageOrder(userId, dto);
+    }
+    return this.createCourseOrder(userId, dto);
+  }
+
+  private async createCourseOrder(userId: number, dto: CreateOrderDto) {
+    if (!dto.course_id) {
+      throw new BadRequestException('课程ID不能为空');
+    }
+
     const course = await this.courseRepository.findOne({ where: { id: dto.course_id } });
 
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
 
-    const amount = Number(course.price || 0);
+    const originalAmount = Number(course.price || 0);
+    let discountAmount = 0;
+    let couponId: number | null = null;
+
+    if (dto.coupon_id && originalAmount > 0) {
+      const couponResult = await this.referralCouponService.validateCouponForOrder(userId, dto.coupon_id, originalAmount);
+      discountAmount = couponResult.discount;
+      couponId = couponResult.coupon.id;
+    }
+
+    const amount = Math.max(0, Number((originalAmount - discountAmount).toFixed(2)));
+
     if (amount <= 0 || course.is_free === 1) {
       const freeOrder = this.orderRepository.create({
         order_no: this.generateOrderNo(),
         user_id: userId,
         course_id: dto.course_id,
+        order_type: 'course',
         amount: 0,
+        original_amount: originalAmount,
+        discount_amount: discountAmount,
+        coupon_id: couponId,
         status: OrderStatus.PENDING,
         pay_provider: 'free',
       });
@@ -59,6 +90,7 @@ export class OrderService {
         order_no: freeOrder.order_no,
         amount: freeOrder.amount,
         course_id: freeOrder.course_id,
+        order_type: 'course',
         status: OrderStatus.PAID,
         payment_params: null,
       };
@@ -69,21 +101,21 @@ export class OrderService {
       throw new NotFoundException('用户不存在');
     }
 
-    // 生成订单号
     const orderNo = this.generateOrderNo();
-
-    // 创建订单
     const order = this.orderRepository.create({
       order_no: orderNo,
       user_id: userId,
       course_id: dto.course_id,
+      order_type: 'course',
       amount,
+      original_amount: originalAmount,
+      discount_amount: discountAmount,
+      coupon_id: couponId,
       status: OrderStatus.PENDING,
       pay_provider: 'virtual_payment',
     });
 
     await this.orderRepository.save(order);
-
     await this.virtualPayGoodsService.prepareCourseGoodsForPayment(course);
 
     const paymentParams = await this.createVirtualPaymentParams({
@@ -105,6 +137,101 @@ export class OrderService {
       order_no: order.order_no,
       amount: order.amount,
       course_id: order.course_id,
+      order_type: order.order_type,
+      status: order.status,
+      payment_params: paymentParams.payment_params,
+      virtual_pay_sync: paymentParams.virtual_pay_sync,
+    };
+  }
+
+  private async createPackageOrder(userId: number, dto: CreateOrderDto) {
+    if (!dto.package_section_id || !dto.package_plan_id) {
+      throw new BadRequestException('套餐信息不能为空');
+    }
+
+    const plan = await this.packageService.getPlanForOrder(dto.package_section_id, dto.package_plan_id);
+    const originalAmount = Number(plan.price || 0);
+    let discountAmount = 0;
+    let couponId: number | null = null;
+
+    if (dto.coupon_id && originalAmount > 0) {
+      const couponResult = await this.referralCouponService.validateCouponForOrder(userId, dto.coupon_id, originalAmount);
+      discountAmount = couponResult.discount;
+      couponId = couponResult.coupon.id;
+    }
+
+    const amount = Math.max(0, Number((originalAmount - discountAmount).toFixed(2)));
+
+    if (amount <= 0) {
+      const freeOrder = this.orderRepository.create({
+        order_no: this.generateOrderNo(),
+        user_id: userId,
+        course_id: null,
+        order_type: 'package',
+        package_section_id: dto.package_section_id,
+        package_plan_id: dto.package_plan_id,
+        amount: 0,
+        original_amount: originalAmount,
+        discount_amount: discountAmount,
+        coupon_id: couponId,
+        status: OrderStatus.PENDING,
+        pay_provider: 'free',
+      });
+      await this.orderRepository.save(freeOrder);
+      await this.handlePaymentSuccess(freeOrder.id);
+      return {
+        order_no: freeOrder.order_no,
+        amount: freeOrder.amount,
+        order_type: 'package',
+        package_section_id: freeOrder.package_section_id,
+        package_plan_id: freeOrder.package_plan_id,
+        status: OrderStatus.PAID,
+        payment_params: null,
+      };
+    }
+
+    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    const order = this.orderRepository.create({
+      order_no: this.generateOrderNo(),
+      user_id: userId,
+      course_id: null,
+      order_type: 'package',
+      package_section_id: dto.package_section_id,
+      package_plan_id: dto.package_plan_id,
+      amount,
+      original_amount: originalAmount,
+      discount_amount: discountAmount,
+      coupon_id: couponId,
+      status: OrderStatus.PENDING,
+      pay_provider: 'virtual_payment',
+    });
+    await this.orderRepository.save(order);
+
+    const paymentParams = await this.createVirtualPaymentParams({
+      user,
+      order,
+      buyQuantity: 1,
+      productId: this.virtualPayGoodsService.getVirtualPayProductId('package', plan.id),
+      attachType: 'package',
+      goodsTitle: `${plan.section.name}-${plan.name}`,
+    });
+
+    order.pay_payload = {
+      virtual_payment: paymentParams.virtual_payment,
+      payment_params: paymentParams.payment_params,
+    };
+    await this.orderRepository.save(order);
+
+    return {
+      order_no: order.order_no,
+      amount: order.amount,
+      order_type: order.order_type,
+      package_section_id: order.package_section_id,
+      package_plan_id: order.package_plan_id,
       status: order.status,
       payment_params: paymentParams.payment_params,
       virtual_pay_sync: paymentParams.virtual_pay_sync,
@@ -127,13 +254,15 @@ export class OrderService {
     buyQuantity,
     productId,
     attachType = 'course',
+    goodsTitle,
   }: {
     user: AppUser;
-    course: Course;
+    course?: Course | null;
     order: Order;
     buyQuantity: number;
     productId: string;
     attachType?: string;
+    goodsTitle?: string;
   }) {
     const config = this.virtualPayGoodsService.getVirtualPayConfig();
     const amountInCents = Math.max(1, Math.round(Number(order.amount || 0) * 100));
@@ -142,6 +271,9 @@ export class OrderService {
       order_no: order.order_no,
       user_id: order.user_id,
       course_id: order.course_id,
+      package_section_id: order.package_section_id,
+      package_plan_id: order.package_plan_id,
+      goods_title: goodsTitle || course?.name || attachType,
     });
     const normalizedBuyQuantity = Math.max(1, Math.floor(Number(buyQuantity || 1)));
     const unitPriceInCents = Math.max(1, Math.round(amountInCents / normalizedBuyQuantity));
@@ -434,7 +566,22 @@ export class OrderService {
       return this.distributorService.fulfillActivationCodeOrder(order);
     }
 
+    if (order.order_type === 'package') {
+      await this.packageService.fulfillPackageOrder(order);
+      if (order.coupon_id) {
+        await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
+      }
+      return { message: '套餐订单支付成功' };
+    }
+
     // 获取课程信息
+    if (!order.course_id) {
+      if (order.coupon_id) {
+        await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
+      }
+      return { message: '订单支付成功' };
+    }
+
     const course = await this.courseRepository.findOne({
       where: { id: order.course_id },
     });
@@ -473,6 +620,10 @@ export class OrderService {
           await this.userCourseAuthRepository.save(existingAuth);
         }
       }
+    }
+
+    if (order.coupon_id) {
+      await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
     }
 
     // 处理分销分成
@@ -539,19 +690,26 @@ export class OrderService {
     const query = this.orderRepository
       .createQueryBuilder('o')
       .leftJoin(Course, 'course', 'course.id = o.course_id')
+      .leftJoin('package_section', 'packageSection', 'packageSection.id = o.package_section_id')
       .where('o.user_id = :userId', { userId })
       .select([
         'o.id AS id',
         'o.order_no AS orderNo',
         'o.amount AS amount',
         'o.status AS status',
+        'o.order_type AS orderType',
         'o.course_id AS courseId',
+        'o.package_section_id AS packageSectionId',
+        'o.package_plan_id AS packagePlanId',
+        'o.discount_amount AS discountAmount',
         'o.create_time AS createTime',
         'o.paid_time AS paidTime',
-        'course.name AS productName',
+        'course.name AS courseName',
         'course.cover_img AS coverImg',
         'course.content_type AS contentType',
         'course.file_type AS fileType',
+        'packageSection.name AS packageSectionName',
+        'packageSection.cover_img AS packageCoverImg',
       ])
       .orderBy('o.create_time', 'DESC');
 
@@ -568,10 +726,14 @@ export class OrderService {
       id: Number(row.id),
       orderNo: row.orderNo,
       amount: Number(row.amount || 0),
+      discountAmount: Number(row.discountAmount || 0),
       status: row.status,
-      courseId: Number(row.courseId),
-      productName: row.productName || '课程',
-      coverImg: row.coverImg || '',
+      orderType: row.orderType || 'course',
+      courseId: row.courseId ? Number(row.courseId) : null,
+      packageSectionId: row.packageSectionId ? Number(row.packageSectionId) : null,
+      packagePlanId: row.packagePlanId ? Number(row.packagePlanId) : null,
+      productName: row.orderType === 'package' ? row.packageSectionName || '套餐' : row.courseName || '课程',
+      coverImg: row.orderType === 'package' ? row.packageCoverImg || '' : row.coverImg || '',
       contentType: row.contentType || 'normal',
       fileType: row.fileType || '',
       createTime: row.createTime,
@@ -604,11 +766,40 @@ export class OrderService {
 
     const [user, course] = await Promise.all([
       this.appUserRepository.findOne({ where: { id: userId } }),
-      this.courseRepository.findOne({ where: { id: order.course_id } }),
+      order.course_id ? this.courseRepository.findOne({ where: { id: order.course_id } }) : Promise.resolve(null),
     ]);
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
+
+    if (order.order_type === 'package') {
+      const plan = order.package_plan_id && order.package_section_id
+        ? await this.packageService.getPlanForOrder(order.package_section_id, order.package_plan_id)
+        : null;
+      const paymentParams = await this.createVirtualPaymentParams({
+        user,
+        order,
+        buyQuantity: 1,
+        productId: this.virtualPayGoodsService.getVirtualPayProductId('package', plan?.id),
+        attachType: 'package',
+        goodsTitle: plan ? `${plan.section.name}-${plan.name}` : '套餐',
+      });
+      order.pay_payload = {
+        ...(order.pay_payload || {}),
+        virtual_payment: paymentParams.virtual_payment,
+        payment_params: paymentParams.payment_params,
+      };
+      await this.orderRepository.save(order);
+      return {
+        order_no: order.order_no,
+        amount: order.amount,
+        order_type: order.order_type,
+        status: order.status,
+        payment_params: paymentParams.payment_params,
+        virtual_pay_sync: paymentParams.virtual_pay_sync,
+      };
+    }
+
     if (!course) {
       throw new NotFoundException('课程不存在');
     }

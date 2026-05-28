@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SysUser } from './entities/sys-user.entity';
 import { AppUser } from './entities/app-user.entity';
+import { AppUserSession } from './entities/app-user-session.entity';
 import { Course } from './entities/course.entity';
 import { Chapter } from './entities/chapter.entity';
 import { Question } from './entities/question.entity';
@@ -34,12 +35,19 @@ import { UserCheckin } from './entities/user-checkin.entity';
 import { UserFileCourseProgress } from './entities/user-file-course-progress.entity';
 import { PreviewCacheTask } from './entities/preview-cache-task.entity';
 import { CourseFile } from './entities/course-file.entity';
+import { UserReferral } from './entities/user-referral.entity';
+import { UserCoupon } from './entities/user-coupon.entity';
+import { PackageSection } from './entities/package-section.entity';
+import { PackageSectionScope } from './entities/package-section-scope.entity';
+import { PackagePlan } from './entities/package-plan.entity';
+import { UserPackageSubscription } from './entities/user-package-subscription.entity';
 
 @Module({
 	imports: [
 		TypeOrmModule.forFeature([
 			SysUser,
 			AppUser,
+			AppUserSession,
 			Course,
 			Chapter,
 			Question,
@@ -72,6 +80,12 @@ import { CourseFile } from './entities/course-file.entity';
 			UserFileCourseProgress,
 			PreviewCacheTask,
 			CourseFile,
+			UserReferral,
+			UserCoupon,
+			PackageSection,
+			PackageSectionScope,
+			PackagePlan,
+			UserPackageSubscription,
 		]),
 	],
 	exports: [TypeOrmModule],

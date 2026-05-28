@@ -62,8 +62,8 @@ export class AdminService {
 
 		// 格式化返回数据
 		const list = users.map((user) => {
-			// 判断VIP状态（根据vip_expire_time）
-			const isVip = user.vip_expire_time && new Date(user.vip_expire_time) > new Date();
+			// 判断VIP状态（根据package_expire_time）
+			const hasPackage = user.package_expire_time && new Date(user.package_expire_time) > new Date();
 			
 			return {
 				id: user.id,
@@ -74,8 +74,8 @@ export class AdminService {
 				role: user.role || AppUserRole.USER,
 				isAppAdmin: user.role === AppUserRole.ADMIN,
 				isBankAdmin: user.role === AppUserRole.BANK_ADMIN,
-				vipStatus: isVip,
-				vipExpireTime: user.vip_expire_time,
+				packageStatus: hasPackage,
+				packageExpireTime: user.package_expire_time,
 				status: (user as any).status !== undefined ? (user as any).status : 1, // 默认正常
 				createdAt: user.create_time,
 				lastLoginAt: user.update_time, // 暂时用update_time，如果有last_login_time字段则使用
@@ -101,7 +101,7 @@ export class AdminService {
 		}
 
 		// 判断VIP状态
-		const isVip = user.vip_expire_time && new Date(user.vip_expire_time) > new Date();
+		const hasPackage = user.package_expire_time && new Date(user.package_expire_time) > new Date();
 
 		// 获取答题统计
 		const [totalQuestions, correctCount, wrongCount] = await Promise.all([
@@ -153,8 +153,8 @@ export class AdminService {
 				role: user.role || AppUserRole.USER,
 				isAppAdmin: user.role === AppUserRole.ADMIN,
 				isBankAdmin: user.role === AppUserRole.BANK_ADMIN,
-				vipStatus: isVip,
-				vipExpireTime: user.vip_expire_time,
+				packageStatus: hasPackage,
+				packageExpireTime: user.package_expire_time,
 				status: (user as any).status !== undefined ? (user as any).status : 1,
 				createdAt: user.create_time,
 				lastLoginAt: user.update_time,

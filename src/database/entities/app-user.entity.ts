@@ -20,6 +20,12 @@ export class AppUser {
   @Column({ length: 100, unique: true })
   openid: string;
 
+  @Column({ length: 50, unique: true, nullable: true })
+  username: string;
+
+  @Column({ length: 255, nullable: true })
+  password_hash: string;
+
   @Column({ length: 255, nullable: true })
   session_key: string;
 
@@ -36,7 +42,7 @@ export class AppUser {
   role: AppUserRole;
 
   @Column({ type: 'datetime', nullable: true })
-  vip_expire_time: Date;
+  package_expire_time: Date;
 
   @CreateDateColumn()
   create_time: Date;

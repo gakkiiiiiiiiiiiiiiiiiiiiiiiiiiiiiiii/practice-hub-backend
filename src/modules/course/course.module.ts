@@ -7,12 +7,14 @@ import { CourseController } from './course.controller';
 import { AppPdfViewerController } from './app-pdf-viewer.controller';
 import { DatabaseModule } from '../../database/database.module';
 import { UploadModule } from '../upload/upload.module';
+import { PackageModule } from '../package/package.module';
 
 @Module({
   imports: [
     DatabaseModule,
     UploadModule,
     ConfigModule,
+    PackageModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({

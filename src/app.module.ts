@@ -38,6 +38,9 @@ import { PageRouteModule } from './modules/page-route/page-route.module';
 import { AfterSaleModule } from './modules/after-sale/after-sale.module';
 import { TrajectoryModule } from './modules/trajectory/trajectory.module';
 import { ProcessPdfModule } from './modules/process-pdf/process-pdf.module';
+import { MarketingModule } from './modules/marketing/marketing.module';
+import { PackageModule } from './modules/package/package.module';
+import { AdminPackageModule } from './modules/admin-package/admin-package.module';
 
 @Module({
 	imports: [
@@ -126,6 +129,9 @@ import { ProcessPdfModule } from './modules/process-pdf/process-pdf.module';
 		AfterSaleModule,
 		TrajectoryModule,
 		ProcessPdfModule,
+		MarketingModule,
+		PackageModule,
+		AdminPackageModule,
 	],
 	controllers: [AppController],
 	providers: [

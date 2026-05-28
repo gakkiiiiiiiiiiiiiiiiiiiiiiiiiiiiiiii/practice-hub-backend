@@ -1,10 +1,29 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsNumber } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsIn, IsNumber, IsOptional, ValidateIf } from 'class-validator';
 
 export class CreateOrderDto {
-  @ApiProperty({ description: '课程ID', example: 1 })
-  @IsNotEmpty({ message: '课程ID不能为空' })
+  @ApiPropertyOptional({ description: '课程ID（购买课程时必填）', example: 1 })
+  @ValidateIf((dto) => !dto.order_type || dto.order_type === 'course')
   @IsNumber()
-  course_id: number;
-}
+  course_id?: number;
 
+  @ApiPropertyOptional({ description: '订单类型', enum: ['course', 'package'], default: 'course' })
+  @IsOptional()
+  @IsIn(['course', 'package'])
+  order_type?: 'course' | 'package';
+
+  @ApiPropertyOptional({ description: '套餐ID（购买套餐时必填）' })
+  @ValidateIf((dto) => dto.order_type === 'package')
+  @IsNumber()
+  package_section_id?: number;
+
+  @ApiPropertyOptional({ description: '套餐规格ID（购买套餐时必填）' })
+  @ValidateIf((dto) => dto.order_type === 'package')
+  @IsNumber()
+  package_plan_id?: number;
+
+  @ApiPropertyOptional({ description: '优惠券ID' })
+  @IsOptional()
+  @IsNumber()
+  coupon_id?: number;
+}

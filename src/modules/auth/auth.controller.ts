@@ -6,6 +6,8 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { AppLoginDto } from './dto/app-login.dto';
 import { AppPhoneLoginDto } from './dto/app-phone-login.dto';
+import { AppRegisterDto } from './dto/app-register.dto';
+import { AppPasswordLoginDto } from './dto/app-password-login.dto';
 import { AdminLoginDto } from './dto/admin-login.dto';
 
 @ApiTags('认证')
@@ -19,7 +21,7 @@ export class AuthController {
     const result = await this.authService.appLogin(dto.code, dto.distributor_code, {
       nickname: dto.nickname || dto.nickName || dto.userInfo?.nickName,
       avatar: dto.avatar || dto.avatarUrl || dto.userInfo?.avatarUrl,
-    });
+    }, this.authService.parseReferralUserIdPublic(dto.referral_user_id));
     return CommonResponseDto.success(result);
   }
 
@@ -29,7 +31,30 @@ export class AuthController {
     const result = await this.authService.appPhoneLogin(dto.loginCode, dto.phoneCode, dto.distributor_code, {
       nickname: dto.nickname || dto.nickName || dto.userInfo?.nickName,
       avatar: dto.avatar || dto.avatarUrl || dto.userInfo?.avatarUrl,
-    });
+    }, this.authService.parseReferralUserIdPublic(dto.referral_user_id));
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('app/register')
+  @ApiOperation({ summary: '小程序端 - 账号注册' })
+  async appRegister(@Body() dto: AppRegisterDto) {
+    const result = await this.authService.appRegister(dto);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('app/password-login')
+  @ApiOperation({ summary: '小程序端 - 账号密码登录（最多3台设备）' })
+  async appPasswordLogin(@Body() dto: AppPasswordLoginDto) {
+    const result = await this.authService.appPasswordLogin(dto);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('app/logout')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '小程序端 - 退出登录（账号登录会撤销当前设备会话）' })
+  async appLogout(@CurrentUser() user: any) {
+    const result = await this.authService.appLogout(user.userId, user.sessionId);
     return CommonResponseDto.success(result);
   }
 
