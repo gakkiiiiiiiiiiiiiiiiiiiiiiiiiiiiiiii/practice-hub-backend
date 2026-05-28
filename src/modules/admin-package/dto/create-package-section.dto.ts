@@ -1,10 +1,10 @@
-import { IsArray, IsIn, IsNumber, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsNumber, IsObject, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PackagePlanType } from '../../../database/entities/package-plan.entity';
 import { PackageScopeType } from '../../../database/entities/package-section-scope.entity';
 
-class VipScopeDto {
+class PackageScopeDto {
 	@ApiProperty({ enum: PackageScopeType })
 	@IsIn(Object.values(PackageScopeType))
 	scope_type: PackageScopeType;
@@ -12,6 +12,23 @@ class VipScopeDto {
 	@ApiProperty()
 	@IsString()
 	scope_value: string;
+}
+
+class PackageCoverStyleDto {
+	@ApiPropertyOptional()
+	@IsOptional()
+	@IsString()
+	backgroundColor?: string;
+
+	@ApiPropertyOptional()
+	@IsOptional()
+	@IsString()
+	titleColor?: string;
+
+	@ApiPropertyOptional()
+	@IsOptional()
+	@IsString()
+	categoriesColor?: string;
 }
 
 class PackagePlanDto {
@@ -61,6 +78,11 @@ export class CreatePackageSectionDto {
 
 	@ApiPropertyOptional()
 	@IsOptional()
+	@IsObject()
+	cover_style?: PackageCoverStyleDto | null;
+
+	@ApiPropertyOptional()
+	@IsOptional()
 	@IsNumber()
 	status?: number;
 
@@ -69,12 +91,12 @@ export class CreatePackageSectionDto {
 	@IsNumber()
 	sort?: number;
 
-	@ApiPropertyOptional({ type: [VipScopeDto] })
+	@ApiPropertyOptional({ type: [PackageScopeDto] })
 	@IsOptional()
 	@IsArray()
 	@ValidateNested({ each: true })
-	@Type(() => VipScopeDto)
-	scopes?: VipScopeDto[];
+	@Type(() => PackageScopeDto)
+	scopes?: PackageScopeDto[];
 
 	@ApiPropertyOptional({ type: [PackagePlanDto] })
 	@IsOptional()

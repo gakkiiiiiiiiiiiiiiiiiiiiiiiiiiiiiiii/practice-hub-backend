@@ -211,6 +211,8 @@ export class OrderService {
     });
     await this.orderRepository.save(order);
 
+    await this.virtualPayGoodsService.preparePackageGoodsForPayment(plan, { payAmount: amount });
+
     const paymentParams = await this.createVirtualPaymentParams({
       user,
       order,
@@ -776,6 +778,9 @@ export class OrderService {
       const plan = order.package_plan_id && order.package_section_id
         ? await this.packageService.getPlanForOrder(order.package_section_id, order.package_plan_id)
         : null;
+      if (plan) {
+        await this.virtualPayGoodsService.preparePackageGoodsForPayment(plan, { payAmount: order.amount });
+      }
       const paymentParams = await this.createVirtualPaymentParams({
         user,
         order,

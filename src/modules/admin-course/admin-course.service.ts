@@ -127,33 +127,9 @@ export class AdminCourseService {
   }
 
   async syncAllCourseVirtualPayGoods() {
-    const courses = await this.courseRepository.find();
-    const targets = courses.filter((course) => this.shouldSyncVirtualPayGoods(course));
-    void this.runVirtualPayGoodsBatchSync(targets);
-    return {
-      total: targets.length,
-      scheduled: true,
-      virtual_pay_goods_sync: this.virtualPayGoodsService.buildAdminPriceSyncNotice(),
-    };
-  }
-
-  private async runVirtualPayGoodsBatchSync(courses: Course[]) {
-    const delayMs = 300;
-    let success = 0;
-    let failed = 0;
-    for (const course of courses) {
-      try {
-        await this.virtualPayGoodsService.syncCourseGoods(course, { force: true });
-        success += 1;
-      } catch (error: any) {
-        failed += 1;
-        this.logger.warn(`课程 ${course.id} 虚拟道具价格同步失败: ${error?.message || error}`);
-      }
-      if (delayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-    this.logger.log(`全部课程虚拟道具价格同步完成：成功 ${success}，失败 ${failed}`);
+    const counts = await this.virtualPayGoodsService.countVirtualPaySyncTargets();
+    this.virtualPayGoodsService.scheduleSyncAllGoods({ force: true });
+    return this.virtualPayGoodsService.buildAdminBatchSyncResponse(counts);
   }
 
   private shouldSyncVirtualPayGoods(course: Course) {

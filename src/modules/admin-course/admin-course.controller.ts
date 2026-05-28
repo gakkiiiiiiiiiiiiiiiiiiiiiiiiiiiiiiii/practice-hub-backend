@@ -231,7 +231,7 @@ export class AdminCourseController {
 
 	@Post('virtual-pay-goods/sync-all')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '同步全部付费课程的微信虚拟道具价格' })
+	@ApiOperation({ summary: '同步全部付费课程与套餐的微信虚拟道具价格' })
 	async syncAllCourseVirtualPayGoods() {
 		const result = await this.adminCourseService.syncAllCourseVirtualPayGoods();
 		return CommonResponseDto.success(result);

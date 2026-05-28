@@ -16,6 +16,13 @@ export class PackageSection {
 	@Column({ length: 500, nullable: true })
 	cover_img: string | null;
 
+	@Column({ type: 'json', nullable: true })
+	cover_style: {
+		backgroundColor?: string;
+		titleColor?: string;
+		categoriesColor?: string;
+	} | null;
+
 	@Column({ type: 'tinyint', default: 1 })
 	status: number;
 

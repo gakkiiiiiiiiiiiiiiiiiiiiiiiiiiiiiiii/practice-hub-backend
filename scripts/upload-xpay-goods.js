@@ -7,8 +7,8 @@
  * 用法：
  *   npm run xpay:goods:remote
  *   node scripts/upload-xpay-goods.js --remote --dry-run
- *   node scripts/upload-xpay-goods.js --remote --type=course
- *   node scripts/upload-xpay-goods.js --remote --course-id=3
+ *   node scripts/upload-xpay-goods.js --remote --type=package
+ *   node scripts/upload-xpay-goods.js --remote --plan-id=3
  *   node scripts/upload-xpay-goods.js --remote --limit=10 --delay-ms=3000
  *   node scripts/upload-xpay-goods.js --remote --course-id=92 --refresh-token
  *   node scripts/upload-xpay-goods.js --remote --from-course-id=39
@@ -54,7 +54,7 @@ function parseFailedIdsFromLog(logPath) {
 	const content = fs.readFileSync(logPath, 'utf8');
 	const ids = new Set();
 	for (const line of content.split('\n')) {
-		const match = line.match(/^\s*✗\s+(course_\d+|activation_code_\d+)\s+失败/);
+		const match = line.match(/^\s*✗\s+(course_\d+|activation_code_\d+|package_\d+)\s+失败/);
 		if (match) {
 			ids.add(match[1]);
 		}
@@ -70,7 +70,7 @@ function loadProductIdsFromFile(filePath) {
 		.readFileSync(filePath, 'utf8')
 		.split(/[\s,]+/)
 		.map((item) => item.trim())
-		.filter((item) => /^course_\d+$/.test(item) || /^activation_code_\d+$/.test(item));
+		.filter((item) => /^course_\d+$/.test(item) || /^activation_code_\d+$/.test(item) || /^package_\d+$/.test(item));
 }
 
 function getRequiredEnv(keys, label) {
@@ -266,6 +266,36 @@ async function waitForGoodsTask(endpoint, listKey, idKey, statusKey, goodsId, ap
 	return { item: null, accessToken: token };
 }
 
+async function getPackagePlans(dbConfig, { planId = '' } = {}) {
+	const conn = await mysql.createConnection(dbConfig);
+	try {
+		const params = [];
+		let sql = `
+			SELECT
+				pp.id,
+				pp.name,
+				pp.price,
+				pp.status,
+				ps.id AS section_id,
+				ps.name AS section_name
+			FROM package_plan pp
+			INNER JOIN package_section ps ON ps.id = pp.section_id
+			WHERE pp.status = 1
+			  AND ps.status = 1
+			  AND pp.price > 0
+		`;
+		if (planId) {
+			sql += ' AND pp.id = ?';
+			params.push(Number(planId));
+		}
+		sql += ' ORDER BY pp.id ASC';
+		const [rows] = await conn.query(sql, params);
+		return rows;
+	} finally {
+		await conn.end();
+	}
+}
+
 async function getCourses(dbConfig, { courseId = '', fromCourseId = '' } = {}) {
 	const conn = await mysql.createConnection(dbConfig);
 	try {
@@ -290,6 +320,26 @@ async function getCourses(dbConfig, { courseId = '', fromCourseId = '' } = {}) {
 	} finally {
 		await conn.end();
 	}
+}
+
+function buildPackageGoodsItem(plan, defaultItemUrl) {
+	const priceYuan = Number(plan.price || 0);
+	const priceCents = Math.max(1, yuanToCents(priceYuan));
+	const itemUrl = normalizeUrl(defaultItemUrl);
+	if (!itemUrl || !itemUrl.includes('virtual-pay-goods-cover')) {
+		throw new Error(
+			`缺少 virtual-pay-goods-cover 商品图 URL，请配置 WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL 或上传 images/virtual-pay-goods-cover.png 到 COS`,
+		);
+	}
+	const label = `${String(plan.section_name || '套餐').trim()}-${String(plan.name || '规格').trim()}`;
+	return {
+		id: `package_${plan.id}`,
+		name: buildVirtualPayGoodsName(label, '', plan.id),
+		price: priceCents,
+		priceYuan,
+		remark: buildVirtualPayGoodsRemark('套餐', label),
+		item_url: itemUrl,
+	};
 }
 
 function buildGoodsItems(course, type, defaultItemUrl) {
@@ -331,6 +381,7 @@ async function main() {
 	const skipPublish = process.argv.includes('--no-publish');
 	const type = getArg('type', 'all');
 	const courseId = getArg('course-id', '');
+	const planId = getArg('plan-id', '');
 	const fromCourseId = getArg('from-course-id', '');
 	const onlyFailedLog = getArg('only-failed-log', '');
 	const productIdsFile = getArg('product-ids-file', '');
@@ -348,8 +399,8 @@ async function main() {
 	const delayMs = Math.max(0, Number(getArg('delay-ms', '2500')) || 2500);
 	const continueOnError = !process.argv.includes('--fail-fast');
 
-	if (!['all', 'course', 'activation'].includes(type)) {
-		throw new Error('--type 只能是 all、course 或 activation');
+	if (!['all', 'course', 'activation', 'package'].includes(type)) {
+		throw new Error('--type 只能是 all、course、activation 或 package');
 	}
 
 	const appId = getRequiredEnv(['WECHAT_APPID', 'AppID'], '小程序 AppID');
@@ -385,10 +436,12 @@ async function main() {
 		throw new Error('缺少数据库配置');
 	}
 
-	const courses = await getCourses(dbConfig, { courseId, fromCourseId });
+	const courses = type === 'package' ? [] : await getCourses(dbConfig, { courseId, fromCourseId });
+	const packagePlans = type === 'course' || type === 'activation' ? [] : await getPackagePlans(dbConfig, { planId });
 	const scopedCourses = limit > 0 ? courses.slice(0, limit) : courses;
+	const scopedPlans = limit > 0 ? packagePlans.slice(0, limit) : packagePlans;
 	const defaultItemUrl = normalizeUrl(configuredDefaultItemUrl);
-	const goods = scopedCourses.flatMap((course) => {
+	const courseGoods = scopedCourses.flatMap((course) => {
 		const items = [];
 		if (type === 'all' || type === 'course') {
 			items.push(buildGoodsItems(course, 'course', defaultItemUrl));
@@ -398,6 +451,8 @@ async function main() {
 		}
 		return items;
 	});
+	const packageGoods = scopedPlans.map((plan) => buildPackageGoodsItem(plan, defaultItemUrl));
+	const goods = [...courseGoods, ...packageGoods];
 
 	const targetGoods =
 		productIds.length > 0 ? goods.filter((item) => productIds.includes(item.id)) : goods;
@@ -408,6 +463,9 @@ async function main() {
 	console.log(`目标数据库：${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`);
 	if (fromCourseId && !courseId) {
 		console.log(`课程范围：id >= ${fromCourseId}（共 ${scopedCourses.length} 门）`);
+	}
+	if (type === 'package' || type === 'all') {
+		console.log(`套餐规格：${scopedPlans.length} 个`);
 	}
 	if (productIds.length > 0) {
 		console.log(`指定道具：${targetGoods.length} 个（product-ids）`);

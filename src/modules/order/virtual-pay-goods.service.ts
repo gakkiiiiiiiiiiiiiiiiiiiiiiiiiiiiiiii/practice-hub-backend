@@ -1,9 +1,12 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
 import * as crypto from 'crypto';
 import * as https from 'https';
 import axios from 'axios';
+import { Repository } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
+import { PackagePlan } from '../../database/entities/package-plan.entity';
 import { UploadService } from '../upload/upload.service';
 
 export type VirtualPayConfig = {
@@ -31,7 +34,22 @@ export class VirtualPayGoodsService {
   constructor(
     private readonly configService: ConfigService,
     private readonly uploadService: UploadService,
+    @InjectRepository(Course)
+    private readonly courseRepository: Repository<Course>,
+    @InjectRepository(PackagePlan)
+    private readonly packagePlanRepository: Repository<PackagePlan>,
   ) {}
+
+  isAutoUploadEnabled() {
+    return this.configService.get<string>('WECHAT_VIRTUAL_PAY_AUTO_UPLOAD_GOODS') !== 'false';
+  }
+
+  isScheduledSyncEnabled() {
+    if (!this.isAutoUploadEnabled()) {
+      return false;
+    }
+    return this.configService.get<string>('WECHAT_VIRTUAL_PAY_SCHEDULED_SYNC') !== 'false';
+  }
 
   getVirtualPayConfig(): VirtualPayConfig {
     const env = Number(this.configService.get<string>('WECHAT_VIRTUAL_PAY_ENV') ?? 0);
@@ -113,6 +131,248 @@ export class VirtualPayGoodsService {
       wait_minutes: waitMinutes,
       message: `虚拟道具价格正在同步，约 ${waitMinutes} 分钟后生效`,
     };
+  }
+
+  async countVirtualPaySyncTargets() {
+    const [courses, plans] = await Promise.all([
+      this.courseRepository.find(),
+      this.packagePlanRepository.find({ relations: ['section'] }),
+    ]);
+    const courseTotal = courses.filter((course) => this.shouldSyncCourseGoods(course)).length;
+    const packageTotal = plans.filter((plan) => this.shouldSyncPackagePlanGoods(plan)).length;
+    return {
+      courses: courseTotal,
+      packages: packageTotal,
+      total: courseTotal + packageTotal,
+    };
+  }
+
+  /** 后台/定时任务：异步提交全量虚拟道具同步（课程 + 套餐） */
+  scheduleSyncAllGoods(options?: { force?: boolean }) {
+    if (!this.isAutoUploadEnabled()) {
+      return;
+    }
+    void this.syncAllGoods({ force: options?.force ?? true })
+      .then((result) => {
+        this.logger.log(
+          `全量虚拟道具同步完成：课程成功 ${result.courses.success}/${result.courses.total}，套餐成功 ${result.packages.success}/${result.packages.total}`,
+        );
+      })
+      .catch((error) => {
+        this.logger.warn(`全量虚拟道具同步失败: ${this.getErrorMessage(error)}`);
+      });
+  }
+
+  /** 后台：异步提交全部套餐规格虚拟道具同步 */
+  scheduleSyncAllPackagePlanGoods(options?: { force?: boolean }) {
+    if (!this.isAutoUploadEnabled()) {
+      return;
+    }
+    void this.syncAllPackagePlanGoods({ force: options?.force ?? true })
+      .then((result) => {
+        this.logger.log(`套餐虚拟道具同步完成：成功 ${result.success}/${result.total}`);
+      })
+      .catch((error) => {
+        this.logger.warn(`套餐虚拟道具同步失败: ${this.getErrorMessage(error)}`);
+      });
+  }
+
+  buildAdminBatchSyncResponse(counts: { courses: number; packages: number; total: number }) {
+    return {
+      ...counts,
+      course_total: counts.courses,
+      package_total: counts.packages,
+      scheduled: true,
+      virtual_pay_goods_sync: this.buildAdminPriceSyncNotice(),
+    };
+  }
+
+  async syncAllGoods(options?: { force?: boolean; delayMs?: number }) {
+    const courses = await this.syncAllCourseGoods(options);
+    const packages = await this.syncAllPackagePlanGoods(options);
+    return { courses, packages };
+  }
+
+  async syncAllCourseGoods(options?: { force?: boolean; delayMs?: number }) {
+    const courses = await this.courseRepository.find();
+    const targets = courses.filter((course) => this.shouldSyncCourseGoods(course));
+    return this.runCourseBatchSync(targets, options);
+  }
+
+  async syncAllPackagePlanGoods(options?: { force?: boolean; delayMs?: number }) {
+    const plans = await this.packagePlanRepository.find({ relations: ['section'] });
+    const targets = plans.filter((plan) => this.shouldSyncPackagePlanGoods(plan));
+    return this.runPackageBatchSync(targets, options);
+  }
+
+  private shouldSyncCourseGoods(course: Course) {
+    return course.is_free !== 1 && Number(course.price) > 0;
+  }
+
+  private shouldSyncPackagePlanGoods(plan: PackagePlan) {
+    return (plan.status ?? 1) === 1 && Number(plan.price || 0) > 0 && Boolean(plan.section);
+  }
+
+  private getBatchSyncDelayMs(options?: { delayMs?: number }) {
+    if (options?.delayMs !== undefined) {
+      return Math.max(0, options.delayMs);
+    }
+    return Math.max(0, Number(this.configService.get<string>('WECHAT_VIRTUAL_PAY_BATCH_SYNC_DELAY_MS') || 300));
+  }
+
+  private async runCourseBatchSync(courses: Course[], options?: { force?: boolean; delayMs?: number }) {
+    const delayMs = this.getBatchSyncDelayMs(options);
+    let success = 0;
+    let failed = 0;
+    for (const course of courses) {
+      try {
+        await this.syncCourseGoods(course, { force: options?.force ?? true });
+        success += 1;
+      } catch (error) {
+        failed += 1;
+        this.logger.warn(`课程 ${course.id} 虚拟道具价格同步失败: ${this.getErrorMessage(error)}`);
+      }
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    return { total: courses.length, success, failed };
+  }
+
+  private async runPackageBatchSync(plans: PackagePlan[], options?: { force?: boolean; delayMs?: number }) {
+    const delayMs = this.getBatchSyncDelayMs(options);
+    let success = 0;
+    let failed = 0;
+    for (const plan of plans) {
+      try {
+        await this.syncPackagePlanGoods(
+          {
+            sectionId: plan.section_id,
+            sectionName: String(plan.section?.name || '套餐'),
+            plan: { id: plan.id, name: plan.name, price: plan.price, status: plan.status },
+          },
+          { force: options?.force ?? true },
+        );
+        success += 1;
+      } catch (error) {
+        failed += 1;
+        this.logger.warn(`套餐规格 ${plan.id} 虚拟道具价格同步失败: ${this.getErrorMessage(error)}`);
+      }
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    return { total: plans.length, success, failed };
+  }
+
+  /**
+   * 下单/拉起支付前：套餐规格价格与微信道具 `package_{planId}` 对齐。
+   */
+  async preparePackageGoodsForPayment(
+    plan: {
+      id: number;
+      name: string;
+      price: number | string;
+      section_id: number;
+      section?: { name?: string | null };
+    },
+    options?: { payAmount?: number | string },
+  ) {
+    if (this.configService.get<string>('WECHAT_VIRTUAL_PAY_AUTO_UPLOAD_GOODS') === 'false') {
+      return;
+    }
+    const listPrice = Number(plan.price || 0);
+    const payAmount = options?.payAmount !== undefined ? Number(options.payAmount) : listPrice;
+    const effectivePrice = payAmount > 0 ? payAmount : listPrice;
+    if (effectivePrice <= 0) {
+      return;
+    }
+
+    const config = this.getVirtualPayConfig();
+    const priceCents = Math.max(1, Math.round(effectivePrice * 100));
+    const productId = this.getVirtualPayProductId('package', plan.id);
+    const cacheKey = `${config.env}:${productId}`;
+    const force = this.virtualPayGoodsSyncedPrice.get(cacheKey) !== priceCents;
+
+    await this.syncPackagePlanGoods(
+      {
+        sectionId: plan.section_id,
+        sectionName: String(plan.section?.name || '套餐'),
+        plan: { id: plan.id, name: plan.name, price: effectivePrice },
+      },
+      { force },
+    );
+  }
+
+  /**
+   * 后台保存套餐规格后：上传并发布 package_{planId} 道具（异步）
+   */
+  scheduleSyncPackagePlanGoods(
+    section: { id: number; name: string },
+    plan: { id: number; name: string; price: number | string; status?: number },
+    options?: { force?: boolean },
+  ) {
+    if (this.configService.get<string>('WECHAT_VIRTUAL_PAY_AUTO_UPLOAD_GOODS') === 'false') {
+      return;
+    }
+    if ((plan.status ?? 1) !== 1 || Number(plan.price || 0) <= 0) {
+      return;
+    }
+    void this.syncPackagePlanGoods(
+      {
+        sectionId: section.id,
+        sectionName: section.name,
+        plan: { id: plan.id, name: plan.name, price: plan.price, status: plan.status },
+      },
+      options,
+    ).catch((error) => {
+      this.logger.warn(`套餐规格 ${plan.id} 虚拟支付道具同步失败: ${this.getErrorMessage(error)}`);
+    });
+  }
+
+  async syncPackagePlanGoods(
+    input: {
+      sectionId: number;
+      sectionName: string;
+      plan: { id: number; name: string; price: number | string; status?: number };
+    },
+    options?: { force?: boolean },
+  ) {
+    if (this.configService.get<string>('WECHAT_VIRTUAL_PAY_AUTO_UPLOAD_GOODS') === 'false') {
+      return;
+    }
+    const price = Number(input.plan.price || 0);
+    if ((input.plan.status ?? 1) !== 1 || price <= 0) {
+      return;
+    }
+
+    const config = this.getVirtualPayConfig();
+    if (options?.force) {
+      this.clearPackagePlanGoodsCache(input.plan.id, config.env);
+    }
+
+    const priceCents = Math.max(1, Math.round(price * 100));
+    const sectionName = String(input.sectionName || '套餐').trim();
+    const planName = String(input.plan.name || '套餐').trim();
+    const goodsLabel = `${sectionName}-${planName}`;
+
+    await this.ensureGoodsPublished({
+      config,
+      productId: this.getVirtualPayProductId('package', input.plan.id),
+      name: this.buildVirtualPayGoodsName(goodsLabel, '', input.plan.id),
+      price: priceCents,
+      remark: this.buildVirtualPayGoodsRemark('套餐', goodsLabel),
+      force: options?.force,
+    });
+
+    this.logger.log(`套餐规格 ${input.plan.id} 虚拟支付道具已提交同步`);
+  }
+
+  private clearPackagePlanGoodsCache(planId: number, env: number) {
+    const productId = this.getVirtualPayProductId('package', planId);
+    const cacheKey = `${env}:${productId}`;
+    this.virtualPayGoodsSyncedPrice.delete(cacheKey);
+    this.virtualPayGoodsSyncedAt.delete(cacheKey);
   }
 
   /**

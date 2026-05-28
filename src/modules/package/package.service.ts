@@ -156,6 +156,7 @@ export class PackageService {
 		name: string;
 		description?: string;
 		cover_img?: string;
+		cover_style?: PackageSection['cover_style'];
 		status?: number;
 		sort?: number;
 		scopes?: Array<{ scope_type: PackageScopeType; scope_value: string }>;
@@ -165,6 +166,7 @@ export class PackageService {
 			name: input.name.trim(),
 			description: input.description || null,
 			cover_img: input.cover_img || null,
+			cover_style: input.cover_style ?? null,
 			status: input.status ?? 1,
 			sort: input.sort ?? 0,
 		});
@@ -180,6 +182,7 @@ export class PackageService {
 			name?: string;
 			description?: string;
 			cover_img?: string;
+			cover_style?: PackageSection['cover_style'] | null;
 			status?: number;
 			sort?: number;
 			scopes?: Array<{ scope_type: PackageScopeType; scope_value: string }>;
@@ -192,6 +195,7 @@ export class PackageService {
 		if (input.name !== undefined) section.name = input.name.trim();
 		if (input.description !== undefined) section.description = input.description || null;
 		if (input.cover_img !== undefined) section.cover_img = input.cover_img || null;
+		if (input.cover_style !== undefined) section.cover_style = input.cover_style ?? null;
 		if (input.status !== undefined) section.status = input.status;
 		if (input.sort !== undefined) section.sort = input.sort;
 		await this.packageSectionRepository.save(section);
@@ -305,6 +309,7 @@ export class PackageService {
 			name: section.name,
 			description: section.description,
 			coverImg: section.cover_img,
+			coverStyle: section.cover_style,
 			coverFallbackText: scopeCategoryLabels.join('、'),
 			scopeCategoryLabels,
 			status: section.status,
