@@ -47,7 +47,14 @@ export class PackageService {
 		return sections;
 	}
 
+	sectionHasAllCoursesScope(scopes: PackageSectionScope[] = []) {
+		return scopes.some((scope) => scope.scope_type === PackageScopeType.ALL);
+	}
+
 	courseMatchesScope(course: Course, scope: PackageSectionScope) {
+		if (scope.scope_type === PackageScopeType.ALL) {
+			return course.status === 1;
+		}
 		if (scope.scope_type === PackageScopeType.COURSE) {
 			return String(course.id) === String(scope.scope_value);
 		}
@@ -58,6 +65,35 @@ export class PackageService {
 			return (course.sub_category || '').trim() === scope.scope_value.trim();
 		}
 		return false;
+	}
+
+	async batchUserHasCourseAccessViaPackage(userId: number, courses: Course[]) {
+		const accessMap = new Map<number, boolean>();
+		if (!userId || courses.length === 0) {
+			return accessMap;
+		}
+
+		const subscriptions = await this.userPackageSubscriptionRepository.find({
+			where: { user_id: userId },
+		});
+		const activeSectionIds = subscriptions
+			.filter((item) => item.expire_time > new Date())
+			.map((item) => item.section_id);
+		if (activeSectionIds.length === 0) {
+			return accessMap;
+		}
+
+		const sections = await this.getActiveSectionsWithScopes();
+		const activeSections = sections.filter((section) => activeSectionIds.includes(section.id));
+		for (const course of courses) {
+			const hasAccess = activeSections.some((section) =>
+				(section.scopes || []).some((scope) => this.courseMatchesScope(course, scope)),
+			);
+			if (hasAccess) {
+				accessMap.set(course.id, true);
+			}
+		}
+		return accessMap;
 	}
 
 	async userHasCourseAccessViaPackage(userId: number, course: Course) {
@@ -159,7 +195,7 @@ export class PackageService {
 		cover_style?: PackageSection['cover_style'];
 		status?: number;
 		sort?: number;
-		scopes?: Array<{ scope_type: PackageScopeType; scope_value: string }>;
+		scopes?: Array<{ scope_type: PackageScopeType; scope_value?: string }>;
 		plans?: Array<{ plan_type: PackagePlanType; name: string; price: number; duration_days: number; status?: number; sort?: number }>;
 	}) {
 		const section = await this.packageSectionRepository.save({
@@ -185,7 +221,7 @@ export class PackageService {
 			cover_style?: PackageSection['cover_style'] | null;
 			status?: number;
 			sort?: number;
-			scopes?: Array<{ scope_type: PackageScopeType; scope_value: string }>;
+			scopes?: Array<{ scope_type: PackageScopeType; scope_value?: string }>;
 			plans?: Array<{ plan_type: PackagePlanType; name: string; price: number; duration_days: number; status?: number; sort?: number }>;
 		},
 	) {
@@ -222,15 +258,18 @@ export class PackageService {
 		];
 	}
 
-	private async replaceScopes(sectionId: number, scopes: Array<{ scope_type: PackageScopeType; scope_value: string }>) {
+	private async replaceScopes(sectionId: number, scopes: Array<{ scope_type: PackageScopeType; scope_value?: string }>) {
 		await this.packageSectionScopeRepository.delete({ section_id: sectionId });
 		const safeScopes = scopes
 			.map((item) => ({
 				section_id: sectionId,
 				scope_type: item.scope_type,
-				scope_value: String(item.scope_value || '').trim(),
+				scope_value:
+					item.scope_type === PackageScopeType.ALL
+						? String(item.scope_value || '*').trim() || '*'
+						: String(item.scope_value || '').trim(),
 			}))
-			.filter((item) => item.scope_value);
+			.filter((item) => item.scope_type === PackageScopeType.ALL || item.scope_value);
 		if (safeScopes.length > 0) {
 			await this.packageSectionScopeRepository.save(safeScopes);
 		}
@@ -276,6 +315,10 @@ export class PackageService {
 		}
 
 		for (const scope of scopes) {
+			if (scope.scope_type === PackageScopeType.ALL) {
+				pushLabel('全站课程');
+				continue;
+			}
 			const value = String(scope.scope_value || '').trim();
 			if (!value) continue;
 			if (scope.scope_type === PackageScopeType.CATEGORY) {
@@ -304,6 +347,7 @@ export class PackageService {
 
 	private async formatSection(section: PackageSection) {
 		const scopeCategoryLabels = await this.resolveScopeCategoryLabels(section.scopes || []);
+		const coversAllCourses = this.sectionHasAllCoursesScope(section.scopes || []);
 		return {
 			id: section.id,
 			name: section.name,
@@ -312,6 +356,8 @@ export class PackageService {
 			coverStyle: section.cover_style,
 			coverFallbackText: scopeCategoryLabels.join('、'),
 			scopeCategoryLabels,
+			coversAllCourses,
+			isVip: coversAllCourses,
 			status: section.status,
 			sort: section.sort,
 			scopes: (section.scopes || []).map((scope) => ({
@@ -398,12 +444,15 @@ export class PackageService {
 				const subscription = subscriptionMap.get(section.id);
 				const active = subscription && subscription.expire_time > new Date();
 				const scopeCategoryLabels = await this.resolveScopeCategoryLabels(section.scopes || []);
+				const coversAllCourses = this.sectionHasAllCoursesScope(section.scopes || []);
 				return {
 					id: section.id,
 					name: section.name,
 					description: section.description,
 					coverImg: section.cover_img,
 					coverFallbackText: scopeCategoryLabels.join('、'),
+					coversAllCourses,
+					isVip: coversAllCourses,
 					plans: (section.plans || [])
 						.filter((plan) => plan.status === 1)
 						.sort((a, b) => a.sort - b.sort)
@@ -428,27 +477,44 @@ export class PackageService {
 		});
 		if (!section) throw new NotFoundException('套餐不存在');
 
-		const courseIds = (section.scopes || [])
-			.filter((scope) => scope.scope_type === PackageScopeType.COURSE)
-			.map((scope) => Number(scope.scope_value))
-			.filter((id) => Number.isInteger(id) && id > 0);
-
-		let courses: Course[] = [];
-		if (courseIds.length > 0) {
-			courses = await this.courseRepository.find({ where: { id: In(courseIds), status: 1 } });
-		}
-
-		const categoryScopes = (section.scopes || []).filter((scope) => scope.scope_type !== PackageScopeType.COURSE);
-		let categoryCourses: Course[] = [];
-		if (categoryScopes.length > 0) {
-			const allCourses = await this.courseRepository.find({ where: { status: 1 } });
-			categoryCourses = allCourses.filter((course) =>
-				(section.scopes || []).some((scope) => scope.scope_type !== PackageScopeType.COURSE && this.courseMatchesScope(course, scope)),
-			);
-		}
-
+		const coversAllCourses = this.sectionHasAllCoursesScope(section.scopes || []);
 		const courseMap = new Map<number, Course>();
-		[...courses, ...categoryCourses].forEach((course) => courseMap.set(course.id, course));
+
+		if (coversAllCourses) {
+			const allCourses = await this.courseRepository.find({
+				where: { status: 1 },
+				order: { sort: 'ASC', id: 'ASC' },
+			});
+			allCourses.forEach((course) => courseMap.set(course.id, course));
+		} else {
+			const courseIds = (section.scopes || [])
+				.filter((scope) => scope.scope_type === PackageScopeType.COURSE)
+				.map((scope) => Number(scope.scope_value))
+				.filter((id) => Number.isInteger(id) && id > 0);
+
+			let courses: Course[] = [];
+			if (courseIds.length > 0) {
+				courses = await this.courseRepository.find({ where: { id: In(courseIds), status: 1 } });
+			}
+
+			const categoryScopes = (section.scopes || []).filter(
+				(scope) => scope.scope_type !== PackageScopeType.COURSE && scope.scope_type !== PackageScopeType.ALL,
+			);
+			let categoryCourses: Course[] = [];
+			if (categoryScopes.length > 0) {
+				const allCourses = await this.courseRepository.find({ where: { status: 1 } });
+				categoryCourses = allCourses.filter((course) =>
+					(section.scopes || []).some(
+						(scope) =>
+							scope.scope_type !== PackageScopeType.COURSE &&
+							scope.scope_type !== PackageScopeType.ALL &&
+							this.courseMatchesScope(course, scope),
+					),
+				);
+			}
+
+			[...courses, ...categoryCourses].forEach((course) => courseMap.set(course.id, course));
+		}
 
 		let subscription: UserPackageSubscription | null = null;
 		if (userId) {
@@ -458,9 +524,12 @@ export class PackageService {
 		}
 		const active = subscription && subscription.expire_time > new Date();
 
+		const allCourses = Array.from(courseMap.values());
+		const previewCourses = coversAllCourses ? allCourses.slice(0, 30) : allCourses;
+
 		return {
 			...(await this.formatSection(section)),
-			courses: Array.from(courseMap.values()).map((course) => ({
+			courses: previewCourses.map((course) => ({
 				id: course.id,
 				name: course.name,
 				coverImg: course.cover_img,
@@ -468,6 +537,7 @@ export class PackageService {
 				subCategory: course.sub_category,
 				price: Number(course.price),
 			})),
+			courseCount: allCourses.length,
 			subscribed: !!active,
 			expireTime: active ? subscription?.expire_time : null,
 		};

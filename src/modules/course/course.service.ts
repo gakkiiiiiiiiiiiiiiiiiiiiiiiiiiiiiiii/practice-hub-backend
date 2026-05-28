@@ -176,10 +176,15 @@ export class CourseService {
         .filter((auth) => !auth.expire_time || new Date(auth.expire_time).getTime() > now)
         .map((auth) => [auth.course_id, auth]),
     );
+    const packageAccessMap = await this.packageService.batchUserHasCourseAccessViaPackage(userId, courses);
 
     return courses.map((course) => ({
       ...course,
-      hasAuth: Number(course.price) === 0 || course.is_free === 1 || authMap.has(course.id),
+      hasAuth:
+        Number(course.price) === 0 ||
+        course.is_free === 1 ||
+        authMap.has(course.id) ||
+        packageAccessMap.get(course.id) === true,
       expireTime: authMap.get(course.id)?.expire_time || null,
     }));
   }

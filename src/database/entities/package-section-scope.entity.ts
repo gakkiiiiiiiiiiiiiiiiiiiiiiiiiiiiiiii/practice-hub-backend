@@ -5,6 +5,8 @@ export enum PackageScopeType {
 	COURSE = 'course',
 	CATEGORY = 'category',
 	SUB_CATEGORY = 'sub_category',
+	/** VIP：订阅后可查看全站全部启用课程 */
+	ALL = 'all',
 }
 
 @Entity('package_section_scope')

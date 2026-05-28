@@ -1,4 +1,4 @@
-import { IsArray, IsIn, IsNumber, IsObject, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsIn, IsNumber, IsObject, IsOptional, IsString, Min, ValidateIf, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PackagePlanType } from '../../../database/entities/package-plan.entity';
@@ -9,9 +9,10 @@ class PackageScopeDto {
 	@IsIn(Object.values(PackageScopeType))
 	scope_type: PackageScopeType;
 
-	@ApiProperty()
+	@ApiPropertyOptional({ description: 'VIP 全站类型可省略，默认 *' })
+	@ValidateIf((item) => item.scope_type !== PackageScopeType.ALL)
 	@IsString()
-	scope_value: string;
+	scope_value?: string;
 }
 
 class PackageCoverStyleDto {
