@@ -27,14 +27,30 @@ export class CoinService {
     private readonly appUserRepository: Repository<AppUser>,
   ) {}
 
-  /** 业务价（元）→ 微信代币数量（整数，与小程序后台代币兑换比例一致，默认 1 元 = 1 代币） */
+  /**
+   * 1 元人民币对应多少微信代币（须与小程序后台「代币配置」兑换比例一致）。
+   * 默认 100：1 元 = 100 代币（1 代币 = 1 分），可精确表示 4.5 元 = 450 代币。
+   * 若后台为 1 元 = 10 代币，请设 COIN_PER_YUAN=10。
+   */
   getCoinPerYuan() {
-    const value = Number(this.configService.get<string>('COIN_PER_YUAN') ?? 1);
-    return Number.isFinite(value) && value > 0 ? value : 1;
+    const value = Number(this.configService.get<string>('COIN_PER_YUAN') ?? 100);
+    return Number.isFinite(value) && value > 0 ? value : 100;
   }
 
   yuanToCoinInt(yuan: number) {
-    return Math.max(1, Math.round(Number(yuan || 0) * this.getCoinPerYuan()));
+    const rate = this.getCoinPerYuan();
+    const amount = Number(yuan || 0);
+    if (amount <= 0) {
+      return 1;
+    }
+    const coins = Math.round(amount * rate);
+    if (rate === 1 && !Number.isInteger(amount)) {
+      this.logger.warn(
+        `价格 ${amount} 元含小数，COIN_PER_YUAN=1 会四舍五入为 ${coins} 代币；` +
+          `建议微信后台设 1元=100代币 并配置 COIN_PER_YUAN=100`,
+      );
+    }
+    return Math.max(1, coins);
   }
 
   getDefaultUserIp(clientIp?: string) {
