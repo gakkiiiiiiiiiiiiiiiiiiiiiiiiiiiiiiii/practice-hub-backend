@@ -68,22 +68,30 @@ tcb deploy
 若部署/构建时间过长，可参考以下已做优化与建议：
 
 1. **启用 BuildKit**（推荐）  
-   Dockerfile 已使用 `RUN --mount=type=cache,target=/root/.npm` 缓存 npm 目录，**需开启 BuildKit 才能生效**：
+   Dockerfile 使用 `RUN --mount=type=cache` 缓存 npm，且 **runtime-base 与 builder 两阶段并行构建**。**需开启 BuildKit**：
    ```bash
    export DOCKER_BUILDKIT=1
    docker build -t practice-hub-backend:latest .
    ```
-   微信云托管若使用 Docker 构建，请在构建环境中启用 BuildKit，以便复用 npm 缓存，二次构建会明显加快。
+   微信云托管构建环境若支持 BuildKit，二次构建会明显加快；不支持时仍可通过分层缓存受益。
 
-2. **已做修改**  
-   - **bcrypt → bcryptjs**：去掉原生 C++ 编译，Alpine 下不再安装 build-base、拖慢构建。  
-   - **npm 缓存挂载**：builder 与 production 阶段均使用缓存，未改 `package*.json` 时依赖安装会命中缓存。  
-   - **`--prefer-offline --no-audit`**：减少网络与审计耗时。
+2. **已做修改（构建速度）**  
+   - **单次 npm ci**：builder 内 `npm run build && npm prune --omit=dev`，不再单独 prod-deps 阶段二次安装。  
+   - **并行阶段**：LibreOffice / Ghostscript 等系统包装在 `runtime-base`，与 Node 编译同时进行。  
+   - **精确 COPY**：只复制 `src/` 与 tsconfig，避免 `COPY . .` 导致缓存频繁失效、上下文上传变慢。  
+   - **COPY --chown**：去掉对整棵 `node_modules` 的 `chown -R`（该步骤曾显著拖慢构建）。  
+   - **`.npmrc` 国内镜像**：默认使用 `registry.npmmirror.com`，减少 npm 拉包耗时。  
+   - **bcrypt → bcryptjs**：无原生编译，Alpine 下无需 build-base。
 
-3. **若仍很慢**  
+3. **已做修改（镜像体积 → 推送更快）**  
+   - 移除 GraphicsMagick / ImageMagick / font-noto-cjk，改用 gs + poppler + font-wqy-zenhei。  
+   - 生产镜像不再携带 devDependencies（pdf2pic、pdfjs-dist 等）。
+
+4. **若仍很慢**  
    - 确认构建环境已开启 BuildKit。  
-   - 检查网络：拉取 node:20-alpine 与 npm 包可能较慢，可配置镜像源。  
-   - 首次构建会较慢，后续只改业务代码时主要重跑 `COPY . .` 和 `npm run build`，会快很多。
+   - 首次构建需拉取 node:20-alpine、安装 LibreOffice、全量 npm ci，耗时最长属正常。  
+   - 仅改业务代码时，主要重跑 `npm run build`，依赖层与系统包层应命中缓存。  
+   - 检查云托管构建日志：若 npm 超时，可在控制台配置 `NPM_CONFIG_REGISTRY=https://registry.npmmirror.com`。
 
 ## 本地构建测试
 

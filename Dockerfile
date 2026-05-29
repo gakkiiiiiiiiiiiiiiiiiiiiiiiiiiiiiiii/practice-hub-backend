@@ -1,78 +1,64 @@
 # ============================================
 # 微信云托管 - 后端服务 Dockerfile
 # ============================================
-# 使用 BuildKit 加速：DOCKER_BUILDKIT=1 docker build ...
-# 多阶段构建，利用缓存层减少部署时长
+# BuildKit 并行构建 + 分层缓存，缩短部署时间：
+#   DOCKER_BUILDKIT=1 docker build -t practice-hub-backend .
 
 # syntax=docker/dockerfile:1
-# 构建阶段
+
+# 系统依赖（与 builder 并行构建，仅 Dockerfile 此段变更时重建）
+FROM node:20-alpine AS runtime-base
+
+RUN apk add --no-cache \
+      ghostscript \
+      poppler-utils \
+      libreoffice-writer \
+      font-wqy-zenhei \
+      fontconfig \
+    && fc-cache -f \
+    && rm -rf /var/cache/apk/* /usr/share/man /usr/share/doc \
+    && rm -rf /usr/lib/libreoffice/share/gallery \
+    && rm -rf /usr/lib/libreoffice/share/template \
+    && rm -rf /usr/lib/libreoffice/share/wizards
+
+# 构建阶段：单次 npm ci → 编译 → prune 生产依赖（避免 prod-deps 二次安装）
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# 仅安装 git（部分 npm 包可选依赖需要）
-RUN apk add --no-cache git
+COPY package*.json .npmrc ./
 
-# 先复制依赖描述，利用缓存：未改 package 时跳过整层
-COPY package*.json ./
-
-# 使用 BuildKit 缓存 npm 目录，二次构建时大幅加速
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --legacy-peer-deps --prefer-offline --no-audit
+    npm ci --legacy-peer-deps --prefer-offline
 
-COPY . .
+COPY nest-cli.json tsconfig.json tsconfig.build.json ./
+COPY src ./src
 
-RUN npm run build
+RUN npm run build \
+    && npm prune --omit=dev \
+    && npm cache clean --force
 
 # 生产阶段
-FROM node:20-alpine AS production
-
-# PDF 转图 / OCR 依赖：
-# - pdf2pic@3.x 依赖 GraphicsMagick + Ghostscript
-# - poppler-utils/pdftoppm 作为线上 PDF 转图主兜底
-# - ImageMagick 作为线上容器中 GraphicsMagick 返回空结果时的兜底
-# - LibreOffice 用于将 doc/docx 文件课程先转换为 PDF，再生成图片缓存
-# - 缺少 gm 时，课程文件单页预览接口会在云托管中转图失败
-RUN apk add --no-cache graphicsmagick ghostscript poppler-utils imagemagick libreoffice font-noto-cjk
+FROM runtime-base AS production
 
 WORKDIR /app
 
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nestjs -u 1001
 
-COPY package*.json ./
+COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nestjs:nodejs /app/package*.json ./
+COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nestjs:nodejs /app/src/assets ./src/assets
 
-# 生产依赖也使用缓存；bcrypt 已换 bcryptjs，无原生编译
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --only=production --legacy-peer-deps --prefer-offline --no-audit && \
-    npm cache clean --force
-
-# 从构建阶段复制构建产物
-COPY --from=builder /app/dist ./dist
-
-# 虚拟支付内置商品图（微信拉取 item_url 兜底）
-COPY --from=builder /app/src/assets ./src/assets
-
-# 复制必要的配置文件
-COPY --from=builder /app/tsconfig.json ./tsconfig.json
-
-# 更改文件所有者
-RUN chown -R nestjs:nodejs /app
-
-# 切换到非 root 用户
 USER nestjs
 
-# 暴露端口（使用 8080 避免权限问题）
-# 微信云托管会自动通过环境变量 PORT 配置端口
 EXPOSE 8080
 
-# 设置环境变量
 ENV NODE_ENV=production
 ENV PORT=8080
 
-# 健康检查（微信云托管会使用此检查服务状态）
-HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=3s --start-period=45s --retries=3 \
   CMD node -e "require('http').get('http://127.0.0.1:8080/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)}).on('error', () => process.exit(1))"
 
-# 启动应用（须与 nest build 产物路径一致）
 CMD ["node", "dist/main.js"]

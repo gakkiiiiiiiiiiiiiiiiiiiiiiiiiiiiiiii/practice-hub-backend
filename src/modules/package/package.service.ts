@@ -536,6 +536,7 @@ export class PackageService {
 
 		const allCourses = Array.from(courseMap.values());
 		const previewCourses = coversAllCourses ? allCourses.slice(0, 30) : allCourses;
+		const coursesTotalPrice = this.sumCoursesPrice(allCourses);
 
 		return {
 			...(await this.formatSection(section)),
@@ -546,11 +547,21 @@ export class PackageService {
 				category: course.category,
 				subCategory: course.sub_category,
 				price: Number(course.price),
+				isFree: course.is_free === 1,
 			})),
 			courseCount: allCourses.length,
+			coursesTotalPrice,
 			subscribed: !!active,
 			expireTime: active ? subscription?.expire_time : null,
 		};
+	}
+
+	private sumCoursesPrice(courses: Course[]) {
+		return courses.reduce((sum, course) => {
+			if (course.is_free === 1) return sum;
+			const price = Number(course.price) || 0;
+			return sum + Math.max(0, price);
+		}, 0);
 	}
 
 	async getPlanForOrder(sectionId: number, planId: number) {

@@ -682,7 +682,7 @@ export class CourseService {
   /**
    * 将课程文件指定页转为预览图（用于小程序内图片预览）
    * 使用 JPEG 以在尽量保持清晰度的前提下降低传输体积。
-   * 依赖 pdf2pic（需系统安装 GraphicsMagick + Ghostscript），失败时抛出
+   * 依赖 Ghostscript / Poppler 将 PDF 页转为 JPEG，失败时抛出
    */
   async getCourseFilePreviewPageImage(
     courseId: number,
@@ -1266,36 +1266,7 @@ export class CourseService {
     const popplerBuffer = await this.renderPdfPageWithPoppler(pdfPath, pageNum, tmpDir);
     if (popplerBuffer && popplerBuffer.length > 8) return popplerBuffer;
 
-    try {
-      const { fromPath } = await import('pdf2pic');
-      const convert = fromPath(pdfPath, {
-        format: 'jpeg',
-        quality: PREVIEW_IMAGE_QUALITY,
-        width: PREVIEW_IMAGE_WIDTH,
-        preserveAspectRatio: true,
-        density: PREVIEW_IMAGE_DENSITY,
-      });
-      let result = await this.withTimeout(
-        convert(pageNum, { responseType: 'buffer' }) as Promise<unknown>,
-        8000,
-        'PDF 预览图生成超时，请稍后重试',
-      );
-      let buffer = this.readPdf2PicResultBuffer(result);
-      if (!buffer || buffer.length <= 8) {
-        try {
-          convert.setGMClass('imagemagick');
-          result = await this.withTimeout(
-            convert(pageNum, { responseType: 'buffer' }) as Promise<unknown>,
-            8000,
-            'PDF 预览图生成超时，请稍后重试',
-          );
-          buffer = this.readPdf2PicResultBuffer(result);
-        } catch (_) {}
-      }
-      return buffer;
-    } catch (_) {
-      return undefined;
-    }
+    return undefined;
   }
 
   private async renderPdfPageWithPoppler(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
@@ -1379,29 +1350,6 @@ export class CourseService {
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
-
-  private readPdf2PicResultBuffer(result: unknown): Buffer | undefined {
-	    if (!result) return undefined;
-	    if (Buffer.isBuffer(result)) return result;
-	    if (result instanceof Uint8Array) return Buffer.from(result);
-	    if (typeof result === 'string') return Buffer.from(result, 'base64');
-	    if (typeof result !== 'object') return undefined;
-
-	    const value = result as {
-	      buffer?: Buffer | Uint8Array;
-	      data?: Buffer | Uint8Array | string;
-	      base64?: string;
-	      path?: string;
-	    };
-	    if (Buffer.isBuffer(value.buffer)) return value.buffer;
-	    if (value.buffer instanceof Uint8Array) return Buffer.from(value.buffer);
-	    if (Buffer.isBuffer(value.data)) return value.data;
-	    if (value.data instanceof Uint8Array) return Buffer.from(value.data);
-	    if (typeof value.data === 'string') return Buffer.from(value.data, 'base64');
-	    if (value.base64) return Buffer.from(value.base64, 'base64');
-	    if (value.path && fs.existsSync(value.path)) return fs.readFileSync(value.path);
-	    return undefined;
-	  }
 
   private getFilePageCountVersionKey(fileUrl: string): string {
     return this.getPreviewCacheVersion(fileUrl, 'full');
