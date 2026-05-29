@@ -1,4 +1,4 @@
-import { Controller, Put, Get, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Put, Get, Post, Body, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { SystemService } from './system.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -12,6 +12,9 @@ import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
 import { SetCheckinMinutesDto } from './dto/set-checkin-minutes.dto';
 import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
+import { OperationLogInterceptor } from '../../common/interceptors/operation-log.interceptor';
+import { IssueCouponDto } from '../marketing/dto/issue-coupon.dto';
+import { GetAdminCouponListDto } from '../marketing/dto/get-admin-coupon-list.dto';
 
 @ApiTags('系统管理')
 @Controller('admin')
@@ -158,6 +161,23 @@ export class SystemController {
     },
   ) {
     const result = await this.referralCouponService.setConfig(body || {});
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('coupons')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '优惠券发放记录' })
+  async getAdminCouponList(@Query() dto: GetAdminCouponListDto) {
+    const result = await this.referralCouponService.getAdminCouponList(dto);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('coupons/issue')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @UseInterceptors(OperationLogInterceptor)
+  @ApiOperation({ summary: '给指定小程序用户发放优惠券' })
+  async issueCouponToUser(@Body() dto: IssueCouponDto) {
+    const result = await this.referralCouponService.issueCouponsByAdmin(dto);
     return CommonResponseDto.success(result);
   }
 }

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsInt, IsNumber, IsOptional, Max, Min, ValidateIf } from 'class-validator';
+import { IsInt, IsNumber, IsOptional, Max, Min, ValidateIf } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class IssueCouponDto {
