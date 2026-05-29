@@ -1,10 +1,13 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { UserReferral } from '../../database/entities/user-referral.entity';
 import { UserCoupon, UserCouponStatus } from '../../database/entities/user-coupon.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
+import { assertIntegerYuanPrice } from '../../common/utils/price.util';
+import { IssueCouponDto } from './dto/issue-coupon.dto';
+import { GetAdminCouponListDto } from './dto/get-admin-coupon-list.dto';
 
 export type ReferralCouponConfig = {
 	enabled: boolean;
@@ -192,7 +195,7 @@ export class ReferralCouponService {
 				source: coupon.source,
 				expireTime: coupon.expire_time,
 				createTime: coupon.create_time,
-				label: Number(coupon.min_amount) <= 0 ? `${Number(coupon.amount)}元无门槛` : `满${Number(coupon.min_amount)}减${Number(coupon.amount)}`,
+				label: this.formatCouponLabel(Number(coupon.amount), Number(coupon.min_amount)),
 			};
 		});
 	}
@@ -228,5 +231,140 @@ export class ReferralCouponService {
 			status: UserCouponStatus.UNUSED,
 			used_order_id: null,
 		});
+	}
+
+	private formatCouponLabel(amount: number, minAmount: number) {
+		return minAmount <= 0 ? `${amount}元无门槛` : `满${minAmount}减${amount}`;
+	}
+
+	private resolveCouponStatus(coupon: UserCoupon) {
+		const now = new Date();
+		const expired =
+			coupon.status === UserCouponStatus.UNUSED && coupon.expire_time && coupon.expire_time <= now;
+		return expired ? UserCouponStatus.EXPIRED : coupon.status;
+	}
+
+	async issueCouponsByAdmin(dto: IssueCouponDto) {
+		const user = await this.appUserRepository.findOne({ where: { id: dto.user_id } });
+		if (!user) {
+			throw new NotFoundException('用户不存在');
+		}
+
+		assertIntegerYuanPrice(dto.amount, '优惠券面额');
+		const minAmount = Math.max(0, Math.floor(Number(dto.min_amount ?? 0)));
+		assertIntegerYuanPrice(minAmount, '使用门槛');
+
+		const count = Math.min(50, Math.max(1, Number(dto.count ?? 1)));
+		let expireTime: Date | null = null;
+		if (dto.valid_days && dto.valid_days > 0) {
+			expireTime = new Date();
+			expireTime.setDate(expireTime.getDate() + dto.valid_days);
+		}
+
+		const coupons = Array.from({ length: count }, () =>
+			this.userCouponRepository.create({
+				user_id: dto.user_id,
+				amount: dto.amount,
+				min_amount: minAmount,
+				status: UserCouponStatus.UNUSED,
+				source: 'admin',
+				expire_time: expireTime,
+			}),
+		);
+		const saved = await this.userCouponRepository.save(coupons);
+
+		return {
+			userId: user.id,
+			nickname: user.nickname || '未设置',
+			issuedCount: saved.length,
+			coupons: saved.map((coupon) => ({
+				id: coupon.id,
+				amount: Number(coupon.amount),
+				minAmount: Number(coupon.min_amount),
+				label: this.formatCouponLabel(Number(coupon.amount), Number(coupon.min_amount)),
+				expireTime: coupon.expire_time,
+			})),
+		};
+	}
+
+	async getAdminCouponList(dto: GetAdminCouponListDto) {
+		const page = dto.page ?? 1;
+		const pageSize = dto.pageSize ?? 10;
+		const skip = (page - 1) * pageSize;
+
+		const queryBuilder = this.userCouponRepository.createQueryBuilder('coupon').orderBy('coupon.create_time', 'DESC');
+
+		if (dto.user_id) {
+			queryBuilder.andWhere('coupon.user_id = :userId', { userId: dto.user_id });
+		}
+
+		if (dto.source) {
+			queryBuilder.andWhere('coupon.source = :source', { source: dto.source });
+		}
+
+		if (dto.status === UserCouponStatus.USED) {
+			queryBuilder.andWhere('coupon.status = :status', { status: UserCouponStatus.USED });
+		} else if (dto.status === UserCouponStatus.EXPIRED) {
+			queryBuilder.andWhere('coupon.status = :unused', { unused: UserCouponStatus.UNUSED });
+			queryBuilder.andWhere('coupon.expire_time IS NOT NULL');
+			queryBuilder.andWhere('coupon.expire_time <= :now', { now: new Date() });
+		} else if (dto.status === UserCouponStatus.UNUSED) {
+			queryBuilder.andWhere('coupon.status = :status', { status: UserCouponStatus.UNUSED });
+			queryBuilder.andWhere('(coupon.expire_time IS NULL OR coupon.expire_time > :now)', { now: new Date() });
+		}
+
+		if (dto.keyword) {
+			const users = await this.appUserRepository
+				.createQueryBuilder('user')
+				.select(['user.id'])
+				.where('(user.nickname LIKE :keyword OR user.openid LIKE :keyword)', { keyword: `%${dto.keyword}%` })
+				.getMany();
+			const userIds = users.map((item) => item.id);
+			if (userIds.length === 0) {
+				return { list: [], total: 0, page, pageSize };
+			}
+			queryBuilder.andWhere('coupon.user_id IN (:...userIds)', { userIds });
+		}
+
+		const total = await queryBuilder.getCount();
+		const coupons = await queryBuilder.skip(skip).take(pageSize).getMany();
+		const userIds = [...new Set(coupons.map((coupon) => coupon.user_id))];
+		const users =
+			userIds.length > 0
+				? await this.appUserRepository.find({
+						where: { id: In(userIds) },
+					})
+				: [];
+		const userMap = new Map(users.map((user) => [user.id, user]));
+
+		const list = coupons.map((coupon) => {
+			const user = userMap.get(coupon.user_id);
+			const amount = Number(coupon.amount);
+			const minAmount = Number(coupon.min_amount);
+			const status = this.resolveCouponStatus(coupon);
+			return {
+				id: coupon.id,
+				userId: coupon.user_id,
+				user: user
+					? {
+							id: user.id,
+							nickname: user.nickname || '未设置',
+							openId: user.openid,
+							avatar: user.avatar,
+						}
+					: null,
+				amount,
+				minAmount,
+				label: this.formatCouponLabel(amount, minAmount),
+				status,
+				source: coupon.source,
+				sourceLabel: coupon.source === 'admin' ? '后台发放' : coupon.source === 'referral' ? '拉新奖励' : coupon.source,
+				expireTime: coupon.expire_time,
+				createTime: coupon.create_time,
+				usedOrderId: coupon.used_order_id,
+			};
+		});
+
+		return { list, total, page, pageSize };
 	}
 }
