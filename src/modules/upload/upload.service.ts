@@ -4,6 +4,7 @@ import * as COS from 'cos-nodejs-sdk-v5';
 import axios from 'axios';
 import * as https from 'https';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 interface TempAuth {
@@ -38,8 +39,8 @@ export class UploadService {
 		this.bucket = this.configService.get<string>('COS_BUCKET', '7072-prod-6g7tpqs40c5a758b-1392943725');
 		this.region = this.configService.get<string>('COS_REGION', 'ap-shanghai');
 
-		// 本地存储配置
-		this.uploadDir = path.join(process.cwd(), 'uploads');
+		// 本地存储配置（可通过 UPLOAD_DIR 覆盖；容器内默认 uploads）
+		this.uploadDir = this.configService.get<string>('UPLOAD_DIR') || path.join(process.cwd(), 'uploads');
 
 		// 获取基础 URL，优先使用环境变量，否则根据端口自动判断
 		const port = parseInt(process.env.PORT || '8080', 10);
@@ -117,9 +118,20 @@ export class UploadService {
 	 * 确保上传目录存在
 	 */
 	private ensureUploadDir(): void {
-		if (!fs.existsSync(this.uploadDir)) {
-			fs.mkdirSync(this.uploadDir, { recursive: true });
-			console.log(`[本地存储] 创建上传目录: ${this.uploadDir}`);
+		try {
+			if (!fs.existsSync(this.uploadDir)) {
+				fs.mkdirSync(this.uploadDir, { recursive: true });
+				console.log(`[本地存储] 创建上传目录: ${this.uploadDir}`);
+			}
+		} catch (error: any) {
+			const fallbackDir = path.join(os.tmpdir(), 'practice-hub-uploads');
+			this.logger.warn(
+				`无法创建上传目录 ${this.uploadDir}（${error?.message || error}），改用 ${fallbackDir}`,
+			);
+			this.uploadDir = fallbackDir;
+			if (!fs.existsSync(this.uploadDir)) {
+				fs.mkdirSync(this.uploadDir, { recursive: true });
+			}
 		}
 	}
 

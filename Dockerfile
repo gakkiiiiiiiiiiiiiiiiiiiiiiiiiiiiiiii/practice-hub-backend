@@ -51,6 +51,10 @@ COPY --from=builder --chown=nestjs:nodejs /app/package*.json ./
 COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nestjs:nodejs /app/src/assets ./src/assets
 
+# nestjs 用户需对 /app 有写权限（multer 临时文件、分片上传等）
+RUN mkdir -p /app/uploads/temp /app/uploads/pdf \
+    && chown -R nestjs:nodejs /app
+
 USER nestjs
 
 EXPOSE 8080
