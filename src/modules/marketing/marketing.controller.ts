@@ -19,6 +19,7 @@ export class MarketingController {
 			enabled: config.enabled,
 			inviteCountPerReward: config.invite_count_per_reward,
 			couponAmount: config.coupon_amount,
+			couponMinAmount: config.coupon_min_amount,
 			maxCouponsPerUser: config.max_coupons_per_user,
 		});
 	}

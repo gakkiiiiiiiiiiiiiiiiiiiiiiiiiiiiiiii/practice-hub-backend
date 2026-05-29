@@ -152,6 +152,7 @@ export class SystemController {
       enabled?: boolean;
       invite_count_per_reward?: number;
       coupon_amount?: number;
+      coupon_min_amount?: number;
       max_coupons_per_user?: number;
       coupon_valid_days?: number | null;
     },

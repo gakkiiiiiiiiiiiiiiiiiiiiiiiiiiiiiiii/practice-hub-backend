@@ -10,6 +10,7 @@ export type ReferralCouponConfig = {
 	enabled: boolean;
 	invite_count_per_reward: number;
 	coupon_amount: number;
+	coupon_min_amount: number;
 	max_coupons_per_user: number;
 	coupon_valid_days: number | null;
 };
@@ -18,6 +19,7 @@ const DEFAULT_REFERRAL_CONFIG: ReferralCouponConfig = {
 	enabled: true,
 	invite_count_per_reward: 3,
 	coupon_amount: 5,
+	coupon_min_amount: 0,
 	max_coupons_per_user: 10,
 	coupon_valid_days: 365,
 };
@@ -48,6 +50,7 @@ export class ReferralCouponService {
 				enabled: parsed.enabled !== false,
 				invite_count_per_reward: Math.max(1, Number(parsed.invite_count_per_reward) || 3),
 				coupon_amount: Math.max(0.01, Number(parsed.coupon_amount) || 5),
+				coupon_min_amount: Math.max(0, Math.floor(Number(parsed.coupon_min_amount) || 0)),
 				max_coupons_per_user: Math.max(1, Number(parsed.max_coupons_per_user) || 10),
 				coupon_valid_days:
 					parsed.coupon_valid_days === null || parsed.coupon_valid_days === undefined
@@ -65,6 +68,7 @@ export class ReferralCouponService {
 			enabled: input.enabled !== undefined ? !!input.enabled : current.enabled,
 			invite_count_per_reward: Math.max(1, Number(input.invite_count_per_reward ?? current.invite_count_per_reward) || 3),
 			coupon_amount: Math.max(0.01, Number(input.coupon_amount ?? current.coupon_amount) || 5),
+			coupon_min_amount: Math.max(0, Math.floor(Number(input.coupon_min_amount ?? current.coupon_min_amount) || 0)),
 			max_coupons_per_user: Math.max(1, Number(input.max_coupons_per_user ?? current.max_coupons_per_user) || 10),
 			coupon_valid_days:
 				input.coupon_valid_days === null
@@ -134,7 +138,7 @@ export class ReferralCouponService {
 			await this.userCouponRepository.save({
 				user_id: inviterUserId,
 				amount: config.coupon_amount,
-				min_amount: 0,
+				min_amount: config.coupon_min_amount,
 				status: UserCouponStatus.UNUSED,
 				source: 'referral',
 				expire_time: expireTime,
