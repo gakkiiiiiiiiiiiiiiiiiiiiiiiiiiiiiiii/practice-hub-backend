@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsInt, IsNumber, IsOptional, Max, Min, ValidateIf } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { normalizeThresholdYuan } from '../../../common/utils/price.util';
 
 export class IssueCouponDto {
 	@ApiProperty({ description: '小程序用户 ID' })
@@ -21,9 +22,9 @@ export class IssueCouponDto {
 		if (value === undefined || value === null || value === '') {
 			return 0;
 		}
-		return parseInt(String(value), 10);
+		return normalizeThresholdYuan(Number(value));
 	})
-	@IsInt()
+	@IsNumber()
 	@Min(0)
 	min_amount?: number;
 

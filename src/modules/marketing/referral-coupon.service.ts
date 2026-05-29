@@ -5,7 +5,7 @@ import { SystemConfig } from '../../database/entities/system-config.entity';
 import { UserReferral } from '../../database/entities/user-referral.entity';
 import { UserCoupon, UserCouponStatus } from '../../database/entities/user-coupon.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
-import { assertIntegerYuanPrice } from '../../common/utils/price.util';
+import { assertIntegerYuanPrice, normalizeThresholdYuan, formatYuanDisplay } from '../../common/utils/price.util';
 import { IssueCouponDto } from './dto/issue-coupon.dto';
 import { GetAdminCouponListDto } from './dto/get-admin-coupon-list.dto';
 
@@ -53,7 +53,7 @@ export class ReferralCouponService {
 				enabled: parsed.enabled !== false,
 				invite_count_per_reward: Math.max(1, Number(parsed.invite_count_per_reward) || 3),
 				coupon_amount: Math.max(0.01, Number(parsed.coupon_amount) || 5),
-				coupon_min_amount: Math.max(0, Math.floor(Number(parsed.coupon_min_amount) || 0)),
+				coupon_min_amount: normalizeThresholdYuan(parsed.coupon_min_amount),
 				max_coupons_per_user: Math.max(1, Number(parsed.max_coupons_per_user) || 10),
 				coupon_valid_days:
 					parsed.coupon_valid_days === null || parsed.coupon_valid_days === undefined
@@ -71,7 +71,7 @@ export class ReferralCouponService {
 			enabled: input.enabled !== undefined ? !!input.enabled : current.enabled,
 			invite_count_per_reward: Math.max(1, Number(input.invite_count_per_reward ?? current.invite_count_per_reward) || 3),
 			coupon_amount: Math.max(0.01, Number(input.coupon_amount ?? current.coupon_amount) || 5),
-			coupon_min_amount: Math.max(0, Math.floor(Number(input.coupon_min_amount ?? current.coupon_min_amount) || 0)),
+			coupon_min_amount: normalizeThresholdYuan(input.coupon_min_amount ?? current.coupon_min_amount),
 			max_coupons_per_user: Math.max(1, Number(input.max_coupons_per_user ?? current.max_coupons_per_user) || 10),
 			coupon_valid_days:
 				input.coupon_valid_days === null
@@ -213,7 +213,7 @@ export class ReferralCouponService {
 		}
 		const minAmount = Number(coupon.min_amount) || 0;
 		if (orderAmount < minAmount) {
-			throw new BadRequestException(`订单金额需满${minAmount}元才可使用该优惠券`);
+			throw new BadRequestException(`订单金额需满${formatYuanDisplay(minAmount)}元才可使用该优惠券`);
 		}
 		const discount = Math.min(orderAmount, Number(coupon.amount) || 0);
 		return { coupon, discount };
@@ -234,7 +234,9 @@ export class ReferralCouponService {
 	}
 
 	private formatCouponLabel(amount: number, minAmount: number) {
-		return minAmount <= 0 ? `${amount}元无门槛` : `满${minAmount}减${amount}`;
+		const amountText = formatYuanDisplay(amount);
+		const minText = formatYuanDisplay(minAmount);
+		return minAmount <= 0 ? `${amountText}元无门槛` : `满${minText}减${amountText}`;
 	}
 
 	private resolveCouponStatus(coupon: UserCoupon) {
@@ -251,8 +253,7 @@ export class ReferralCouponService {
 		}
 
 		assertIntegerYuanPrice(dto.amount, '优惠券面额');
-		const minAmount = Math.max(0, Math.floor(Number(dto.min_amount ?? 0)));
-		assertIntegerYuanPrice(minAmount, '使用门槛');
+		const minAmount = normalizeThresholdYuan(dto.min_amount);
 
 		const count = Math.min(50, Math.max(1, Number(dto.count ?? 1)));
 		let expireTime: Date | null = null;
