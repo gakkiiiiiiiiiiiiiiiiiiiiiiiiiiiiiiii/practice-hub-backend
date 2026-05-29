@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import * as https from 'https';
@@ -10,6 +10,7 @@ import { Course } from '../../database/entities/course.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateCartOrderDto } from './dto/create-cart-order.dto';
 import { DistributorService } from '../distributor/distributor.service';
 import { XpayService } from './xpay.service';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
@@ -48,6 +49,137 @@ export class OrderService {
       return this.createPackageOrder(userId, dto, clientIp);
     }
     return this.createCourseOrder(userId, dto, clientIp);
+  }
+
+  async createCartOrder(userId: number, dto: CreateCartOrderDto, clientIp?: string) {
+    const courseIds = [...new Set((dto.course_ids || []).map((id) => Number(id)).filter((id) => id > 0))];
+    if (courseIds.length === 0) {
+      throw new BadRequestException('请选择要购买的课程');
+    }
+    if (courseIds.length > 20) {
+      throw new BadRequestException('单次最多购买20门课程');
+    }
+
+    const courses = await this.courseRepository.find({ where: { id: In(courseIds) } });
+    const courseMap = new Map(courses.map((course) => [course.id, course]));
+    if (courses.length !== courseIds.length) {
+      throw new NotFoundException('部分课程不存在或已下架');
+    }
+
+    const cartItems: Array<{ course_id: number; name: string; price: number }> = [];
+    let originalAmount = 0;
+
+    for (const courseId of courseIds) {
+      const course = courseMap.get(courseId);
+      if (!course) {
+        continue;
+      }
+      if (course.is_free === 1) {
+        throw new BadRequestException(`《${course.name}》为免费课程，无需加入购物车`);
+      }
+      const price = Number(course.price || 0);
+      assertIntegerYuanPrice(price, `《${course.name}》价格`);
+
+      const existingAuth = await this.userCourseAuthRepository.findOne({
+        where: { user_id: userId, course_id: courseId },
+      });
+      if (existingAuth) {
+        throw new BadRequestException(`您已拥有《${course.name}》`);
+      }
+
+      const hasPackageAccess = await this.packageService.userHasCourseAccessViaPackage(userId, course);
+      if (hasPackageAccess) {
+        throw new BadRequestException(`套餐已包含《${course.name}》`);
+      }
+
+      cartItems.push({
+        course_id: course.id,
+        name: course.name || '课程',
+        price,
+      });
+      originalAmount += price;
+    }
+
+    let discountAmount = 0;
+    let couponId: number | null = null;
+    if (dto.coupon_id && originalAmount > 0) {
+      const couponResult = await this.referralCouponService.validateCouponForOrder(
+        userId,
+        dto.coupon_id,
+        originalAmount,
+      );
+      discountAmount = couponResult.discount;
+      couponId = couponResult.coupon.id;
+    }
+
+    const amount = normalizePayAmountYuan(Math.max(0, originalAmount - discountAmount));
+    const goodsTitle = cartItems.length > 1 ? `购物车(${cartItems.length}门课程)` : cartItems[0].name;
+
+    if (amount <= 0) {
+      const freeOrder = this.orderRepository.create({
+        order_no: this.generateOrderNo(),
+        user_id: userId,
+        course_id: cartItems[0].course_id,
+        order_type: 'course',
+        amount: 0,
+        original_amount: originalAmount,
+        discount_amount: discountAmount,
+        coupon_id: couponId,
+        status: OrderStatus.PENDING,
+        pay_provider: 'free',
+        pay_payload: {
+          is_cart: true,
+          cart_items: cartItems,
+        },
+      });
+      await this.orderRepository.save(freeOrder);
+      await this.handlePaymentSuccess(freeOrder.id);
+      return {
+        order_no: freeOrder.order_no,
+        amount: freeOrder.amount,
+        order_type: 'course',
+        course_ids: cartItems.map((item) => item.course_id),
+        status: OrderStatus.PAID,
+        payment_params: null,
+      };
+    }
+
+    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    const order = this.orderRepository.create({
+      order_no: this.generateOrderNo(),
+      user_id: userId,
+      course_id: cartItems[0].course_id,
+      order_type: 'course',
+      amount,
+      original_amount: originalAmount,
+      discount_amount: discountAmount,
+      coupon_id: couponId,
+      status: OrderStatus.PENDING,
+      pay_provider: 'virtual_payment',
+      pay_payload: {
+        is_cart: true,
+        cart_items: cartItems,
+      },
+    });
+    await this.orderRepository.save(order);
+
+    return this.processCoinBasedPayment({
+      user,
+      userId,
+      order,
+      payAmountYuan: amount,
+      goodsTitle,
+      clientIp,
+      responseExtras: {
+        order_type: order.order_type,
+        course_ids: cartItems.map((item) => item.course_id),
+        is_cart: true,
+      },
+    });
   }
 
   private async createCourseOrder(userId: number, dto: CreateOrderDto, clientIp?: string) {
@@ -135,6 +267,43 @@ export class OrderService {
         order_type: order.order_type,
       },
     });
+  }
+
+  private async grantCourseAccess(userId: number, courseId: number) {
+    const course = await this.courseRepository.findOne({
+      where: { id: courseId },
+    });
+    if (!course) {
+      return;
+    }
+
+    let expireTime: Date | null = null;
+    if (course.validity_days !== null && course.validity_days !== undefined) {
+      expireTime = new Date();
+      expireTime.setDate(expireTime.getDate() + course.validity_days);
+    }
+
+    const existingAuth = await this.userCourseAuthRepository.findOne({
+      where: {
+        user_id: userId,
+        course_id: courseId,
+      },
+    });
+
+    if (!existingAuth) {
+      await this.userCourseAuthRepository.save({
+        user_id: userId,
+        course_id: courseId,
+        source: AuthSource.PURCHASE,
+        expire_time: expireTime,
+      });
+      return;
+    }
+
+    if (!existingAuth.expire_time || (expireTime && expireTime > existingAuth.expire_time)) {
+      existingAuth.expire_time = expireTime;
+      await this.userCourseAuthRepository.save(existingAuth);
+    }
   }
 
   private async createPackageOrder(userId: number, dto: CreateOrderDto, clientIp?: string) {
@@ -652,6 +821,25 @@ export class OrderService {
       return { message: '套餐订单支付成功' };
     }
 
+    const cartItems = Array.isArray(order.pay_payload?.cart_items) ? order.pay_payload.cart_items : [];
+    if (cartItems.length > 0) {
+      for (const item of cartItems) {
+        const courseId = Number(item?.course_id);
+        if (courseId > 0) {
+          await this.grantCourseAccess(order.user_id, courseId);
+        }
+      }
+      if (order.coupon_id) {
+        await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
+      }
+      try {
+        await this.distributorService.processOrderCommission(orderId);
+      } catch (error) {
+        console.error('订单分成处理失败:', error.message);
+      }
+      return { message: '购物车订单支付成功' };
+    }
+
     // 获取课程信息
     if (!order.course_id) {
       if (order.coupon_id) {
@@ -660,45 +848,7 @@ export class OrderService {
       return { message: '订单支付成功' };
     }
 
-    const course = await this.courseRepository.findOne({
-      where: { id: order.course_id },
-    });
-
-    if (course) {
-      // 计算过期时间
-      let expireTime: Date | null = null;
-      if (course.validity_days !== null && course.validity_days !== undefined) {
-        // 根据课程设置的有效期天数计算过期时间
-        expireTime = new Date();
-        expireTime.setDate(expireTime.getDate() + course.validity_days);
-      }
-      // 如果 validity_days 为 null，则 expireTime 保持为 null（永久有效）
-
-      // 检查是否已存在权限记录
-      const existingAuth = await this.userCourseAuthRepository.findOne({
-        where: {
-          user_id: order.user_id,
-          course_id: order.course_id,
-        },
-      });
-
-      if (!existingAuth) {
-        // 创建新的课程权限
-        await this.userCourseAuthRepository.save({
-          user_id: order.user_id,
-          course_id: order.course_id,
-          source: AuthSource.PURCHASE,
-          expire_time: expireTime,
-        });
-      } else {
-        // 如果已存在权限，更新过期时间（延长有效期）
-        // 如果新过期时间晚于当前过期时间，则更新
-        if (!existingAuth.expire_time || (expireTime && expireTime > existingAuth.expire_time)) {
-          existingAuth.expire_time = expireTime;
-          await this.userCourseAuthRepository.save(existingAuth);
-        }
-      }
-    }
+    await this.grantCourseAccess(order.user_id, order.course_id);
 
     if (order.coupon_id) {
       await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
@@ -865,6 +1015,7 @@ export class OrderService {
         'o.discount_amount AS discountAmount',
         'o.create_time AS createTime',
         'o.paid_time AS paidTime',
+        'o.pay_payload AS payPayload',
         'course.name AS courseName',
         'course.cover_img AS coverImg',
         'course.content_type AS contentType',
@@ -883,7 +1034,20 @@ export class OrderService {
     }
 
     const rows = await query.getRawMany();
-    return rows.map((row) => ({
+    return rows.map((row) => {
+      let payPayload: Record<string, any> | null = null;
+      if (row.payPayload) {
+        payPayload = typeof row.payPayload === 'string' ? JSON.parse(row.payPayload) : row.payPayload;
+      }
+      const cartCount = Array.isArray(payPayload?.cart_items) ? payPayload.cart_items.length : 0;
+      const productName =
+        cartCount > 1
+          ? `购物车(${cartCount}门课程)`
+          : row.orderType === 'package'
+            ? row.packageSectionName || '套餐'
+            : row.courseName || '课程';
+
+      return {
       id: Number(row.id),
       orderNo: row.orderNo,
       amount: Number(row.amount || 0),
@@ -893,13 +1057,16 @@ export class OrderService {
       courseId: row.courseId ? Number(row.courseId) : null,
       packageSectionId: row.packageSectionId ? Number(row.packageSectionId) : null,
       packagePlanId: row.packagePlanId ? Number(row.packagePlanId) : null,
-      productName: row.orderType === 'package' ? row.packageSectionName || '套餐' : row.courseName || '课程',
+      productName,
       coverImg: row.orderType === 'package' ? row.packageCoverImg || '' : row.coverImg || '',
       contentType: row.contentType || 'normal',
       fileType: row.fileType || '',
       createTime: row.createTime,
       paidTime: row.paidTime,
-    }));
+      isCart: cartCount > 1,
+      cartCount,
+    };
+    });
   }
 
   async payPendingOrder(userId: number, orderId: number, clientIp?: string) {
@@ -953,12 +1120,19 @@ export class OrderService {
     const course = order.course_id
       ? await this.courseRepository.findOne({ where: { id: order.course_id } })
       : null;
-    if (!course) {
+    if (!course && !order.pay_payload?.is_cart) {
       throw new NotFoundException('课程不存在');
     }
 
     const activationPurchase = order.pay_payload?.activation_code_purchase;
-    const goodsTitle = activationPurchase ? `${course.name || '课程'}-激活码` : course.name || '课程';
+    const cartCount = Array.isArray(order.pay_payload?.cart_items) ? order.pay_payload.cart_items.length : 0;
+    const goodsTitle = order.pay_payload?.is_cart
+      ? cartCount > 1
+        ? `购物车(${cartCount}门课程)`
+        : order.pay_payload?.cart_items?.[0]?.name || course?.name || '课程'
+      : activationPurchase
+        ? `${course?.name || '课程'}-激活码`
+        : course?.name || '课程';
 
     return this.processCoinBasedPayment({
       user,

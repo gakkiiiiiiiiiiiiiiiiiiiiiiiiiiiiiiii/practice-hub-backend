@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateCartOrderDto } from './dto/create-cart-order.dto';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
 
 function resolveClientIp(req: Request) {
@@ -24,6 +25,13 @@ export class OrderController {
   @ApiOperation({ summary: '创建预支付订单' })
   async createOrder(@CurrentUser() user: any, @Body() dto: CreateOrderDto, @Req() req: Request) {
     const result = await this.orderService.createOrder(user.userId, dto, resolveClientIp(req));
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('create-cart')
+  @ApiOperation({ summary: '购物车合单下单' })
+  async createCartOrder(@CurrentUser() user: any, @Body() dto: CreateCartOrderDto, @Req() req: Request) {
+    const result = await this.orderService.createCartOrder(user.userId, dto, resolveClientIp(req));
     return CommonResponseDto.success(result);
   }
 
