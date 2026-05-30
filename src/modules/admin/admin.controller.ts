@@ -1,4 +1,4 @@
-import { Controller, Put, Get, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Put, Get, Param, Body, Query, UseGuards, Post } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -43,6 +43,13 @@ export class AdminController {
 	@ApiOperation({ summary: '设置小程序用户角色（普通用户/题库管理员/小程序超级管理员）' })
 	async updateUserRole(@Param('id') id: number, @Body('role') role: AppUserRole) {
 		const result = await this.adminService.updateUserRole(+id, role);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post(':id/reset-as-new')
+	@ApiOperation({ summary: '重置为新用户（拉新测试/补绑）' })
+	async resetUserAsNew(@Param('id') id: number) {
+		const result = await this.adminService.resetUserAsNew(+id);
 		return CommonResponseDto.success(result);
 	}
 }

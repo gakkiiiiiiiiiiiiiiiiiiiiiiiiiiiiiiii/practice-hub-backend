@@ -6,6 +6,9 @@ import { UserAnswerLog } from '../../database/entities/user-answer-log.entity';
 import { UserWrongBook } from '../../database/entities/user-wrong-book.entity';
 import { UserCollection } from '../../database/entities/user-collection.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
+import { UserReferral } from '../../database/entities/user-referral.entity';
+import { UserPointsLog } from '../../database/entities/user-points-log.entity';
+import { UserCheckin } from '../../database/entities/user-checkin.entity';
 import { Question } from '../../database/entities/question.entity';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { GetUserListDto } from './dto/get-user-list.dto';
@@ -23,6 +26,12 @@ export class AdminService {
 		private collectionRepository: Repository<UserCollection>,
 		@InjectRepository(UserCourseAuth)
 		private courseAuthRepository: Repository<UserCourseAuth>,
+		@InjectRepository(UserReferral)
+		private userReferralRepository: Repository<UserReferral>,
+		@InjectRepository(UserPointsLog)
+		private userPointsLogRepository: Repository<UserPointsLog>,
+		@InjectRepository(UserCheckin)
+		private userCheckinRepository: Repository<UserCheckin>,
 		@InjectRepository(Question)
 		private questionRepository: Repository<Question>,
 	) {}
@@ -212,6 +221,36 @@ export class AdminService {
 			role: user.role,
 			isAppAdmin: user.role === AppUserRole.ADMIN,
 			isBankAdmin: user.role === AppUserRole.BANK_ADMIN,
+		};
+	}
+
+	/**
+	 * 重置为新用户（用于拉新测试/补绑：重置注册时间、清除被邀请关系、积分与打卡）
+	 */
+	async resetUserAsNew(userId: number) {
+		const user = await this.appUserRepository.findOne({ where: { id: userId } });
+		if (!user) {
+			throw new NotFoundException('用户不存在');
+		}
+
+		const referralDeleteResult = await this.userReferralRepository.delete({ invitee_user_id: userId });
+		const pointsLogDeleteResult = await this.userPointsLogRepository.delete({ userId });
+		const checkinDeleteResult = await this.userCheckinRepository.delete({ userId });
+
+		const now = new Date();
+		user.create_time = now;
+		user.points_balance = 0;
+		await this.appUserRepository.save(user);
+
+		return {
+			success: true,
+			userId: user.id,
+			nickname: user.nickname || '未设置',
+			resetAt: now,
+			removedReferralCount: referralDeleteResult.affected || 0,
+			removedPointsLogCount: pointsLogDeleteResult.affected || 0,
+			removedCheckinCount: checkinDeleteResult.affected || 0,
+			message: '已重置为新用户状态，该用户可重新通过邀请链接参与拉新',
 		};
 	}
 }
