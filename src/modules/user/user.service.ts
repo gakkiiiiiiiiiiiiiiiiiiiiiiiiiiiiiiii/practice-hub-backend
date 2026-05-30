@@ -48,6 +48,7 @@ export class UserService {
       hasPackage,
       package_expire_time: user.package_expire_time,
       coin_balance: coinBalance,
+      points_balance: Math.max(0, Number(user.points_balance || 0)),
     };
   }
 

@@ -600,4 +600,31 @@ export class SystemService {
       minutes,
     };
   }
+
+  /** 小程序版本策略：发布新版本时在环境变量或 system_config(miniapp_version) 中提高 minVersion */
+  async getMiniappVersionPolicy() {
+    const fromDb = await this.getJsonConfig<{
+      minVersion?: string;
+      latestVersion?: string;
+      tip?: string;
+    }>('miniapp_version', {});
+
+    const minVersion = String(
+      fromDb.minVersion || this.configService.get<string>('MINIAPP_MIN_VERSION', '') || '',
+    ).trim();
+    const latestVersion = String(
+      fromDb.latestVersion ||
+        this.configService.get<string>('MINIAPP_LATEST_VERSION', '') ||
+        minVersion,
+    ).trim();
+    const tip =
+      String(fromDb.tip || '').trim() ||
+      '当前版本较旧，请完全退出小程序后重新进入，以加载最新版本。';
+
+    return {
+      minVersion,
+      latestVersion,
+      tip,
+    };
+  }
 }

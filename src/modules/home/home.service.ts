@@ -46,4 +46,8 @@ export class HomeService {
   async getFaqs() {
     return this.systemService.getFaqConfig();
   }
+
+  async getMiniappVersion() {
+    return this.systemService.getMiniappVersionPolicy();
+  }
 }

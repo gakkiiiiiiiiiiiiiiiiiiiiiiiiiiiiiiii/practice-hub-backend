@@ -1,15 +1,19 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { ReferralCouponService } from './referral-coupon.service';
+import { PointsService } from './points.service';
 import { UserCouponStatus } from '../../database/entities/user-coupon.entity';
 
 @ApiTags('营销')
 @Controller('app/marketing')
 export class MarketingController {
-	constructor(private readonly referralCouponService: ReferralCouponService) {}
+	constructor(
+		private readonly referralCouponService: ReferralCouponService,
+		private readonly pointsService: PointsService,
+	) {}
 
 	@Get('referral/config')
 	@ApiOperation({ summary: '拉新优惠券公开配置' })
@@ -43,6 +47,50 @@ export class MarketingController {
 				? (status as UserCouponStatus)
 				: undefined;
 		const result = await this.referralCouponService.getUserCoupons(user.userId, parsedStatus);
+		return CommonResponseDto.success(result);
+	}
+
+	@Get('points/config')
+	@ApiOperation({ summary: '积分商城公开配置' })
+	async getPointsConfig() {
+		const config = await this.pointsService.getConfig();
+		return CommonResponseDto.success({
+			enabled: config.enabled,
+			checkinReward: config.checkin_reward,
+			exchangePoints: config.exchange_points,
+			exchangeCouponAmount: config.exchange_coupon_amount,
+			exchangeCouponMinAmount: config.exchange_coupon_min_amount,
+		});
+	}
+
+	@Get('points/balance')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '我的积分余额' })
+	async getPointsBalance(@CurrentUser() user: any) {
+		const balance = await this.pointsService.getBalance(user.userId);
+		return CommonResponseDto.success({ balance });
+	}
+
+	@Get('points/logs')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '积分流水' })
+	async getPointsLogs(
+		@CurrentUser() user: any,
+		@Query('page') page?: string,
+		@Query('pageSize') pageSize?: string,
+	) {
+		const result = await this.pointsService.getLogs(user.userId, Number(page) || 1, Number(pageSize) || 20);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('points/exchange')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '积分兑换优惠券' })
+	async exchangePointsCoupon(@CurrentUser() user: any) {
+		const result = await this.pointsService.exchangeCoupon(user.userId);
 		return CommonResponseDto.success(result);
 	}
 }

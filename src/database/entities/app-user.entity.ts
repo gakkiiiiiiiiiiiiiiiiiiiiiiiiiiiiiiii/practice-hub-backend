@@ -47,6 +47,9 @@ export class AppUser {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, comment: '微信代币余额缓存' })
   coin_balance: number;
 
+  @Column({ type: 'int', default: 0, comment: '积分余额' })
+  points_balance: number;
+
   @CreateDateColumn()
   create_time: Date;
 

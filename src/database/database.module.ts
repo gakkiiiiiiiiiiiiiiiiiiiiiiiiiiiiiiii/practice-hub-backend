@@ -37,6 +37,7 @@ import { PreviewCacheTask } from './entities/preview-cache-task.entity';
 import { CourseFile } from './entities/course-file.entity';
 import { UserReferral } from './entities/user-referral.entity';
 import { UserCoupon } from './entities/user-coupon.entity';
+import { UserPointsLog } from './entities/user-points-log.entity';
 import { PackageSection } from './entities/package-section.entity';
 import { PackageSectionScope } from './entities/package-section-scope.entity';
 import { PackagePlan } from './entities/package-plan.entity';
@@ -83,6 +84,7 @@ import { CoinTransaction } from './entities/coin-transaction.entity';
 			CourseFile,
 			UserReferral,
 			UserCoupon,
+			UserPointsLog,
 			PackageSection,
 			PackageSectionScope,
 			PackagePlan,

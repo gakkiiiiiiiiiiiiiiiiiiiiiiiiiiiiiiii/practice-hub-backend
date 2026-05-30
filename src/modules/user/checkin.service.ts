@@ -1,8 +1,9 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository } from 'typeorm';
 import { UserCheckin } from '../../database/entities/user-checkin.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
+import { PointsService } from '../marketing/points.service';
 
 @Injectable()
 export class CheckinService {
@@ -11,6 +12,7 @@ export class CheckinService {
     private checkinRepository: Repository<UserCheckin>,
     @InjectRepository(SystemConfig)
     private systemConfigRepository: Repository<SystemConfig>,
+    private pointsService: PointsService,
   ) {}
 
   /**
@@ -85,9 +87,21 @@ export class CheckinService {
 
     await this.checkinRepository.save(checkin);
 
+    let pointsEarned = 0;
+    let pointsBalance = 0;
+    try {
+      const pointsResult = await this.pointsService.rewardCheckin(userId);
+      pointsEarned = pointsResult.pointsEarned;
+      pointsBalance = pointsResult.balance;
+    } catch (error) {
+      console.error('打卡积分发放失败:', error);
+    }
+
     return {
       success: true,
       message: '打卡成功',
+      pointsEarned,
+      pointsBalance,
       checkin: {
         id: checkin.id,
         checkinDate: checkin.checkinDate,

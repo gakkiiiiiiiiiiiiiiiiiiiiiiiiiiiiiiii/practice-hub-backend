@@ -28,4 +28,11 @@ export class HomeController {
     const result = await this.homeService.getFaqs();
     return CommonResponseDto.success(result);
   }
+
+  @Get('version')
+  @ApiOperation({ summary: '获取小程序最低版本要求' })
+  async getMiniappVersion() {
+    const result = await this.homeService.getMiniappVersion();
+    return CommonResponseDto.success(result);
+  }
 }

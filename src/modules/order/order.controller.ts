@@ -3,11 +3,15 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Request } from 'express';
 import { OrderService } from './order.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { AdminRole } from '../../database/entities/sys-user.entity';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreateCartOrderDto } from './dto/create-cart-order.dto';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
+import { GetAdminOrderListDto } from './dto/get-admin-order-list.dto';
 
 function resolveClientIp(req: Request) {
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0]?.trim();
@@ -85,5 +89,21 @@ export class WechatXpayNotifyController {
   @ApiOperation({ summary: '微信虚拟支付消息推送（xpay_coin_pay_notify 等）' })
   async notify(@Body() body: Record<string, any>) {
     return this.orderService.handleXpayNotify(body);
+  }
+}
+
+@ApiTags('订单管理')
+@Controller('admin/orders')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@ApiBearerAuth()
+export class AdminOrderController {
+  constructor(private readonly orderService: OrderService) {}
+
+  @Get('list')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取订单列表' })
+  async getOrderList(@Query() dto: GetAdminOrderListDto) {
+    const result = await this.orderService.getAdminOrderList(dto);
+    return CommonResponseDto.success(result);
   }
 }

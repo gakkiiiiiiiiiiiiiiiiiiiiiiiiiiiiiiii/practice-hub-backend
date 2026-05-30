@@ -11,6 +11,7 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreateCartOrderDto } from './dto/create-cart-order.dto';
+import { GetAdminOrderListDto } from './dto/get-admin-order-list.dto';
 import { DistributorService } from '../distributor/distributor.service';
 import { XpayService } from './xpay.service';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
@@ -1180,6 +1181,126 @@ export class OrderService {
       pending: pendingCount,
       paid: paidCount,
       after_sale: afterSaleCount,
+    };
+  }
+
+  async getAdminOrderList(dto: GetAdminOrderListDto) {
+    const page = Math.max(1, Number(dto.page) || 1);
+    const pageSize = Math.min(50, Math.max(1, Number(dto.pageSize) || 10));
+    const skip = (page - 1) * pageSize;
+
+    const query = this.orderRepository
+      .createQueryBuilder('o')
+      .leftJoin(Course, 'course', 'course.id = o.course_id')
+      .leftJoin('package_section', 'packageSection', 'packageSection.id = o.package_section_id')
+      .leftJoin(AppUser, 'user', 'user.id = o.user_id')
+      .select([
+        'o.id AS id',
+        'o.order_no AS orderNo',
+        'o.user_id AS userId',
+        'o.amount AS amount',
+        'o.original_amount AS originalAmount',
+        'o.discount_amount AS discountAmount',
+        'o.status AS status',
+        'o.order_type AS orderType',
+        'o.course_id AS courseId',
+        'o.package_section_id AS packageSectionId',
+        'o.package_plan_id AS packagePlanId',
+        'o.coupon_id AS couponId',
+        'o.pay_provider AS payProvider',
+        'o.pay_payload AS payPayload',
+        'o.create_time AS createTime',
+        'o.paid_time AS paidTime',
+        'course.name AS courseName',
+        'packageSection.name AS packageSectionName',
+        'user.nickname AS userNickname',
+        'user.phone AS userPhone',
+        'user.avatar AS userAvatar',
+      ])
+      .orderBy('o.create_time', 'DESC');
+
+    if (dto.status) {
+      query.andWhere('o.status = :status', { status: dto.status });
+    }
+
+    if (dto.order_type) {
+      query.andWhere('o.order_type = :orderType', { orderType: dto.order_type });
+    }
+
+    const keyword = dto.keyword?.trim();
+    if (keyword) {
+      const userId = Number(keyword);
+      if (!Number.isNaN(userId) && userId > 0) {
+        query.andWhere(
+          '(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR o.user_id = :userId)',
+          { keyword: `%${keyword}%`, userId },
+        );
+      } else {
+        query.andWhere('(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword)', {
+          keyword: `%${keyword}%`,
+        });
+      }
+    }
+
+    const total = await query.clone().getCount();
+    const rows = await query.offset(skip).limit(pageSize).getRawMany();
+
+    const list = rows.map((row) => {
+      let payPayload: Record<string, any> | null = null;
+      if (row.payPayload) {
+        payPayload = typeof row.payPayload === 'string' ? JSON.parse(row.payPayload) : row.payPayload;
+      }
+
+      const cartItems = Array.isArray(payPayload?.cart_items)
+        ? payPayload.cart_items.map((item: Record<string, any>) => ({
+            courseId: Number(item.course_id || item.courseId || 0),
+            name: item.name || '课程',
+            price: Number(item.price || 0),
+          }))
+        : [];
+
+      const productName =
+        cartItems.length > 1
+          ? `购物车(${cartItems.length}门课程)`
+          : row.orderType === 'package'
+            ? row.packageSectionName || '套餐'
+            : row.courseName || '课程';
+
+      return {
+        id: Number(row.id),
+        orderNo: row.orderNo,
+        userId: Number(row.userId),
+        user: {
+          id: Number(row.userId),
+          nickname: row.userNickname || '未设置',
+          phone: row.userPhone || '',
+          avatar: row.userAvatar || '',
+        },
+        amount: Number(row.amount || 0),
+        originalAmount: row.originalAmount != null ? Number(row.originalAmount) : null,
+        discountAmount: Number(row.discountAmount || 0),
+        status: row.status,
+        orderType: row.orderType || 'course',
+        courseId: row.courseId ? Number(row.courseId) : null,
+        courseName: row.courseName || '',
+        packageSectionId: row.packageSectionId ? Number(row.packageSectionId) : null,
+        packageSectionName: row.packageSectionName || '',
+        packagePlanId: row.packagePlanId ? Number(row.packagePlanId) : null,
+        couponId: row.couponId ? Number(row.couponId) : null,
+        payProvider: row.payProvider || '',
+        productName,
+        cartItems,
+        isCart: cartItems.length > 1,
+        createTime: row.createTime,
+        paidTime: row.paidTime,
+      };
+    });
+
+    return {
+      list,
+      total,
+      page,
+      pageSize,
     };
   }
 }
