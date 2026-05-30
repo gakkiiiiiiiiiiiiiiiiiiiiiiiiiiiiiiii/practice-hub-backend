@@ -119,6 +119,33 @@ export class ReferralCouponService {
 		return referral;
 	}
 
+	/**
+	 * 登录/注册时尝试绑定拉新关系（允许首次登录未绑定的用户在7天内补绑）
+	 */
+	async bindReferralOnAuth(inviteeUserId: number, referralUserId?: number) {
+		if (!referralUserId) {
+			return null;
+		}
+
+		const existing = await this.userReferralRepository.findOne({ where: { invitee_user_id: inviteeUserId } });
+		if (existing) {
+			return existing;
+		}
+
+		const invitee = await this.appUserRepository.findOne({ where: { id: inviteeUserId } });
+		if (!invitee) {
+			return null;
+		}
+
+		const maxBindWindowMs = 7 * 24 * 60 * 60 * 1000;
+		const accountAgeMs = Date.now() - new Date(invitee.create_time).getTime();
+		if (accountAgeMs > maxBindWindowMs) {
+			return null;
+		}
+
+		return this.bindReferralOnRegister(inviteeUserId, referralUserId);
+	}
+
 	private async tryIssueReferralCoupons(inviterUserId: number) {
 		const config = await this.getConfig();
 		if (!config.enabled) return;

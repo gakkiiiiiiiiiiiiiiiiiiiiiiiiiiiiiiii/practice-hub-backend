@@ -141,9 +141,12 @@ export class AuthService {
 				}
 			}
 
-			if (isNewUser && referralUserId) {
+			if (referralUserId) {
 				try {
-					await this.referralCouponService.bindReferralOnRegister(user.id, referralUserId);
+					const referral = await this.referralCouponService.bindReferralOnAuth(user.id, referralUserId);
+					if (referral) {
+						console.log(`拉新绑定成功: inviter=${referralUserId}, invitee=${user.id}`);
+					}
 				} catch (error) {
 					console.warn('绑定拉新关系失败:', error.message);
 				}
@@ -245,9 +248,12 @@ export class AuthService {
 				}
 			}
 
-			if (isNewUser && referralUserId) {
+			if (referralUserId) {
 				try {
-					await this.referralCouponService.bindReferralOnRegister(user.id, referralUserId);
+					const referral = await this.referralCouponService.bindReferralOnAuth(user.id, referralUserId);
+					if (referral) {
+						console.log(`拉新绑定成功: inviter=${referralUserId}, invitee=${user.id}`);
+					}
 				} catch (error) {
 					console.warn('绑定拉新关系失败:', error.message);
 				}
@@ -420,7 +426,10 @@ export class AuthService {
 		const referralUserId = this.parseReferralUserId(dto.referral_user_id);
 		if (referralUserId) {
 			try {
-				await this.referralCouponService.bindReferralOnRegister(user.id, referralUserId);
+				const referral = await this.referralCouponService.bindReferralOnAuth(user.id, referralUserId);
+				if (referral) {
+					console.log(`拉新绑定成功: inviter=${referralUserId}, invitee=${user.id}`);
+				}
 			} catch (error) {
 				console.warn('绑定拉新关系失败:', error.message);
 			}
