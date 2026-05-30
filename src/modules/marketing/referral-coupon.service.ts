@@ -262,8 +262,7 @@ export class ReferralCouponService {
 
 	private formatCouponLabel(amount: number, minAmount: number) {
 		const amountText = formatYuanDisplay(amount);
-		const minText = formatYuanDisplay(minAmount);
-		return minAmount <= 0 ? `${amountText}元无门槛` : `满${minText}减${amountText}`;
+		return minAmount <= 0 ? `无门槛${amountText}元优惠券` : `${amountText}元优惠券`;
 	}
 
 	private resolveCouponStatus(coupon: UserCoupon) {

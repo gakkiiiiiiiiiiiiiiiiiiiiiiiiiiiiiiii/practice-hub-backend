@@ -12,7 +12,7 @@ import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
 import { SetCheckinMinutesDto } from './dto/set-checkin-minutes.dto';
 import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
-import { PointsService } from '../marketing/points.service';
+import { PointsService, PointsConfig } from '../marketing/points.service';
 import { OperationLogInterceptor } from '../../common/interceptors/operation-log.interceptor';
 import { IssueCouponDto } from '../marketing/dto/issue-coupon.dto';
 import { GetAdminCouponListDto } from '../marketing/dto/get-admin-coupon-list.dto';
@@ -186,9 +186,18 @@ export class SystemController {
       exchange_coupon_amount?: number;
       exchange_coupon_min_amount?: number;
       coupon_valid_days?: number | null;
+      exchange_items?: Array<{
+        id?: string;
+        name?: string;
+        points?: number;
+        coupon_amount?: number;
+        coupon_min_amount?: number;
+        enabled?: boolean;
+        sort?: number;
+      }>;
     },
   ) {
-    const result = await this.pointsService.setConfig(body || {});
+    const result = await this.pointsService.setConfig((body || {}) as Partial<PointsConfig>);
     return CommonResponseDto.success(result);
   }
 

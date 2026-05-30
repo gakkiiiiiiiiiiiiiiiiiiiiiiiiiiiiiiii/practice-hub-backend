@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Query, UseGuards, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -54,12 +54,21 @@ export class MarketingController {
 	@ApiOperation({ summary: '积分商城公开配置' })
 	async getPointsConfig() {
 		const config = await this.pointsService.getConfig();
+		const exchangeItems = this.pointsService.getEnabledExchangeItems(config).map((item) => ({
+			id: item.id,
+			name: item.name,
+			points: item.points,
+			couponAmount: item.coupon_amount,
+			couponMinAmount: item.coupon_min_amount,
+		}));
+		const firstItem = exchangeItems[0];
 		return CommonResponseDto.success({
 			enabled: config.enabled,
 			checkinReward: config.checkin_reward,
-			exchangePoints: config.exchange_points,
-			exchangeCouponAmount: config.exchange_coupon_amount,
-			exchangeCouponMinAmount: config.exchange_coupon_min_amount,
+			exchangeItems,
+			exchangePoints: firstItem?.points ?? config.exchange_points,
+			exchangeCouponAmount: firstItem?.couponAmount ?? config.exchange_coupon_amount,
+			exchangeCouponMinAmount: firstItem?.couponMinAmount ?? config.exchange_coupon_min_amount,
 		});
 	}
 
@@ -89,8 +98,8 @@ export class MarketingController {
 	@UseGuards(JwtAuthGuard)
 	@ApiBearerAuth()
 	@ApiOperation({ summary: '积分兑换优惠券' })
-	async exchangePointsCoupon(@CurrentUser() user: any) {
-		const result = await this.pointsService.exchangeCoupon(user.userId);
+	async exchangePointsCoupon(@CurrentUser() user: any, @Body() body: { itemId?: string }) {
+		const result = await this.pointsService.exchangeCoupon(user.userId, body?.itemId);
 		return CommonResponseDto.success(result);
 	}
 }

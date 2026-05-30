@@ -7,6 +7,16 @@ import { UserPointsLog, UserPointsLogType } from '../../database/entities/user-p
 import { UserCoupon, UserCouponStatus } from '../../database/entities/user-coupon.entity';
 import { normalizeThresholdYuan } from '../../common/utils/price.util';
 
+export type PointsExchangeItem = {
+	id: string;
+	name: string;
+	points: number;
+	coupon_amount: number;
+	coupon_min_amount: number;
+	enabled: boolean;
+	sort: number;
+};
+
 export type PointsConfig = {
 	enabled: boolean;
 	checkin_reward: number;
@@ -14,6 +24,16 @@ export type PointsConfig = {
 	exchange_coupon_amount: number;
 	exchange_coupon_min_amount: number;
 	coupon_valid_days: number | null;
+	exchange_items: PointsExchangeItem[];
+};
+
+const DEFAULT_EXCHANGE_ITEM: Omit<PointsExchangeItem, 'id'> = {
+	name: '',
+	points: 500,
+	coupon_amount: 5,
+	coupon_min_amount: 0,
+	enabled: true,
+	sort: 0,
 };
 
 const DEFAULT_POINTS_CONFIG: PointsConfig = {
@@ -23,6 +43,50 @@ const DEFAULT_POINTS_CONFIG: PointsConfig = {
 	exchange_coupon_amount: 5,
 	exchange_coupon_min_amount: 0,
 	coupon_valid_days: 365,
+	exchange_items: [],
+};
+
+const createExchangeItemId = () =>
+	`ex_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+const normalizeExchangeItem = (item: Partial<PointsExchangeItem>, index: number): PointsExchangeItem => ({
+	id: String(item.id || createExchangeItemId()),
+	name: String(item.name || '').trim(),
+	points: Math.max(1, Number(item.points) || 500),
+	coupon_amount: Math.max(0.01, Number(item.coupon_amount) || 5),
+	coupon_min_amount: normalizeThresholdYuan(item.coupon_min_amount),
+	enabled: item.enabled !== false,
+	sort: Number.isFinite(Number(item.sort)) ? Number(item.sort) : index,
+});
+
+const buildLegacyExchangeFields = (items: PointsExchangeItem[]) => {
+	const first = items.find((item) => item.enabled) || items[0];
+	return {
+		exchange_points: first?.points ?? DEFAULT_EXCHANGE_ITEM.points,
+		exchange_coupon_amount: first?.coupon_amount ?? DEFAULT_EXCHANGE_ITEM.coupon_amount,
+		exchange_coupon_min_amount: first?.coupon_min_amount ?? DEFAULT_EXCHANGE_ITEM.coupon_min_amount,
+	};
+};
+
+const normalizeExchangeItems = (parsed: Partial<PointsConfig>): PointsExchangeItem[] => {
+	if (Array.isArray(parsed.exchange_items) && parsed.exchange_items.length > 0) {
+		return parsed.exchange_items
+			.map((item, index) => normalizeExchangeItem(item, index))
+			.sort((a, b) => a.sort - b.sort || a.points - b.points);
+	}
+
+	return [
+		normalizeExchangeItem(
+			{
+				points: Number(parsed.exchange_points) || DEFAULT_EXCHANGE_ITEM.points,
+				coupon_amount: Number(parsed.exchange_coupon_amount) || DEFAULT_EXCHANGE_ITEM.coupon_amount,
+				coupon_min_amount: normalizeThresholdYuan(parsed.exchange_coupon_min_amount),
+				enabled: true,
+				sort: 0,
+			},
+			0,
+		),
+	];
 };
 
 @Injectable()
@@ -44,43 +108,53 @@ export class PointsService {
 			where: { configKey: 'points_config' },
 		});
 		if (!config?.configValue) {
-			return { ...DEFAULT_POINTS_CONFIG };
+			const exchangeItems = [normalizeExchangeItem(DEFAULT_EXCHANGE_ITEM, 0)];
+			return {
+				...DEFAULT_POINTS_CONFIG,
+				exchange_items: exchangeItems,
+				...buildLegacyExchangeFields(exchangeItems),
+			};
 		}
 		try {
 			const parsed = JSON.parse(config.configValue) as Partial<PointsConfig>;
+			const exchange_items = normalizeExchangeItems(parsed);
+			const legacy = buildLegacyExchangeFields(exchange_items);
 			return {
 				enabled: parsed.enabled !== false,
 				checkin_reward: Math.max(0, Number(parsed.checkin_reward) || 50),
-				exchange_points: Math.max(1, Number(parsed.exchange_points) || 500),
-				exchange_coupon_amount: Math.max(0.01, Number(parsed.exchange_coupon_amount) || 5),
-				exchange_coupon_min_amount: normalizeThresholdYuan(parsed.exchange_coupon_min_amount),
 				coupon_valid_days:
 					parsed.coupon_valid_days === null || parsed.coupon_valid_days === undefined
 						? 365
 						: Math.max(1, Number(parsed.coupon_valid_days) || 365),
+				exchange_items,
+				...legacy,
 			};
 		} catch {
-			return { ...DEFAULT_POINTS_CONFIG };
+			const exchangeItems = [normalizeExchangeItem(DEFAULT_EXCHANGE_ITEM, 0)];
+			return {
+				...DEFAULT_POINTS_CONFIG,
+				exchange_items: exchangeItems,
+				...buildLegacyExchangeFields(exchangeItems),
+			};
 		}
 	}
 
 	async setConfig(input: Partial<PointsConfig>) {
 		const current = await this.getConfig();
+		const exchange_items =
+			Array.isArray(input.exchange_items) && input.exchange_items.length > 0
+				? input.exchange_items.map((item, index) => normalizeExchangeItem(item, index))
+				: current.exchange_items;
+		const legacy = buildLegacyExchangeFields(exchange_items);
 		const next: PointsConfig = {
 			enabled: input.enabled !== undefined ? !!input.enabled : current.enabled,
 			checkin_reward: Math.max(0, Number(input.checkin_reward ?? current.checkin_reward) || 0),
-			exchange_points: Math.max(1, Number(input.exchange_points ?? current.exchange_points) || 500),
-			exchange_coupon_amount: Math.max(
-				0.01,
-				Number(input.exchange_coupon_amount ?? current.exchange_coupon_amount) || 5,
-			),
-			exchange_coupon_min_amount: normalizeThresholdYuan(
-				input.exchange_coupon_min_amount ?? current.exchange_coupon_min_amount,
-			),
 			coupon_valid_days:
 				input.coupon_valid_days === null
 					? null
 					: Math.max(1, Number(input.coupon_valid_days ?? current.coupon_valid_days) || 365),
+			exchange_items,
+			...legacy,
 		};
 
 		let config = await this.systemConfigRepository.findOne({ where: { configKey: 'points_config' } });
@@ -96,6 +170,27 @@ export class PointsService {
 		}
 		await this.systemConfigRepository.save(config);
 		return next;
+	}
+
+	getEnabledExchangeItems(config: PointsConfig) {
+		return config.exchange_items
+			.filter((item) => item.enabled)
+			.sort((a, b) => a.sort - b.sort || a.points - b.points);
+	}
+
+	resolveExchangeItem(config: PointsConfig, itemId?: string) {
+		const enabledItems = this.getEnabledExchangeItems(config);
+		if (enabledItems.length === 0) {
+			throw new BadRequestException('暂无可兑换优惠券');
+		}
+		if (!itemId) {
+			return enabledItems[0];
+		}
+		const item = enabledItems.find((entry) => entry.id === itemId);
+		if (!item) {
+			throw new BadRequestException('兑换项不存在或已下架');
+		}
+		return item;
 	}
 
 	async getBalance(userId: number) {
@@ -143,13 +238,14 @@ export class PointsService {
 		return this.changePoints(userId, config.checkin_reward, UserPointsLogType.CHECKIN, '刷题打卡奖励');
 	}
 
-	async exchangeCoupon(userId: number) {
+	async exchangeCoupon(userId: number, itemId?: string) {
 		const config = await this.getConfig();
 		if (!config.enabled) {
 			throw new BadRequestException('积分系统暂未开放');
 		}
 
-		const requiredPoints = config.exchange_points;
+		const exchangeItem = this.resolveExchangeItem(config, itemId);
+		const requiredPoints = exchangeItem.points;
 		const queryRunner = this.dataSource.createQueryRunner();
 		await queryRunner.connect();
 		await queryRunner.startTransaction();
@@ -180,29 +276,32 @@ export class PointsService {
 
 			const coupon = await queryRunner.manager.save(UserCoupon, {
 				user_id: userId,
-				amount: config.exchange_coupon_amount,
-				min_amount: config.exchange_coupon_min_amount,
+				amount: exchangeItem.coupon_amount,
+				min_amount: exchangeItem.coupon_min_amount,
 				status: UserCouponStatus.UNUSED,
 				source: 'points',
 				expire_time: expireTime,
 			});
 
+			const remarkLabel = exchangeItem.name || `${exchangeItem.coupon_amount}元优惠券`;
 			await queryRunner.manager.save(UserPointsLog, {
 				userId,
 				changeAmount: -requiredPoints,
 				balanceAfter: nextBalance,
 				type: UserPointsLogType.EXCHANGE,
-				remark: `兑换${config.exchange_coupon_amount}元优惠券`,
+				remark: `兑换${remarkLabel}`,
 			});
 
 			await queryRunner.commitTransaction();
 
 			return {
 				couponId: coupon.id,
+				itemId: exchangeItem.id,
 				pointsUsed: requiredPoints,
 				balance: nextBalance,
-				couponAmount: config.exchange_coupon_amount,
-				couponMinAmount: config.exchange_coupon_min_amount,
+				couponAmount: exchangeItem.coupon_amount,
+				couponMinAmount: exchangeItem.coupon_min_amount,
+				itemName: exchangeItem.name,
 			};
 		} catch (error) {
 			await queryRunner.rollbackTransaction();
