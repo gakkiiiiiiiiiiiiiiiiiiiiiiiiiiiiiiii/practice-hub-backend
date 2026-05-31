@@ -311,6 +311,7 @@ export class SystemService {
       validity_days: 365,
       allow_source_file: 0,
       content_type: 'normal',
+      status: 0,
     };
   }
 
@@ -332,6 +333,7 @@ export class SystemService {
         isFree === 1 ? null : Math.max(1, Number(source.validity_days ?? fallback.validity_days) || 365),
       allow_source_file: Number(source.allow_source_file ?? fallback.allow_source_file) === 1 ? 1 : 0,
       content_type: contentType,
+      status: Number(source.status ?? fallback.status) === 1 ? 1 : 0,
     };
   }
 

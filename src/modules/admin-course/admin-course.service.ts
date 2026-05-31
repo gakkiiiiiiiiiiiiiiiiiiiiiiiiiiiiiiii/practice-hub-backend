@@ -152,6 +152,9 @@ export class AdminCourseService {
     if (!dto.content_type) {
       dto.content_type = defaults.content_type || 'normal';
     }
+    if (dto.status === undefined || dto.status === null) {
+      dto.status = defaults.status ?? 0;
+    }
   }
 
   async listCourseFiles(courseId: number) {

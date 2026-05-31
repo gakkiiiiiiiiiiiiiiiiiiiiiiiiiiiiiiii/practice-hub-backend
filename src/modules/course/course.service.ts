@@ -1144,11 +1144,15 @@ export class CourseService {
         try {
           buffer = await this.renderPdfPageToJpeg(pdfPath, pageNum, tmpDir);
           if (buffer && Buffer.isBuffer(buffer) && buffer.length > 8) {
-            await this.assertPreviewJpegNotBlank(buffer, tmpDir);
-            break;
+            if (!(await this.isPreviewJpegBlank(buffer, tmpDir))) {
+              break;
+            }
+            lastError = new Error('PDF 转图结果为空白页');
+            buffer = undefined;
+          } else {
+            lastError = new Error('PDF 转图未生成有效图片');
+            buffer = undefined;
           }
-          lastError = new Error('PDF 转图未生成有效图片');
-          buffer = undefined;
         } catch (error) {
           lastError = error;
           buffer = undefined;
@@ -1157,7 +1161,10 @@ export class CourseService {
       }
       if (!buffer || !Buffer.isBuffer(buffer) || buffer.length <= 8) {
         const message = lastError instanceof Error ? lastError.message : 'PDF 转图未生成有效图片';
-        throw new Error(`${message}，请确认容器已安装 Ghostscript、Poppler，并查看前置转图命令错误日志`);
+        throw new Error(`${message}，请确认容器已安装 Ghostscript、Poppler、ImageMagick，并查看前置转图命令错误日志`);
+      }
+      if (await this.isPreviewJpegBlank(buffer, tmpDir)) {
+        throw new Error('PDF 转图结果为空白页，可能是扫描版/加密 PDF，建议用 Adobe Acrobat 或 WPS 重新导出后再上传');
       }
       await this.uploadService.uploadBufferToCOS(cacheKey, buffer, 'image/jpeg');
       this.logger.log(
@@ -1260,13 +1267,59 @@ export class CourseService {
   }
 
   private async renderPdfPageToJpeg(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
-    const gsBuffer = await this.renderPdfPageWithGhostscript(pdfPath, pageNum, tmpDir);
-    if (gsBuffer && gsBuffer.length > 8) return gsBuffer;
+    const renderers = [
+      () => this.renderPdfPageWithPdftocairo(pdfPath, pageNum, tmpDir),
+      () => this.renderPdfPageWithPoppler(pdfPath, pageNum, tmpDir),
+      () => this.renderPdfPageWithGhostscript(pdfPath, pageNum, tmpDir),
+    ];
 
-    const popplerBuffer = await this.renderPdfPageWithPoppler(pdfPath, pageNum, tmpDir);
-    if (popplerBuffer && popplerBuffer.length > 8) return popplerBuffer;
+    for (const render of renderers) {
+      const buffer = await render();
+      if (!buffer || buffer.length <= 8) {
+        continue;
+      }
+      if (!(await this.isPreviewJpegBlank(buffer, tmpDir))) {
+        return buffer;
+      }
+      this.logger.warn(`PDF 第 ${pageNum} 页转图结果为空白，尝试下一个渲染引擎`);
+    }
 
     return undefined;
+  }
+
+  private async renderPdfPageWithPdftocairo(
+    pdfPath: string,
+    pageNum: number,
+    tmpDir: string,
+  ): Promise<Buffer | undefined> {
+    const outputPrefix = path.join(tmpDir, `cairo-page-${pageNum}`);
+    const outputPath = `${outputPrefix}.jpg`;
+    try {
+      await this.withTimeout(
+        execFileAsync('pdftocairo', [
+          '-jpeg',
+          '-f',
+          String(pageNum),
+          '-l',
+          String(pageNum),
+          '-singlefile',
+          '-scale-to-x',
+          String(PREVIEW_IMAGE_WIDTH),
+          pdfPath,
+          outputPrefix,
+        ]),
+        15000,
+        'pdftocairo 预览图生成超时，请稍后重试',
+      );
+      if (!fs.existsSync(outputPath)) return undefined;
+      const buffer = fs.readFileSync(outputPath);
+      return buffer.length > 8 ? buffer : undefined;
+    } catch (error: any) {
+      const stderr = error?.stderr ? String(error.stderr).trim() : '';
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[PDF预览] pdftocairo 转图失败:', stderr || message);
+      return undefined;
+    }
   }
 
   private async renderPdfPageWithPoppler(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
@@ -1310,6 +1363,8 @@ export class CourseService {
           '-dSAFER',
           '-dBATCH',
           '-dNOPAUSE',
+          '-dPDFSTOPONERROR=false',
+          '-dUseCropBox',
           '-sDEVICE=jpeg',
           `-dJPEGQ=${PREVIEW_IMAGE_QUALITY}`,
           `-r${PREVIEW_IMAGE_DENSITY}`,
@@ -1389,12 +1444,6 @@ export class CourseService {
   }
 
   /** 拒绝几乎全白的 JPEG，避免将无效预览图写入 COS */
-  private async assertPreviewJpegNotBlank(buffer: Buffer, tmpDir: string): Promise<void> {
-    if (await this.isPreviewJpegBlank(buffer, tmpDir)) {
-      throw new Error('PDF 转图结果为空白页');
-    }
-  }
-
   private async isPreviewJpegBlank(buffer: Buffer, tmpDir?: string): Promise<boolean> {
     if (!this.isJpegBuffer(buffer)) {
       return false;
@@ -1413,13 +1462,13 @@ export class CourseService {
         'info:',
       ]);
       const std = Number.parseFloat(String(stdout).trim());
-      if (Number.isFinite(std) && std < 1) {
+      if (Number.isFinite(std) && std < 0.8) {
         return true;
       }
       return false;
     } catch (_) {
       // ImageMagick 不可用时，用体积做兜底：全白 JPEG 通常远小于正常内容页
-      return buffer.length < 60000;
+      return buffer.length < 45000;
     } finally {
       try {
         fs.unlinkSync(tmpPath);
@@ -1434,7 +1483,7 @@ export class CourseService {
 
   private getPreviewCacheVersion(fileUrl: string, scope: 'full' | 'trial'): string {
     return createHash('md5')
-      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|direct-page-v5`)
+      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|direct-page-v6`)
       .digest('hex')
       .slice(0, 12);
   }

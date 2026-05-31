@@ -70,4 +70,11 @@ export class SetCourseDefaultParamsDto {
 	@IsString()
 	@IsIn(['normal', 'file'])
 	content_type?: string;
+
+	@ApiProperty({ description: '课程状态', example: 0, enum: [0, 1] })
+	@IsOptional()
+	@Type(() => Number)
+	@IsNumber()
+	@IsIn([0, 1])
+	status?: number;
 }

@@ -12,6 +12,7 @@ FROM node:20-alpine AS runtime-base
 RUN apk add --no-cache \
       ghostscript \
       poppler-utils \
+      imagemagick \
       libreoffice-writer \
       font-wqy-zenhei \
       fontconfig \
