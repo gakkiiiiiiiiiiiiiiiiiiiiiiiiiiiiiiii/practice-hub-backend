@@ -192,6 +192,22 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Get('preview-cache/health')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '预览缓存健康巡检报告（空白/缺失/不完整）' })
+	async getPreviewCacheHealth() {
+		const result = await this.adminCourseService.getPreviewCacheHealthReport();
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('preview-cache/scheduled-maintenance')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '立即执行预览缓存定时巡检与自动修复' })
+	async runPreviewCacheScheduledMaintenance() {
+		const result = await this.adminCourseService.runScheduledPreviewCacheMaintenance();
+		return CommonResponseDto.success(result);
+	}
+
 	@Get('preview-cache/targets')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 	@ApiOperation({ summary: '获取支持图片缓存的文件类课程列表' })

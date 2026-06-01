@@ -20,6 +20,8 @@
 		"test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
 		"test:e2e": "jest --config ./test/jest-e2e.json",
 		"create-admin": "ts-node -r tsconfig-paths/register scripts/create-admin.ts",
+		"preview-cache:maintenance": "ts-node -r tsconfig-paths/register scripts/preview-cache-maintenance.ts",
+		"preview-cache:report": "ts-node -r tsconfig-paths/register scripts/preview-cache-maintenance.ts -- --report-only",
 		"export:csv": "ts-node -r tsconfig-paths/register scripts/export-to-csv.ts",
 		"export:sql": "ts-node -r tsconfig-paths/register scripts/export-to-sql.ts",
 		"import:csv": "ts-node -r tsconfig-paths/register scripts/import-from-csv.ts",

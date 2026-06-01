@@ -571,7 +571,7 @@ export class AdminCourseService {
     };
   }
 
-  async fixBlankPreviewCaches() {
+  async fixBlankPreviewCaches(triggerType = 'fix-blank') {
     const runningTask = await this.findRunningPreviewCacheTask();
     if (runningTask) {
       return {
@@ -587,7 +587,7 @@ export class AdminCourseService {
     const task = await this.previewCacheTaskRepository.save(
       this.previewCacheTaskRepository.create({
         task_no: this.createPreviewCacheTaskNo(),
-        trigger_type: 'fix-blank',
+        trigger_type: triggerType,
         status: PreviewCacheTaskStatus.PENDING,
         total_courses: 0,
         message: '正在检测空白预览图课程，请稍候…',
@@ -603,6 +603,190 @@ export class AdminCourseService {
       running: 0,
       alreadyRunning: false,
       detected: [],
+      ...this.formatPreviewCacheTask(task),
+    };
+  }
+
+  /**
+   * 定时巡检：检测空白/缺失/不完整预览缓存，并自动触发修复任务。
+   * 可被 @Cron 或独立脚本调用。
+   */
+  async runScheduledPreviewCacheMaintenance() {
+    const runningTask = await this.findRunningPreviewCacheTask();
+    if (runningTask) {
+      this.logger.log(`预览缓存定时巡检跳过：已有任务运行中 taskId=${runningTask.id}`);
+      return {
+        action: 'skipped',
+        reason: 'task_running',
+        taskId: runningTask.id,
+      };
+    }
+
+    const cooldownHours = Number(process.env.PREVIEW_CACHE_MAINTENANCE_COOLDOWN_HOURS || 2);
+    const cooldownMs = Math.max(0, cooldownHours) * 60 * 60 * 1000;
+    if (cooldownMs > 0) {
+      const recentScheduled = await this.previewCacheTaskRepository.findOne({
+        where: {
+          trigger_type: 'scheduled',
+          status: PreviewCacheTaskStatus.COMPLETED,
+        },
+        order: { finished_at: 'DESC' },
+      });
+      if (recentScheduled?.finished_at) {
+        const elapsed = Date.now() - new Date(recentScheduled.finished_at).getTime();
+        const message = recentScheduled.message || '';
+        if (elapsed < cooldownMs && (message.includes('无需修复') || message.includes('未检测到'))) {
+          this.logger.log('预览缓存定时巡检跳过：最近已完成且无异常');
+          return {
+            action: 'skipped',
+            reason: 'recently_checked_ok',
+            taskId: recentScheduled.id,
+          };
+        }
+      }
+    }
+
+    const healthIssues = await this.courseService.scanPreviewCacheHealth();
+    this.logger.log(`预览缓存定时巡检：发现 ${healthIssues.length} 个问题`);
+
+    if (healthIssues.length > 0) {
+      const blankCourseIds = Array.from(
+        new Set(healthIssues.filter((item) => item.issue === 'blank').map((item) => item.courseId)),
+      );
+      if (blankCourseIds.length > 0) {
+        const result = await this.fixBlankPreviewCaches('scheduled');
+        return {
+          action: 'fix_blank',
+          issueCount: healthIssues.length,
+          courseIds: blankCourseIds,
+          ...result,
+        };
+      }
+
+      const repairCourseIds = Array.from(new Set(healthIssues.map((item) => item.courseId)));
+      const result = await this.startPreviewCacheTaskForCourses(
+        repairCourseIds,
+        false,
+        'scheduled',
+        `定时巡检发现 ${repairCourseIds.length} 个课程预览缓存不完整，开始补全缺失页`,
+      );
+      return {
+        action: 'repair_incomplete',
+        issueCount: healthIssues.length,
+        courseIds: repairCourseIds,
+        issues: healthIssues,
+        ...result,
+      };
+    }
+
+    const failedTask = await this.previewCacheTaskRepository.findOne({
+      where: { status: PreviewCacheTaskStatus.FAILED },
+      order: { finished_at: 'DESC' },
+    });
+    if (failedTask?.finished_at) {
+      const ageMs = Date.now() - new Date(failedTask.finished_at).getTime();
+      const minAgeMs = 60 * 60 * 1000;
+      const maxAgeMs = 7 * 24 * 60 * 60 * 1000;
+      if (ageMs >= minAgeMs && ageMs <= maxAgeMs) {
+        try {
+          const result = await this.warmupFailedPreviewCaches(failedTask.id);
+          this.logger.log(`预览缓存定时巡检：重试失败任务 taskId=${failedTask.id}`);
+          return {
+            action: 'retry_failed',
+            failedTaskId: failedTask.id,
+            ...result,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.logger.warn(`预览缓存定时巡检：重试失败任务跳过 ${message}`);
+        }
+      }
+    }
+
+    const noopTask = await this.previewCacheTaskRepository.save(
+      this.previewCacheTaskRepository.create({
+        task_no: this.createPreviewCacheTaskNo(),
+        trigger_type: 'scheduled',
+        status: PreviewCacheTaskStatus.COMPLETED,
+        message: '定时巡检完成，无需修复',
+        finished_at: new Date(),
+      }),
+    );
+    return {
+      action: 'none',
+      message: '定时巡检完成，无需修复',
+      taskId: noopTask.id,
+    };
+  }
+
+  async getPreviewCacheHealthReport() {
+    const issues = await this.courseService.scanPreviewCacheHealth();
+    const runningTask = await this.findRunningPreviewCacheTask();
+    return {
+      issueCount: issues.length,
+      issues,
+      runningTask: runningTask ? this.formatPreviewCacheTask(runningTask) : null,
+    };
+  }
+
+  private async startPreviewCacheTaskForCourses(
+    courseIds: number[],
+    force: boolean,
+    triggerType: string,
+    message: string,
+  ) {
+    const runningTask = await this.findRunningPreviewCacheTask();
+    if (runningTask) {
+      return {
+        ...this.formatPreviewCacheTask(runningTask),
+        total: runningTask.total_courses,
+        started: 0,
+        running: 1,
+        alreadyRunning: true,
+      };
+    }
+
+    const uniqueIds = Array.from(
+      new Set(courseIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)),
+    );
+    if (uniqueIds.length === 0) {
+      throw new BadRequestException('没有可修复的课程');
+    }
+
+    const courses = await this.courseRepository.find({
+      where: { id: In(uniqueIds) },
+      select: ['id', 'name', 'content_type', 'file_type', 'file_url'],
+      order: { id: 'ASC' },
+    });
+    const targets: Course[] = [];
+    for (const course of courses) {
+      if (await this.isPreviewCacheSupportedFileCourse(course)) {
+        targets.push(course);
+      }
+    }
+    if (targets.length === 0) {
+      throw new BadRequestException('目标课程均不支持图片缓存');
+    }
+
+    const task = await this.previewCacheTaskRepository.save(
+      this.previewCacheTaskRepository.create({
+        task_no: this.createPreviewCacheTaskNo(),
+        trigger_type: triggerType,
+        status: PreviewCacheTaskStatus.PENDING,
+        total_courses: targets.length,
+        message,
+        failed_details: JSON.stringify([]),
+      }),
+    );
+
+    void this.runPreviewCacheTask(task.id, targets, force);
+
+    return {
+      total: targets.length,
+      started: targets.length,
+      running: 0,
+      alreadyRunning: false,
+      selectedCourseIds: targets.map((course) => course.id),
       ...this.formatPreviewCacheTask(task),
     };
   }

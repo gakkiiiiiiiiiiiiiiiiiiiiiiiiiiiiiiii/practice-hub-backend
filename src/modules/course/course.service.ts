@@ -56,6 +56,16 @@ export interface BlankPreviewCacheItem {
   pageNum: number;
 }
 
+export interface PreviewCacheHealthIssue {
+  courseId: number;
+  courseName: string;
+  fileId: number;
+  fileName: string;
+  issue: 'missing' | 'incomplete' | 'blank';
+  pageNum?: number;
+  expectedPages?: number;
+}
+
 export interface PdfPageCountResult {
   pageCount: number;
   parser: 'pdf-lib' | 'pdfinfo' | 'ghostscript';
@@ -76,6 +86,8 @@ export interface CourseFilePdfHealth {
 export class CourseService {
   private readonly logger = new Logger(CourseService.name);
   private readonly previewRenderTasks = new Map<string, Promise<{ buffer: Buffer; contentType: string }>>();
+  private readonly previewPdfDownloadTasks = new Map<string, Promise<Buffer>>();
+  private readonly previewPdfBufferCache = new Map<string, { buffer: Buffer; expiresAt: number }>();
   private readonly previewWarmupTasks = new Map<string, Promise<PreviewWarmupResult>>();
   private readonly previewWarmupProgress = new Map<number, PreviewWarmupProgress>();
 
@@ -987,6 +999,90 @@ export class CourseService {
     return blankItems;
   }
 
+  /** 扫描缺失首页缓存或末页未生成的课程（易导致用户预览 502） */
+  async scanCoursesWithMissingOrIncompletePreviewCache(): Promise<PreviewCacheHealthIssue[]> {
+    const courseIds = await this.courseFileService.findCourseIdsWithPreviewableFiles();
+    const issues: PreviewCacheHealthIssue[] = [];
+    const previewScope: 'full' = 'full';
+
+    for (const courseId of courseIds) {
+      const course = await this.courseRepository.findOne({
+        where: { id: courseId },
+        select: ['id', 'name', 'content_type'],
+      });
+      if (!course) continue;
+
+      const files = await this.courseFileService.listByCourseId(courseId);
+      for (const courseFile of files) {
+        if (!this.isPreviewImageSupportedFileRecord(courseFile)) continue;
+
+        const page1Key = this.getPreviewImageCacheKey(
+          course.id,
+          courseFile.id,
+          1,
+          courseFile.file_url,
+          previewScope,
+        );
+        const page1Exists = await this.uploadService.cosObjectExists(page1Key);
+        if (!page1Exists) {
+          issues.push({
+            courseId: course.id,
+            courseName: course.name,
+            fileId: courseFile.id,
+            fileName: courseFile.display_name,
+            issue: 'missing',
+            pageNum: 1,
+          });
+          continue;
+        }
+
+        const versionKey = this.getFilePageCountVersionKey(courseFile.file_url);
+        const cachedCount = this.courseFileService.getCachedPageCount(courseFile, versionKey);
+        if (cachedCount && cachedCount > 1) {
+          const lastPageKey = this.getPreviewImageCacheKey(
+            course.id,
+            courseFile.id,
+            cachedCount,
+            courseFile.file_url,
+            previewScope,
+          );
+          const lastPageExists = await this.uploadService.cosObjectExists(lastPageKey);
+          if (!lastPageExists) {
+            issues.push({
+              courseId: course.id,
+              courseName: course.name,
+              fileId: courseFile.id,
+              fileName: courseFile.display_name,
+              issue: 'incomplete',
+              expectedPages: cachedCount,
+              pageNum: cachedCount,
+            });
+          }
+        }
+      }
+    }
+
+    return issues;
+  }
+
+  /** 汇总预览缓存健康巡检结果 */
+  async scanPreviewCacheHealth(): Promise<PreviewCacheHealthIssue[]> {
+    const blankItems = await this.scanCoursesWithBlankPreviewCache();
+    const blankIssues: PreviewCacheHealthIssue[] = blankItems.map((item) => ({
+      courseId: item.courseId,
+      courseName: item.courseName,
+      fileId: item.fileId,
+      fileName: item.fileName,
+      issue: 'blank',
+      pageNum: item.pageNum,
+    }));
+    const blankCourseIds = new Set(blankIssues.map((item) => item.courseId));
+    const otherIssues = (await this.scanCoursesWithMissingOrIncompletePreviewCache()).filter(
+      (item) => !blankCourseIds.has(item.courseId),
+    );
+    return [...blankIssues, ...otherIssues];
+  }
+
   private async findBlankPreviewCachePage(course: Course, courseFile: CourseFile): Promise<number> {
     const previewScope: 'full' = 'full';
     for (let pageNum = 1; pageNum <= 3; pageNum += 1) {
@@ -1127,10 +1223,13 @@ export class CourseService {
     let pdfBuffer: Buffer;
     if (pdfBufferOverride) {
       pdfBuffer = pdfBufferOverride;
-    } else if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
-      pdfBuffer = await this.getCourseFileAsPdfBuffer(courseFile, 30000);
     } else {
-      pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 3, courseFile.id);
+      pdfBuffer = await this.resolvePreviewPdfBuffer({
+        course,
+        courseFile,
+        hasAuth,
+        courseId,
+      });
     }
 
     const tmpDir = path.join(os.tmpdir(), `course-preview-${courseId}-${pageNum}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -1138,33 +1237,23 @@ export class CourseService {
     const pdfPath = path.join(tmpDir, 'doc.pdf');
     try {
       fs.writeFileSync(pdfPath, pdfBuffer);
-      let buffer: Buffer | undefined;
-      let lastError: unknown;
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          buffer = await this.renderPdfPageToJpeg(pdfPath, pageNum, tmpDir);
-          if (buffer && Buffer.isBuffer(buffer) && buffer.length > 8) {
-            if (!(await this.isPreviewJpegBlank(buffer, tmpDir))) {
-              break;
-            }
-            lastError = new Error('PDF 转图结果为空白页');
-            buffer = undefined;
-          } else {
-            lastError = new Error('PDF 转图未生成有效图片');
-            buffer = undefined;
-          }
-        } catch (error) {
-          lastError = error;
-          buffer = undefined;
+      let buffer = await this.renderPdfPageToJpeg(pdfPath, pageNum, tmpDir);
+      if (!buffer || (await this.isPreviewJpegBlank(buffer, tmpDir))) {
+        const pageText = await this.extractPdfPageText(pdfPath, pageNum);
+        if (!pageText.trim()) {
+          this.logger.warn(
+            `PDF 第 ${pageNum} 页无文本且各引擎转图为空白，按空页写入占位图 course=${courseId} file=${courseFile.id}`,
+          );
+          buffer = await this.createBlankPagePlaceholderJpeg(tmpDir);
+        } else if (!buffer) {
+          throw new Error(
+            'PDF 转图未生成有效图片（该页含文本但无法渲染），建议用 Adobe Acrobat 或 WPS 重新导出 PDF',
+          );
+        } else {
+          throw new Error(
+            'PDF 转图结果为空白页（该页含文本但无法渲染），建议用 Adobe Acrobat 或 WPS 重新导出 PDF',
+          );
         }
-        await this.sleep(250 * attempt);
-      }
-      if (!buffer || !Buffer.isBuffer(buffer) || buffer.length <= 8) {
-        const message = lastError instanceof Error ? lastError.message : 'PDF 转图未生成有效图片';
-        throw new Error(`${message}，请确认容器已安装 Ghostscript、Poppler、ImageMagick，并查看前置转图命令错误日志`);
-      }
-      if (await this.isPreviewJpegBlank(buffer, tmpDir)) {
-        throw new Error('PDF 转图结果为空白页，可能是扫描版/加密 PDF，建议用 Adobe Acrobat 或 WPS 重新导出后再上传');
       }
       await this.uploadService.uploadBufferToCOS(cacheKey, buffer, 'image/jpeg');
       this.logger.log(
@@ -1179,6 +1268,48 @@ export class CourseService {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       } catch (_) {}
     }
+  }
+
+  private async resolvePreviewPdfBuffer({
+    course,
+    courseFile,
+    hasAuth,
+    courseId,
+  }: {
+    course: Course;
+    courseFile: CourseFile;
+    hasAuth: boolean;
+    courseId: number;
+  }): Promise<Buffer> {
+    const cacheKey = `${courseId}:${courseFile.id}:${courseFile.file_url || ''}`;
+    const cached = this.previewPdfBufferCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.buffer;
+    }
+
+    const existingTask = this.previewPdfDownloadTasks.get(cacheKey);
+    if (existingTask) {
+      return existingTask;
+    }
+
+    const downloadTask = (async () => {
+      let pdfBuffer: Buffer;
+      if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
+        pdfBuffer = await this.getCourseFileAsPdfBuffer(courseFile, 60000);
+      } else {
+        pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 3, courseFile.id);
+      }
+      this.previewPdfBufferCache.set(cacheKey, {
+        buffer: pdfBuffer,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      });
+      return pdfBuffer;
+    })().finally(() => {
+      this.previewPdfDownloadTasks.delete(cacheKey);
+    });
+
+    this.previewPdfDownloadTasks.set(cacheKey, downloadTask);
+    return downloadTask;
   }
 
   private isPreviewImageSupportedFileRecord(file: Pick<CourseFile, 'file_url' | 'file_type'>) {
@@ -1267,24 +1398,100 @@ export class CourseService {
   }
 
   private async renderPdfPageToJpeg(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
-    const renderers = [
-      () => this.renderPdfPageWithPdftocairo(pdfPath, pageNum, tmpDir),
-      () => this.renderPdfPageWithPoppler(pdfPath, pageNum, tmpDir),
-      () => this.renderPdfPageWithGhostscript(pdfPath, pageNum, tmpDir),
+    const renderers: Array<{ name: string; run: () => Promise<Buffer | undefined> }> = [
+      { name: 'mutool', run: () => this.renderPdfPageWithMutool(pdfPath, pageNum, tmpDir) },
+      { name: 'pdftocairo', run: () => this.renderPdfPageWithPdftocairo(pdfPath, pageNum, tmpDir) },
+      { name: 'pdftoppm', run: () => this.renderPdfPageWithPoppler(pdfPath, pageNum, tmpDir) },
+      { name: 'ghostscript', run: () => this.renderPdfPageWithGhostscript(pdfPath, pageNum, tmpDir, false) },
+      { name: 'ghostscript-nosafer', run: () => this.renderPdfPageWithGhostscript(pdfPath, pageNum, tmpDir, true) },
     ];
 
-    for (const render of renderers) {
-      const buffer = await render();
+    for (const renderer of renderers) {
+      const buffer = await renderer.run();
       if (!buffer || buffer.length <= 8) {
         continue;
       }
       if (!(await this.isPreviewJpegBlank(buffer, tmpDir))) {
+        this.logger.debug(`PDF 第 ${pageNum} 页由 ${renderer.name} 渲染成功`);
         return buffer;
       }
-      this.logger.warn(`PDF 第 ${pageNum} 页转图结果为空白，尝试下一个渲染引擎`);
+      this.logger.warn(`PDF 第 ${pageNum} 页 ${renderer.name} 转图结果为空白，尝试下一个引擎`);
     }
 
     return undefined;
+  }
+
+  private async extractPdfPageText(pdfPath: string, pageNum: number): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync('pdftotext', [
+        '-f',
+        String(pageNum),
+        '-l',
+        String(pageNum),
+        pdfPath,
+        '-',
+      ]);
+      return String(stdout || '').replace(/\s+/g, ' ').trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  private async createBlankPagePlaceholderJpeg(tmpDir: string): Promise<Buffer> {
+    const outPath = path.join(tmpDir, 'blank-placeholder.jpg');
+    const height = Math.round(PREVIEW_IMAGE_WIDTH * 1.414);
+    await execFileAsync('magick', [
+      '-size',
+      `${PREVIEW_IMAGE_WIDTH}x${height}`,
+      'xc:#ffffff',
+      '-quality',
+      String(PREVIEW_IMAGE_QUALITY),
+      outPath,
+    ]);
+    const buffer = fs.readFileSync(outPath);
+    if (!buffer.length) {
+      throw new Error('空页占位图生成失败');
+    }
+    return buffer;
+  }
+
+  private async renderPdfPageWithMutool(
+    pdfPath: string,
+    pageNum: number,
+    tmpDir: string,
+  ): Promise<Buffer | undefined> {
+    const pngPath = path.join(tmpDir, `mutool-page-${pageNum}.png`);
+    const jpegPath = path.join(tmpDir, `mutool-page-${pageNum}.jpg`);
+    try {
+      await this.withTimeout(
+        execFileAsync('mutool', [
+          'draw',
+          '-r',
+          String(PREVIEW_IMAGE_DENSITY),
+          '-o',
+          pngPath,
+          pdfPath,
+          String(pageNum),
+        ]),
+        45000,
+        'mutool 预览图生成超时，请稍后重试',
+      );
+      if (!fs.existsSync(pngPath)) return undefined;
+      await execFileAsync('magick', [
+        pngPath,
+        '-quality',
+        String(PREVIEW_IMAGE_QUALITY),
+        jpegPath,
+      ]);
+      if (!fs.existsSync(jpegPath)) return undefined;
+      const buffer = fs.readFileSync(jpegPath);
+      return buffer.length > 8 ? buffer : undefined;
+    } catch (error: any) {
+      const stderr = error?.stderr ? String(error.stderr).trim() : '';
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[PDF预览] mutool 转图失败:', stderr || message);
+      return undefined;
+    }
   }
 
   private async renderPdfPageWithPdftocairo(
@@ -1308,7 +1515,7 @@ export class CourseService {
           pdfPath,
           outputPrefix,
         ]),
-        15000,
+        45000,
         'pdftocairo 预览图生成超时，请稍后重试',
       );
       if (!fs.existsSync(outputPath)) return undefined;
@@ -1355,12 +1562,17 @@ export class CourseService {
     }
   }
 
-  private async renderPdfPageWithGhostscript(pdfPath: string, pageNum: number, tmpDir: string): Promise<Buffer | undefined> {
-    const outputPath = path.join(tmpDir, `page-${pageNum}.jpg`);
+  private async renderPdfPageWithGhostscript(
+    pdfPath: string,
+    pageNum: number,
+    tmpDir: string,
+    noSafer = false,
+  ): Promise<Buffer | undefined> {
+    const outputPath = path.join(tmpDir, `page-${pageNum}${noSafer ? '-ns' : ''}.jpg`);
     try {
       await this.withTimeout(
         execFileAsync('gs', [
-          '-dSAFER',
+          noSafer ? '-dNOSAFER' : '-dSAFER',
           '-dBATCH',
           '-dNOPAUSE',
           '-dPDFSTOPONERROR=false',
@@ -1382,7 +1594,7 @@ export class CourseService {
     } catch (error: any) {
       const stderr = error?.stderr ? String(error.stderr).trim() : '';
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[PDF预览] Ghostscript 转图失败:', stderr || message);
+      console.error(`[PDF预览] Ghostscript 转图失败${noSafer ? ' (NOSAFER)' : ''}:`, stderr || message);
       return undefined;
     }
   }
@@ -1483,7 +1695,7 @@ export class CourseService {
 
   private getPreviewCacheVersion(fileUrl: string, scope: 'full' | 'trial'): string {
     return createHash('md5')
-      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|direct-page-v6`)
+      .update(`${fileUrl}|${scope}|jpeg|${PREVIEW_IMAGE_WIDTH}|${PREVIEW_IMAGE_DENSITY}|${PREVIEW_IMAGE_QUALITY}|direct-page-v7`)
       .digest('hex')
       .slice(0, 12);
   }
