@@ -5,6 +5,7 @@ import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { BindPhoneDto } from './dto/bind-phone.dto';
 import { CoinService } from '../order/coin.service';
+import { UserTitleService } from './user-title.service';
 
 @Injectable()
 export class UserService {
@@ -12,6 +13,7 @@ export class UserService {
     @InjectRepository(AppUser)
     private appUserRepository: Repository<AppUser>,
     private coinService: CoinService,
+    private readonly userTitleService: UserTitleService,
   ) {}
 
   /**
@@ -34,6 +36,9 @@ export class UserService {
       }
     }
 
+    const userTitle = await this.userTitleService.resolveUserTitle(userId);
+    const studyDays = userTitle?.studyDays ?? (await this.userTitleService.countUserStudyDays(userId));
+
     return {
       id: user.id,
       openid: user.openid,
@@ -49,6 +54,8 @@ export class UserService {
       package_expire_time: user.package_expire_time,
       coin_balance: coinBalance,
       points_balance: Math.max(0, Number(user.points_balance || 0)),
+      study_days: studyDays,
+      user_title: userTitle,
     };
   }
 

@@ -2,6 +2,7 @@ import { Controller, Get, Put, Post, Body, Query, UseGuards } from '@nestjs/comm
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { UserService } from './user.service';
 import { CheckinService } from './checkin.service';
+import { UserTitleService } from './user-title.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
@@ -16,12 +17,20 @@ export class UserController {
   constructor(
     private readonly userService: UserService,
     private readonly checkinService: CheckinService,
+    private readonly userTitleService: UserTitleService,
   ) {}
 
   @Get('info')
   @ApiOperation({ summary: '获取个人信息' })
   async getUserInfo(@CurrentUser() user: any) {
     const result = await this.userService.getUserInfo(user.userId);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('title-config')
+  @ApiOperation({ summary: '获取称号段位配置（展示用）' })
+  async getUserTitleConfig() {
+    const result = await this.userTitleService.getConfig();
     return CommonResponseDto.success(result);
   }
 

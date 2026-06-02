@@ -13,6 +13,7 @@ import { SetCheckinMinutesDto } from './dto/set-checkin-minutes.dto';
 import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
 import { PointsService, PointsConfig } from '../marketing/points.service';
+import { UserTitleService, UserTitleConfig } from '../user/user-title.service';
 import { OperationLogInterceptor } from '../../common/interceptors/operation-log.interceptor';
 import { IssueCouponDto } from '../marketing/dto/issue-coupon.dto';
 import { GetAdminCouponListDto } from '../marketing/dto/get-admin-coupon-list.dto';
@@ -26,6 +27,7 @@ export class SystemController {
     private readonly systemService: SystemService,
     private readonly referralCouponService: ReferralCouponService,
     private readonly pointsService: PointsService,
+    private readonly userTitleService: UserTitleService,
   ) {}
 
   @Put('settings/countdown')
@@ -198,6 +200,22 @@ export class SystemController {
     },
   ) {
     const result = await this.pointsService.setConfig((body || {}) as Partial<PointsConfig>);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('settings/user-title')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取用户称号配置' })
+  async getUserTitleConfig() {
+    const result = await this.userTitleService.getConfig();
+    return CommonResponseDto.success(result);
+  }
+
+  @Put('settings/user-title')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '设置用户称号配置' })
+  async setUserTitleConfig(@Body() body: Partial<UserTitleConfig>) {
+    const result = await this.userTitleService.setConfig(body || {});
     return CommonResponseDto.success(result);
   }
 
