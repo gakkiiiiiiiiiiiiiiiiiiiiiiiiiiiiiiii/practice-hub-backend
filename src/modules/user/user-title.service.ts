@@ -11,6 +11,7 @@ export type UserTitleTierConfig = {
   name: string;
   minDays: number;
   tierStyle: TitleTierStyle;
+  textColor: string;
   sort: number;
   enabled?: boolean;
 };
@@ -24,6 +25,7 @@ export type ResolvedUserTitle = {
   id: string;
   name: string;
   tierStyle: TitleTierStyle;
+  textColor: string;
   minDays: number;
   studyDays: number;
   nextTitle: {
@@ -33,19 +35,28 @@ export type ResolvedUserTitle = {
   } | null;
 };
 
+const TITLE_STYLE_SET = new Set<TitleTierStyle>(['bronze', 'silver', 'gold', 'platinum', 'diamond', 'king']);
+
+const DEFAULT_STYLE_TEXT_COLORS: Record<TitleTierStyle, string> = {
+  bronze: '#5c3d2e',
+  silver: '#3d4a5c',
+  gold: '#6b4e16',
+  platinum: '#0f4c5c',
+  diamond: '#1e3a8a',
+  king: '#4c1d95',
+};
+
 const DEFAULT_USER_TITLE_CONFIG: UserTitleConfig = {
   enabled: true,
   tiers: [
-    { id: 'tier_1', name: '备考新兵', minDays: 0, tierStyle: 'bronze', sort: 1, enabled: true },
-    { id: 'tier_2', name: '筑基学士', minDays: 7, tierStyle: 'silver', sort: 2, enabled: true },
-    { id: 'tier_3', name: '刷题先锋', minDays: 30, tierStyle: 'gold', sort: 3, enabled: true },
-    { id: 'tier_4', name: '真题宗师', minDays: 90, tierStyle: 'platinum', sort: 4, enabled: true },
-    { id: 'tier_5', name: '过线战神', minDays: 180, tierStyle: 'diamond', sort: 5, enabled: true },
-    { id: 'tier_6', name: '研途王者', minDays: 365, tierStyle: 'king', sort: 6, enabled: true },
+    { id: 'tier_1', name: '备考新兵', minDays: 0, tierStyle: 'bronze', textColor: '#5c3d2e', sort: 1, enabled: true },
+    { id: 'tier_2', name: '筑基学士', minDays: 7, tierStyle: 'silver', textColor: '#3d4a5c', sort: 2, enabled: true },
+    { id: 'tier_3', name: '刷题先锋', minDays: 30, tierStyle: 'gold', textColor: '#6b4e16', sort: 3, enabled: true },
+    { id: 'tier_4', name: '真题宗师', minDays: 90, tierStyle: 'platinum', textColor: '#0f4c5c', sort: 4, enabled: true },
+    { id: 'tier_5', name: '过线战神', minDays: 180, tierStyle: 'diamond', textColor: '#1e3a8a', sort: 5, enabled: true },
+    { id: 'tier_6', name: '研途王者', minDays: 365, tierStyle: 'king', textColor: '#4c1d95', sort: 6, enabled: true },
   ],
 };
-
-const TITLE_STYLE_SET = new Set<TitleTierStyle>(['bronze', 'silver', 'gold', 'platinum', 'diamond', 'king']);
 
 @Injectable()
 export class UserTitleService {
@@ -127,6 +138,7 @@ export class UserTitleService {
       id: current.id,
       name: current.name,
       tierStyle: current.tierStyle,
+      textColor: current.textColor,
       minDays: current.minDays,
       studyDays,
       nextTitle: nextTier
@@ -153,6 +165,7 @@ export class UserTitleService {
           name: String(tier.name || `称号${index + 1}`).trim(),
           minDays,
           tierStyle,
+          textColor: this.normalizeTextColor(tier.textColor, tierStyle),
           sort: Math.max(0, Math.floor(Number(tier.sort) || index + 1)),
           enabled: tier.enabled !== false,
         };
@@ -169,5 +182,17 @@ export class UserTitleService {
       enabled: input.enabled !== false,
       tiers: tiers.length > 0 ? tiers : [...DEFAULT_USER_TITLE_CONFIG.tiers],
     };
+  }
+
+  private normalizeTextColor(raw: unknown, tierStyle: TitleTierStyle): string {
+    const value = String(raw || '').trim();
+    if (/^#[0-9a-fA-F]{6}$/.test(value)) {
+      return value.toLowerCase();
+    }
+    if (/^#[0-9a-fA-F]{3}$/.test(value)) {
+      const hex = value.slice(1);
+      return `#${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`.toLowerCase();
+    }
+    return DEFAULT_STYLE_TEXT_COLORS[tierStyle] || DEFAULT_STYLE_TEXT_COLORS.bronze;
   }
 }
