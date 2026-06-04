@@ -36,6 +36,7 @@ import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 import { BatchAdjustCoursePriceDto } from './dto/batch-adjust-price.dto';
 import { CreateCourseFileDto, UpdateCourseFileDto } from './dto/course-file.dto';
 import { SetCourseDefaultParamsDto } from '../system/dto/set-course-default-params.dto';
+import { SetCourseSimilarityConfigDto } from './dto/set-course-similarity-config.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 
@@ -75,6 +76,22 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Get('similarity-config')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN, AdminRole.AGENT)
+	@ApiOperation({ summary: '获取课程同名/类似检测配置' })
+	async getCourseSimilarityConfig() {
+		const result = await this.adminCourseService.getCourseSimilarityConfig();
+		return CommonResponseDto.success(result);
+	}
+
+	@Put('similarity-config')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '设置课程同名/类似检测配置' })
+	async setCourseSimilarityConfig(@Body() dto: SetCourseSimilarityConfigDto) {
+		const result = await this.adminCourseService.setCourseSimilarityConfig(dto as Record<string, any>);
+		return CommonResponseDto.success(result);
+	}
+
 	@Put(':id')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 	@ApiOperation({ summary: '编辑课程' })
@@ -100,6 +117,28 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Get('similar-groups')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN, AdminRole.AGENT)
+	@ApiOperation({ summary: '检测同名或类似课程分组' })
+	async getSimilarCourseGroups(
+		@Query('name') name?: string,
+		@Query('subject') subject?: string,
+		@Query('category') category?: string,
+		@Query('subCategory') subCategory?: string,
+		@Query('status') status?: string,
+	) {
+		const parsedStatus =
+			status !== undefined && status !== '' ? Number(status) : undefined;
+		const result = await this.adminCourseService.getSimilarCourseGroups({
+			name,
+			subject,
+			category,
+			subCategory,
+			status: parsedStatus !== undefined && !Number.isNaN(parsedStatus) ? parsedStatus : undefined,
+		});
+		return CommonResponseDto.success(result);
+	}
+
 	@Get()
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN, AdminRole.AGENT)
 	@ApiOperation({ summary: '获取课程列表' })
@@ -109,6 +148,7 @@ export class AdminCourseController {
 		@Query('category') category?: string,
 		@Query('subCategory') subCategory?: string,
 		@Query('status') status?: string,
+		@Query('similarOnly') similarOnly?: string,
 	) {
 		const parsedStatus =
 			status !== undefined && status !== '' ? Number(status) : undefined;
@@ -118,6 +158,7 @@ export class AdminCourseController {
 			category,
 			subCategory,
 			status: parsedStatus !== undefined && !Number.isNaN(parsedStatus) ? parsedStatus : undefined,
+			similarOnly: similarOnly === '1' || similarOnly === 'true',
 		});
 		return CommonResponseDto.success(result);
 	}

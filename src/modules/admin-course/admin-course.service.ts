@@ -23,6 +23,12 @@ import { CourseFileService, CourseFileInput } from '../course/course-file.servic
 import { AdminRole } from '../../database/entities/sys-user.entity';
 import { queryWithRetry } from '../../common/utils/database-retry';
 import { assertIntegerYuanPrice, ceilIntegerYuanPrice } from '../../common/utils/price.util';
+import {
+  buildSimilarCourseGroups,
+  collectSimilarCourseIds,
+  CourseSimilarityOptions,
+  SimilarCourseGroupResult,
+} from './course-name-similarity.util';
 
 class PreviewCacheTaskInterruptedError extends Error {
   constructor() {
@@ -115,6 +121,19 @@ export class AdminCourseService {
 
   async setCourseDefaultParams(input: Record<string, any>) {
     return this.systemService.setCourseDefaultParams(input);
+  }
+
+  async getCourseSimilarityConfig() {
+    return this.systemService.getCourseSimilarityConfig();
+  }
+
+  async setCourseSimilarityConfig(input: Record<string, any>) {
+    return this.systemService.setCourseSimilarityConfig(input);
+  }
+
+  private async getCourseSimilarityOptions(): Promise<CourseSimilarityOptions> {
+    const config = await this.systemService.getCourseSimilarityConfig();
+    return { threshold: config.threshold };
   }
 
   private async applyCreateCourseDefaults(dto: CreateCourseDto) {
@@ -1195,6 +1214,56 @@ export class AdminCourseService {
   }
 
   /**
+   * 检测同名或名称相近的课程分组
+   */
+  async getSimilarCourseGroups(filters?: {
+    name?: string;
+    subject?: string;
+    category?: string;
+    subCategory?: string;
+    status?: number;
+  }) {
+    const similarityOptions = await this.getCourseSimilarityOptions();
+    const courses = await this.getCourseList({
+      name: filters?.name,
+      subject: filters?.subject,
+      category: filters?.category,
+      subCategory: filters?.subCategory,
+      status: filters?.status,
+    });
+    const groups = buildSimilarCourseGroups(
+      courses.map((course) => ({ id: course.id, name: course.name })),
+      similarityOptions,
+    );
+    const courseMap = new Map(courses.map((course) => [course.id, course]));
+
+    return {
+      similarityThreshold: similarityOptions.threshold,
+      groupCount: groups.length,
+      duplicateCourseCount: collectSimilarCourseIds(groups).length,
+      groups: groups.map((group) => ({
+        ...group,
+        courses: group.courseIds
+          .map((id) => courseMap.get(id))
+          .filter((course): course is Course => Boolean(course)),
+      })),
+    };
+  }
+
+  private buildSimilarCourseMeta(groups: SimilarCourseGroupResult[]) {
+    const meta = new Map<number, { similar_group_id: string; similar_match_type: string }>();
+    groups.forEach((group) => {
+      group.courseIds.forEach((id) => {
+        meta.set(id, {
+          similar_group_id: group.groupId,
+          similar_match_type: group.matchType,
+        });
+      });
+    });
+    return meta;
+  }
+
+  /**
    * 获取课程列表
    */
   async getCourseList(filters?: {
@@ -1203,6 +1272,7 @@ export class AdminCourseService {
     category?: string;
     subCategory?: string;
     status?: number;
+    similarOnly?: boolean;
   }) {
     const queryBuilder = this.courseRepository.createQueryBuilder('course').select([
       'course.id',
@@ -1249,7 +1319,31 @@ export class AdminCourseService {
       queryBuilder.andWhere('course.status = :status', { status: filters.status });
     }
 
-    return queryWithRetry(
+    let similarMeta = new Map<number, { similar_group_id: string; similar_match_type: string }>();
+    if (filters?.similarOnly) {
+      const similarityOptions = await this.getCourseSimilarityOptions();
+      const baseCourses = await queryWithRetry(
+        () =>
+          queryBuilder
+            .clone()
+            .orderBy('course.sort', 'ASC')
+            .addOrderBy('course.id', 'ASC')
+            .getMany(),
+        { action: '获取课程列表（相似检测）', logger: this.logger },
+      );
+      const groups = buildSimilarCourseGroups(
+        baseCourses.map((course) => ({ id: course.id, name: course.name })),
+        similarityOptions,
+      );
+      const similarIds = collectSimilarCourseIds(groups);
+      if (similarIds.length === 0) {
+        return [];
+      }
+      similarMeta = this.buildSimilarCourseMeta(groups);
+      queryBuilder.andWhere('course.id IN (:...similarIds)', { similarIds });
+    }
+
+    const list = await queryWithRetry(
       () =>
         queryBuilder
           .orderBy('course.sort', 'ASC')
@@ -1257,6 +1351,15 @@ export class AdminCourseService {
           .getMany(),
       { action: '获取课程列表', logger: this.logger },
     );
+
+    if (!filters?.similarOnly || similarMeta.size === 0) {
+      return list;
+    }
+
+    return list.map((course) => {
+      const extra = similarMeta.get(course.id);
+      return extra ? { ...course, ...extra } : course;
+    });
   }
 
   /**

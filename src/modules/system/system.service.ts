@@ -351,6 +351,36 @@ export class SystemService {
     };
   }
 
+  getDefaultCourseSimilarityConfig() {
+    return { threshold: 0.82 };
+  }
+
+  normalizeCourseSimilarityConfig(input?: Record<string, any> | null) {
+    const fallback = this.getDefaultCourseSimilarityConfig();
+    const raw = Number(input?.threshold ?? fallback.threshold);
+    const threshold = Number.isFinite(raw)
+      ? Math.min(0.99, Math.max(0.5, Math.round(raw * 100) / 100))
+      : fallback.threshold;
+    return { threshold };
+  }
+
+  async getCourseSimilarityConfig() {
+    const value = await this.getJsonConfig(
+      'course_similarity_config',
+      this.getDefaultCourseSimilarityConfig(),
+    );
+    return this.normalizeCourseSimilarityConfig(value as Record<string, any>);
+  }
+
+  async setCourseSimilarityConfig(input: Record<string, any>) {
+    const normalized = this.normalizeCourseSimilarityConfig(input);
+    await this.setJsonConfig('course_similarity_config', '课程同名/类似检测参数', normalized);
+    return {
+      success: true,
+      config: normalized,
+    };
+  }
+
   async getFaqConfig() {
     return this.getJsonConfig('faq_config', [
       {
