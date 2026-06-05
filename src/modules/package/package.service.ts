@@ -537,9 +537,12 @@ export class PackageService {
 		const allCourses = Array.from(courseMap.values());
 		const previewCourses = coversAllCourses ? allCourses.slice(0, 30) : allCourses;
 		const coursesTotalPrice = this.sumCoursesPrice(allCourses);
+		const formatted = await this.formatSection(section);
+		const enabledPlans = (formatted.plans || []).filter((plan) => plan.status === 1);
 
 		return {
-			...(await this.formatSection(section)),
+			...formatted,
+			plans: enabledPlans,
 			courses: previewCourses.map((course) => ({
 				id: course.id,
 				name: course.name,
