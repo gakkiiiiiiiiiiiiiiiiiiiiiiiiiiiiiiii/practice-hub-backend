@@ -1,8 +1,9 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { CourseCategory } from '../../database/entities/course-category.entity';
 import { Course } from '../../database/entities/course.entity';
+import { queryWithRetry } from '../../common/utils/database-retry';
 import { BatchDeleteCourseCategoriesDto } from './dto/batch-delete-course-categories.dto';
 import { BatchUpdateCourseCategoriesStatusDto } from './dto/batch-update-course-categories-status.dto';
 import { CreateCourseCategoryDto } from './dto/create-course-category.dto';
@@ -10,11 +11,14 @@ import { UpdateCourseCategoryDto } from './dto/update-course-category.dto';
 
 @Injectable()
 export class AdminCourseCategoryService {
+	private readonly logger = new Logger(AdminCourseCategoryService.name);
+
 	constructor(
 		@InjectRepository(CourseCategory)
 		private courseCategoryRepository: Repository<CourseCategory>,
 		@InjectRepository(Course)
 		private courseRepository: Repository<Course>,
+		private readonly dataSource: DataSource,
 	) {}
 
 	async getCategoryTree(status?: number) {
@@ -69,83 +73,91 @@ export class AdminCourseCategoryService {
 		return this.courseCategoryRepository.save(category);
 	}
 
-	private async getCategoryNameById(parentId?: number | null) {
-		if (!parentId) {
-			return null;
-		}
-		const parent = await this.courseCategoryRepository.findOne({ where: { id: parentId } });
-		return parent?.name ?? null;
+	async updateCategory(id: number, dto: UpdateCourseCategoryDto) {
+		return queryWithRetry(() => this.executeUpdateCategory(id, dto), {
+			action: '更新课程分类',
+			logger: this.logger,
+			retries: 3,
+			delayMs: 500,
+		});
 	}
 
-	async updateCategory(id: number, dto: UpdateCourseCategoryDto) {
-		const category = await this.courseCategoryRepository.findOne({ where: { id } });
-		if (!category) {
-			throw new NotFoundException('分类不存在');
-		}
+	private async executeUpdateCategory(id: number, dto: UpdateCourseCategoryDto) {
+		return this.dataSource.transaction(async (manager) => {
+			const categoryRepo = manager.getRepository(CourseCategory);
+			const courseRepo = manager.getRepository(Course);
 
-		const oldName = category.name;
-		const oldParentId = category.parent_id ?? null;
-		const oldParentName = await this.getCategoryNameById(oldParentId);
-		const isSecondary = oldParentId !== null && oldParentId !== undefined;
-
-		let newParentId = oldParentId;
-		if (dto.parent_id !== undefined) {
-			if (!isSecondary && dto.parent_id !== null && dto.parent_id !== undefined) {
-				throw new BadRequestException('一级分类不能设置上级分类');
+			const category = await categoryRepo.findOne({ where: { id } });
+			if (!category) {
+				throw new NotFoundException('分类不存在');
 			}
-			if (isSecondary && (dto.parent_id === null || dto.parent_id === undefined)) {
-				throw new BadRequestException('二级分类不能改为一级分类');
+
+			const oldName = category.name;
+			const oldParentId = category.parent_id ?? null;
+			const isSecondary = oldParentId !== null && oldParentId !== undefined;
+
+			let newParentId = oldParentId;
+			if (dto.parent_id !== undefined) {
+				if (!isSecondary && dto.parent_id !== null && dto.parent_id !== undefined) {
+					throw new BadRequestException('一级分类不能设置上级分类');
+				}
+				if (isSecondary && (dto.parent_id === null || dto.parent_id === undefined)) {
+					throw new BadRequestException('二级分类不能改为一级分类');
+				}
+				newParentId = dto.parent_id ?? null;
 			}
-			newParentId = dto.parent_id ?? null;
-		}
 
-		if (newParentId === id) {
-			throw new BadRequestException('不能将自身设为上级分类');
-		}
+			if (newParentId === id) {
+				throw new BadRequestException('不能将自身设为上级分类');
+			}
 
-		if (newParentId !== null && newParentId !== undefined && newParentId !== oldParentId) {
-			const parentCategory = await this.courseCategoryRepository.findOne({
-				where: { id: newParentId },
+			if (newParentId !== null && newParentId !== undefined && newParentId !== oldParentId) {
+				const parentCategory = await categoryRepo.findOne({
+					where: { id: newParentId },
+				});
+				if (!parentCategory) {
+					throw new BadRequestException('父级分类不存在');
+				}
+				if (parentCategory.parent_id !== null && parentCategory.parent_id !== undefined) {
+					throw new BadRequestException('二级分类不允许作为父级分类');
+				}
+			}
+
+			const parentNameRows = await categoryRepo.find({
+				where: { id: In([oldParentId, newParentId].filter((value): value is number => Number.isInteger(value) && value > 0)) },
+				select: ['id', 'name'],
 			});
-			if (!parentCategory) {
-				throw new BadRequestException('父级分类不存在');
-			}
-			if (parentCategory.parent_id !== null && parentCategory.parent_id !== undefined) {
-				throw new BadRequestException('二级分类不允许作为父级分类');
-			}
-		}
+			const parentNameMap = new Map(parentNameRows.map((row) => [row.id, row.name]));
+			const oldParentName = oldParentId ? parentNameMap.get(oldParentId) ?? null : null;
+			const newParentName = newParentId ? parentNameMap.get(newParentId) ?? null : null;
+			const nextName = dto.name ?? category.name;
 
-		const nextName = dto.name ?? category.name;
+			Object.assign(category, {
+				...dto,
+				parent_id: newParentId,
+				name: nextName,
+			});
+			const savedCategory = await categoryRepo.save(category);
 
-		Object.assign(category, {
-			...dto,
-			parent_id: newParentId,
-			name: nextName,
-		});
-		await this.courseCategoryRepository.save(category);
-
-		let syncedCourseCount = 0;
-		if (isSecondary && newParentId) {
-			const newParentName = await this.getCategoryNameById(newParentId);
-			if (oldParentName && newParentName && (oldParentName !== newParentName || oldName !== nextName)) {
-				const updateResult = await this.courseRepository.update(
-					{ category: oldParentName, sub_category: oldName },
-					{ category: newParentName, sub_category: nextName },
-				);
+			let syncedCourseCount = 0;
+			if (isSecondary && newParentId) {
+				if (oldParentName && newParentName && (oldParentName !== newParentName || oldName !== nextName)) {
+					const updateResult = await courseRepo.update(
+						{ category: oldParentName, sub_category: oldName },
+						{ category: newParentName, sub_category: nextName },
+					);
+					syncedCourseCount = updateResult.affected || 0;
+				}
+			} else if (!isSecondary && oldName !== nextName) {
+				const updateResult = await courseRepo.update({ category: oldName }, { category: nextName });
 				syncedCourseCount = updateResult.affected || 0;
 			}
-		} else if (!isSecondary && oldName !== nextName) {
-			const updateResult = await this.courseRepository.update(
-				{ category: oldName },
-				{ category: nextName },
-			);
-			syncedCourseCount = updateResult.affected || 0;
-		}
 
-		return {
-			...category,
-			syncedCourseCount,
-		};
+			return {
+				...savedCategory,
+				syncedCourseCount,
+			};
+		});
 	}
 
 	async deleteCategory(id: number) {
