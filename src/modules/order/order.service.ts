@@ -12,6 +12,8 @@ import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreateCartOrderDto } from './dto/create-cart-order.dto';
 import { GetAdminOrderListDto } from './dto/get-admin-order-list.dto';
+import { RefundOrderDto } from './dto/refund-order.dto';
+import { OrderAfterSale, AfterSaleStatus } from '../../database/entities/order-after-sale.entity';
 import { DistributorService } from '../distributor/distributor.service';
 import { XpayService } from './xpay.service';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
@@ -32,6 +34,8 @@ export class OrderService {
     private appUserRepository: Repository<AppUser>,
     @InjectRepository(UserCourseAuth)
     private userCourseAuthRepository: Repository<UserCourseAuth>,
+    @InjectRepository(OrderAfterSale)
+    private afterSaleRepository: Repository<OrderAfterSale>,
     @Inject(forwardRef(() => DistributorService))
     private distributorService: DistributorService,
     private xpayService: XpayService,
@@ -451,7 +455,24 @@ export class OrderService {
       };
     }
 
-    const rechargeOrderNo = this.generateRechargeOrderNo(order.order_no);
+    const existingRechargeOrderNo = String(order.pay_payload?.coin_purchase?.recharge_order_no || '');
+    if (existingRechargeOrderNo) {
+      const rechargeAlreadyPaid = await this.isWechatRechargePaid(user, existingRechargeOrderNo);
+      if (rechargeAlreadyPaid) {
+        const fulfilled = await this.tryFulfillVirtualPaymentOrder(order, user, clientIp);
+        if (fulfilled.fulfilled) {
+          return {
+            order_no: order.order_no,
+            amount: order.amount,
+            ...responseExtras,
+            status: OrderStatus.PAID,
+            payment_params: null,
+          };
+        }
+      }
+    }
+
+    const rechargeOrderNo = existingRechargeOrderNo || this.generateRechargeOrderNo(order.order_no);
     order.amount = payAmountYuan;
     order.pay_provider = 'virtual_payment';
     order.pay_payload = {
@@ -659,6 +680,137 @@ export class OrderService {
     };
   }
 
+  private async findOrderByWechatOutTradeNo(outTradeNo: string) {
+    const normalized = String(outTradeNo || '').trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const directOrder = await this.orderRepository.findOne({ where: { order_no: normalized } });
+    if (directOrder) {
+      return directOrder;
+    }
+
+    return this.orderRepository
+      .createQueryBuilder('o')
+      .where("JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.coin_purchase.recharge_order_no')) = :outTradeNo", {
+        outTradeNo: normalized,
+      })
+      .orWhere("JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.coin_purchase.currency_pay_order_id')) = :outTradeNo", {
+        outTradeNo: normalized,
+      })
+      .getOne();
+  }
+
+  private async isWechatRechargePaid(user: AppUser, rechargeOrderNo: string) {
+    if (!rechargeOrderNo) {
+      return false;
+    }
+    try {
+      if (await this.coinService.isRechargeOrderPaid(user, rechargeOrderNo)) {
+        return true;
+      }
+    } catch (error) {
+      this.logger.warn(`查询虚拟充值单失败 ${rechargeOrderNo}: ${error?.message || error}`);
+    }
+
+    try {
+      const result = await this.queryWechatPayOrder(rechargeOrderNo);
+      const tradeState = result?.trade_state || result?.tradeState;
+      return tradeState === 'SUCCESS';
+    } catch (error) {
+      this.logger.warn(`查询微信商户充值单失败 ${rechargeOrderNo}: ${error?.message || error}`);
+      return false;
+    }
+  }
+
+  /**
+   * 充值已到账后完成代币扣减与发货；用户付完款未点确认、或后台补单时调用。
+   */
+  private async tryFulfillVirtualPaymentOrder(
+    order: Order,
+    user: AppUser,
+    clientIp?: string,
+    options?: { allowMissingSessionKey?: boolean; rechargeQueryAttempts?: number },
+  ) {
+    if (order.status === OrderStatus.PAID) {
+      return { fulfilled: true, order_no: order.order_no, status: order.status };
+    }
+    if (order.status !== OrderStatus.PENDING) {
+      return { fulfilled: false, reason: '订单状态不可完成支付' };
+    }
+    if (!['virtual_payment', 'wechat_coin'].includes(String(order.pay_provider || ''))) {
+      return { fulfilled: false, reason: '订单支付方式不匹配' };
+    }
+
+    const coinPurchase = { ...(order.pay_payload?.coin_purchase || {}) } as Record<string, any>;
+    const coinCost = Number(coinPurchase.coin_cost || this.coinService.yuanToCoinInt(Number(order.amount || 0)));
+
+    if (Number(coinPurchase.recharge_coins || 0) > 0 && !coinPurchase.recharge_settled) {
+      const rechargeOrderNo = String(coinPurchase.recharge_order_no || '');
+      if (!rechargeOrderNo) {
+        return { fulfilled: false, reason: '充值订单信息缺失' };
+      }
+
+      const maxAttempts = Math.max(1, options?.rechargeQueryAttempts ?? 5);
+      let settled = false;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (await this.isWechatRechargePaid(user, rechargeOrderNo)) {
+          settled = true;
+          break;
+        }
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
+      }
+      if (!settled) {
+        return { fulfilled: false, reason: '微信充值尚未到账' };
+      }
+      coinPurchase.recharge_settled = true;
+    }
+
+    if (!coinPurchase.currency_paid) {
+      const currencyPayOrderId = String(coinPurchase.currency_pay_order_id || `${order.order_no}_COIN`);
+      try {
+        await this.coinService.currencyPayForOrder({
+          user,
+          order,
+          coinAmount: coinCost,
+          clientIp,
+          currencyPayOrderId,
+          allowMissingSessionKey: options?.allowMissingSessionKey,
+        });
+      } catch (error) {
+        if (!options?.allowMissingSessionKey || !user.session_key) {
+          return {
+            fulfilled: false,
+            reason: error?.message || '代币扣减失败，请用户重新登录后在订单页点击继续支付',
+          };
+        }
+        throw error;
+      }
+      coinPurchase.currency_paid = true;
+      coinPurchase.currency_pay_order_id = currencyPayOrderId;
+    }
+
+    order.pay_payload = {
+      ...(order.pay_payload || {}),
+      coin_purchase: coinPurchase,
+      virtual_payment_success: {
+        confirmed_at: new Date().toISOString(),
+        source: options?.allowMissingSessionKey ? 'admin_sync' : 'client_confirm',
+      },
+    };
+    await this.orderRepository.save(order);
+    await this.handlePaymentSuccess(order.id);
+
+    return {
+      fulfilled: true,
+      order_no: order.order_no,
+      status: OrderStatus.PAID,
+    };
+  }
+
   async handleWechatPayNotify(_headers: Record<string, any>, body: Record<string, any>) {
     console.log('微信支付开放接口通知:', {
       return_code: body?.returnCode || body?.return_code,
@@ -679,9 +831,25 @@ export class OrderService {
       throw new BadRequestException('支付回调参数缺失');
     }
 
-    const order = await this.orderRepository.findOne({ where: { order_no: orderNo } });
+    const order = await this.findOrderByWechatOutTradeNo(String(orderNo));
     if (!order) {
       throw new NotFoundException('订单不存在');
+    }
+
+    if (order.status === OrderStatus.PAID) {
+      return { errcode: 0 };
+    }
+
+    const rechargeOrderNo = String(order.pay_payload?.coin_purchase?.recharge_order_no || '');
+    if (rechargeOrderNo && String(orderNo) === rechargeOrderNo) {
+      const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
+      if (user) {
+        await this.tryFulfillVirtualPaymentOrder(order, user, undefined, {
+          allowMissingSessionKey: true,
+          rechargeQueryAttempts: 1,
+        });
+      }
+      return { errcode: 0 };
     }
 
     const expectedFee = Math.max(1, Math.round(Number(order.amount || 0) * 100));
@@ -892,47 +1060,12 @@ export class OrderService {
       throw new NotFoundException('用户不存在');
     }
 
-    const coinPurchase = { ...(order.pay_payload?.coin_purchase || {}) } as Record<string, any>;
-
-    if (Number(coinPurchase.recharge_coins || 0) > 0 && !coinPurchase.recharge_settled) {
-      const rechargeOrderNo = String(coinPurchase.recharge_order_no || '');
-      if (!rechargeOrderNo) {
-        throw new BadRequestException('充值订单信息缺失');
-      }
-      const settled = await this.coinService.waitForRechargeSettled(
-        user,
-        rechargeOrderNo,
-        Number(coinPurchase.coin_cost || 0),
-        clientIp,
-      );
-      if (!settled) {
-        throw new BadRequestException('充值尚未到账，请稍后再试');
-      }
-      coinPurchase.recharge_settled = true;
+    const result = await this.tryFulfillVirtualPaymentOrder(order, user, clientIp, {
+      rechargeQueryAttempts: Number(this.configService.get<string>('WECHAT_COIN_RECHARGE_QUERY_ATTEMPTS') || 5),
+    });
+    if (!result.fulfilled) {
+      throw new BadRequestException(result.reason || '充值尚未到账，请稍后再试');
     }
-
-    if (!coinPurchase.currency_paid) {
-      const currencyPayOrderId = String(coinPurchase.currency_pay_order_id || `${order.order_no}_COIN`);
-      await this.coinService.currencyPayForOrder({
-        user,
-        order,
-        coinAmount: Number(coinPurchase.coin_cost || this.coinService.yuanToCoinInt(Number(order.amount || 0))),
-        clientIp,
-        currencyPayOrderId,
-      });
-      coinPurchase.currency_paid = true;
-      coinPurchase.currency_pay_order_id = currencyPayOrderId;
-    }
-
-    order.pay_payload = {
-      ...(order.pay_payload || {}),
-      coin_purchase: coinPurchase,
-      virtual_payment_success: {
-        confirmed_at: new Date().toISOString(),
-      },
-    };
-    await this.orderRepository.save(order);
-    await this.handlePaymentSuccess(order.id);
 
     return {
       message: '支付确认成功',
@@ -941,13 +1074,197 @@ export class OrderService {
     };
   }
 
+  private generateRefundOrderId(orderNo: string, suffix: string) {
+    return `${orderNo}_${suffix}`.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32);
+  }
+
+  private async revokeCourseAccess(userId: number, courseId: number) {
+    if (!courseId) {
+      return;
+    }
+    await this.userCourseAuthRepository.delete({
+      user_id: userId,
+      course_id: courseId,
+      source: AuthSource.PURCHASE,
+    });
+  }
+
+  private async revokeOrderAccess(order: Order) {
+    if (order.order_type === 'package') {
+      await this.packageService.revokePackageOrder(order);
+      return;
+    }
+
+    const cartItems = Array.isArray(order.pay_payload?.cart_items) ? order.pay_payload.cart_items : [];
+    if (cartItems.length > 0) {
+      for (const item of cartItems) {
+        await this.revokeCourseAccess(order.user_id, Number(item?.course_id || 0));
+      }
+      return;
+    }
+
+    if (order.course_id) {
+      await this.revokeCourseAccess(order.user_id, order.course_id);
+    }
+  }
+
+  async refundOrder(orderId: number, adminId: number, dto?: RefundOrderDto) {
+    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+    if (order.pay_payload?.refund?.refunded_at) {
+      throw new BadRequestException('该订单已退款');
+    }
+    if (order.status !== OrderStatus.AFTER_SALE) {
+      throw new BadRequestException('仅售后中的订单可退款');
+    }
+
+    const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    const coinPurchase = { ...(order.pay_payload?.coin_purchase || {}) } as Record<string, any>;
+    const coinCost = Number(coinPurchase.coin_cost || this.coinService.yuanToCoinInt(Number(order.amount || 0)));
+    const refundRecords: Record<string, unknown> = {};
+
+    if (Number(order.amount || 0) > 0) {
+      if (coinPurchase.currency_paid) {
+        const currencyPayOrderId = String(coinPurchase.currency_pay_order_id || `${order.order_no}_COIN`);
+        const currencyRefundOrderId = this.generateRefundOrderId(order.order_no, 'COIN_RF');
+        refundRecords.currency_refund = await this.coinService.cancelCurrencyPayForOrder({
+          user,
+          payOrderId: currencyPayOrderId,
+          refundOrderId: currencyRefundOrderId,
+          coinAmount: coinCost,
+          allowMissingSessionKey: true,
+        });
+        refundRecords.currency_refund_order_id = currencyRefundOrderId;
+      }
+
+      const rechargeOrderNo = String(coinPurchase.recharge_order_no || '');
+      if (rechargeOrderNo && Number(coinPurchase.recharge_coins || 0) > 0) {
+        const refundFeeCents = Math.max(1, Math.round(Number(order.amount || 0) * 100));
+        const cashRefundOrderId = this.generateRefundOrderId(order.order_no, 'CASH_RF');
+        refundRecords.cash_refund = await this.coinService.refundCashRechargeOrder({
+          user,
+          rechargeOrderNo,
+          refundOrderId: cashRefundOrderId,
+          refundFeeCents,
+          remark: dto?.remark || '售后退款',
+        });
+        refundRecords.cash_refund_order_id = cashRefundOrderId;
+      }
+    }
+
+    await this.revokeOrderAccess(order);
+
+    const pendingAfterSale = await this.afterSaleRepository.findOne({
+      where: { order_id: order.id, status: AfterSaleStatus.PENDING },
+    });
+    if (pendingAfterSale) {
+      pendingAfterSale.status = AfterSaleStatus.PROCESSED;
+      pendingAfterSale.admin_id = adminId;
+      pendingAfterSale.admin_reply = dto?.remark || '已同意退款';
+      pendingAfterSale.process_time = new Date();
+      await this.afterSaleRepository.save(pendingAfterSale);
+    }
+
+    order.status = OrderStatus.CANCELLED;
+    order.pay_payload = {
+      ...(order.pay_payload || {}),
+      refund: {
+        refunded_at: new Date().toISOString(),
+        admin_id: adminId,
+        remark: dto?.remark || '',
+        ...refundRecords,
+      },
+    };
+    await this.orderRepository.save(order);
+
+    return {
+      message: '退款成功',
+      order_no: order.order_no,
+      status: order.status,
+    };
+  }
+
+  async syncOrderPaymentStatus(orderId: number) {
+    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+    if (order.status === OrderStatus.PAID) {
+      return {
+        message: '订单已是已支付状态',
+        order_no: order.order_no,
+        status: order.status,
+        synced: false,
+      };
+    }
+    if (order.status !== OrderStatus.PENDING) {
+      throw new BadRequestException('仅待支付订单可同步支付状态');
+    }
+
+    const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    const result = await this.tryFulfillVirtualPaymentOrder(order, user, undefined, {
+      allowMissingSessionKey: true,
+      rechargeQueryAttempts: 8,
+    });
+    if (!result.fulfilled) {
+      throw new BadRequestException(result.reason || '暂未查询到微信支付成功记录');
+    }
+
+    return {
+      message: '订单支付状态已同步',
+      order_no: order.order_no,
+      status: OrderStatus.PAID,
+      synced: true,
+    };
+  }
+
   /** 微信虚拟支付消息推送（xpay_coin_pay_notify 等） */
   async handleXpayNotify(body: Record<string, any>) {
     const event = body?.Event || body?.event;
     if (event === 'xpay_coin_pay_notify') {
       await this.handleXpayCoinPayNotify(body);
+      return { ErrCode: 0, ErrMsg: 'success' };
     }
+
+    await this.handleXpayRechargeNotify(body);
     return { ErrCode: 0, ErrMsg: 'success' };
+  }
+
+  private async handleXpayRechargeNotify(body: Record<string, any>) {
+    const outTradeNo = String(body?.OutTradeNo || body?.out_trade_no || '').trim();
+    if (!outTradeNo) {
+      return;
+    }
+
+    const order = await this.findOrderByWechatOutTradeNo(outTradeNo);
+    if (!order || order.status === OrderStatus.PAID) {
+      return;
+    }
+
+    const rechargeOrderNo = String(order.pay_payload?.coin_purchase?.recharge_order_no || '');
+    if (!rechargeOrderNo || rechargeOrderNo !== outTradeNo) {
+      return;
+    }
+
+    const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
+    if (!user) {
+      return;
+    }
+
+    await this.tryFulfillVirtualPaymentOrder(order, user, undefined, {
+      allowMissingSessionKey: true,
+      rechargeQueryAttempts: 3,
+    });
   }
 
   private async handleXpayCoinPayNotify(body: Record<string, any>) {
@@ -1098,6 +1415,29 @@ export class OrderService {
       throw new NotFoundException('用户不存在');
     }
 
+    const fulfilled = await this.tryFulfillVirtualPaymentOrder(order, user, clientIp);
+    if (fulfilled.fulfilled) {
+      return {
+        order_no: order.order_no,
+        amount: order.amount,
+        course_id: order.course_id,
+        status: OrderStatus.PAID,
+        payment_params: null,
+      };
+    }
+
+    const existingPaymentParams = order.pay_payload?.payment_params;
+    if (existingPaymentParams) {
+      return {
+        order_no: order.order_no,
+        amount: order.amount,
+        course_id: order.course_id,
+        order_type: order.order_type,
+        status: order.status,
+        payment_params: existingPaymentParams,
+      };
+    }
+
     if (order.order_type === 'package') {
       const plan = order.package_plan_id && order.package_section_id
         ? await this.packageService.getPlanForOrder(order.package_section_id, order.package_plan_id)
@@ -1232,13 +1572,16 @@ export class OrderService {
       const userId = Number(keyword);
       if (!Number.isNaN(userId) && userId > 0) {
         query.andWhere(
-          '(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR o.user_id = :userId)',
+          '(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR o.user_id = :userId OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, \'$.coin_purchase.recharge_order_no\')) LIKE :keyword)',
           { keyword: `%${keyword}%`, userId },
         );
       } else {
-        query.andWhere('(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword)', {
-          keyword: `%${keyword}%`,
-        });
+        query.andWhere(
+          `(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.coin_purchase.recharge_order_no')) LIKE :keyword)`,
+          {
+            keyword: `%${keyword}%`,
+          },
+        );
       }
     }
 
@@ -1288,6 +1631,9 @@ export class OrderService {
         packagePlanId: row.packagePlanId ? Number(row.packagePlanId) : null,
         couponId: row.couponId ? Number(row.couponId) : null,
         payProvider: row.payProvider || '',
+        wechatRechargeOrderNo: payPayload?.coin_purchase?.recharge_order_no || '',
+        refunded: Boolean(payPayload?.refund?.refunded_at),
+        refundRemark: payPayload?.refund?.remark || '',
         productName,
         cartItems,
         isCart: cartItems.length > 1,

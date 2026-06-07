@@ -12,6 +12,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { CreateCartOrderDto } from './dto/create-cart-order.dto';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
 import { GetAdminOrderListDto } from './dto/get-admin-order-list.dto';
+import { RefundOrderDto } from './dto/refund-order.dto';
 
 function resolveClientIp(req: Request) {
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0]?.trim();
@@ -104,6 +105,26 @@ export class AdminOrderController {
   @ApiOperation({ summary: '获取订单列表' })
   async getOrderList(@Query() dto: GetAdminOrderListDto) {
     const result = await this.orderService.getAdminOrderList(dto);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post(':id/sync-payment')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '同步微信支付状态（补单）' })
+  async syncPaymentStatus(@Param('id', ParseIntPipe) id: number) {
+    const result = await this.orderService.syncOrderPaymentStatus(id);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post(':id/refund')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '售后订单退款' })
+  async refundOrder(
+    @CurrentUser() user: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RefundOrderDto,
+  ) {
+    const result = await this.orderService.refundOrder(id, user.userId, dto);
     return CommonResponseDto.success(result);
   }
 }

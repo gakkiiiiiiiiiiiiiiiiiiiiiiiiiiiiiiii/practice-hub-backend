@@ -175,10 +175,12 @@ export class CoinService {
     coinAmount: number;
     clientIp?: string;
     currencyPayOrderId?: string;
+    /** 服务端对账场景可跳过用户 session 签名 */
+    allowMissingSessionKey?: boolean;
   }) {
     const { user, order, clientIp } = params;
     const coinAmount = Math.max(1, Math.floor(Number(params.coinAmount || 0)));
-    if (!user.session_key) {
+    if (!user.session_key && !params.allowMissingSessionKey) {
       throw new BadRequestException('登录态已过期，请重新登录后再试');
     }
 
@@ -212,7 +214,7 @@ export class CoinService {
         payitem,
         remark: order.order_type === 'package' ? '购买套餐' : '购买课程',
       },
-      { sessionKey: user.session_key },
+      user.session_key ? { sessionKey: user.session_key } : undefined,
     );
 
     const errcode = Number(result.errcode || 0);
@@ -228,5 +230,88 @@ export class CoinService {
       balance,
       result,
     };
+  }
+
+  async cancelCurrencyPayForOrder(params: {
+    user: AppUser;
+    payOrderId: string;
+    refundOrderId: string;
+    coinAmount: number;
+    clientIp?: string;
+    allowMissingSessionKey?: boolean;
+  }) {
+    const { user, clientIp } = params;
+    const coinAmount = Math.max(1, Math.floor(Number(params.coinAmount || 0)));
+    if (!user.session_key && !params.allowMissingSessionKey) {
+      throw new BadRequestException('用户登录态已过期，请让用户重新登录小程序后再退款');
+    }
+
+    const config = this.xpayService.getVirtualPayConfig();
+    const userIp = this.getDefaultUserIp(clientIp);
+    const result = await this.xpayService.callXpayApi(
+      '/xpay/cancel_currency_pay',
+      {
+        openid: user.openid,
+        env: config.env,
+        user_ip: userIp,
+        pay_order_id: params.payOrderId,
+        order_id: params.refundOrderId,
+        amount: coinAmount,
+      },
+      user.session_key ? { sessionKey: user.session_key } : undefined,
+    );
+
+    const errcode = Number(result.errcode || 0);
+    if (errcode && !this.xpayService.isXpayDuplicateSuccess(errcode)) {
+      throw new BadRequestException(result.errmsg || `微信代币退款失败(${errcode})`);
+    }
+
+    const balance = Math.max(0, Math.floor(Number(result.balance || 0)));
+    await this.cacheWechatBalance(user.id, balance);
+
+    return result;
+  }
+
+  async refundCashRechargeOrder(params: {
+    user: AppUser;
+    rechargeOrderNo: string;
+    refundOrderId: string;
+    refundFeeCents: number;
+    clientIp?: string;
+    remark?: string;
+  }) {
+    const refundFeeCents = Math.max(1, Math.floor(Number(params.refundFeeCents || 0)));
+    const config = this.xpayService.getVirtualPayConfig();
+    const queryResult = await this.xpayService.callXpayApi('/xpay/query_order', {
+      openid: params.user.openid,
+      order_id: params.rechargeOrderNo,
+      env: config.env,
+    });
+    const leftFee = Math.max(
+      refundFeeCents,
+      Math.floor(Number(queryResult.order?.left_fee ?? queryResult.order?.leftFee ?? refundFeeCents)),
+    );
+
+    const result = await this.xpayService.callXpayApi('/xpay/refund_order', {
+      openid: params.user.openid,
+      order_id: params.rechargeOrderNo,
+      refund_order_id: params.refundOrderId,
+      left_fee: leftFee,
+      refund_fee: Math.min(refundFeeCents, leftFee),
+      biz_meta: JSON.stringify({
+        order_no: params.rechargeOrderNo,
+        remark: params.remark || '售后退款',
+      }),
+      refund_reason: '1',
+      req_from: '1',
+      env: config.env,
+    });
+
+    const errcode = Number(result.errcode || 0);
+    if (errcode && !this.xpayService.isXpayDuplicateSuccess(errcode)) {
+      throw new BadRequestException(result.errmsg || `微信现金退款失败(${errcode})`);
+    }
+
+    return result;
   }
 }

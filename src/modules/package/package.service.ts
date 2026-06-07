@@ -138,6 +138,17 @@ export class PackageService {
 		await this.appUserRepository.update(userId, { package_expire_time: maxExpire });
 	}
 
+	async revokePackageOrder(order: Order) {
+		const subscription = await this.userPackageSubscriptionRepository.findOne({
+			where: { user_id: order.user_id, order_id: order.id },
+		});
+		if (!subscription) {
+			return;
+		}
+		await this.userPackageSubscriptionRepository.delete({ id: subscription.id });
+		await this.syncUserPackageExpireTime(order.user_id);
+	}
+
 	async fulfillPackageOrder(order: Order) {
 		if (!order.package_section_id || !order.package_plan_id) {
 			throw new BadRequestException('套餐订单信息不完整');
