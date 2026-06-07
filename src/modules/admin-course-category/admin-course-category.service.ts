@@ -69,51 +69,83 @@ export class AdminCourseCategoryService {
 		return this.courseCategoryRepository.save(category);
 	}
 
+	private async getCategoryNameById(parentId?: number | null) {
+		if (!parentId) {
+			return null;
+		}
+		const parent = await this.courseCategoryRepository.findOne({ where: { id: parentId } });
+		return parent?.name ?? null;
+	}
+
 	async updateCategory(id: number, dto: UpdateCourseCategoryDto) {
 		const category = await this.courseCategoryRepository.findOne({ where: { id } });
 		if (!category) {
 			throw new NotFoundException('分类不存在');
 		}
 
-		// 如果更新了父级分类，验证父级分类必须是一级分类（不能是二级分类）
-		const newParentId = dto.parent_id ?? category.parent_id ?? null;
-		if (newParentId !== null && newParentId !== undefined && newParentId !== category.parent_id) {
+		const oldName = category.name;
+		const oldParentId = category.parent_id ?? null;
+		const oldParentName = await this.getCategoryNameById(oldParentId);
+		const isSecondary = oldParentId !== null && oldParentId !== undefined;
+
+		let newParentId = oldParentId;
+		if (dto.parent_id !== undefined) {
+			if (!isSecondary && dto.parent_id !== null && dto.parent_id !== undefined) {
+				throw new BadRequestException('一级分类不能设置上级分类');
+			}
+			if (isSecondary && (dto.parent_id === null || dto.parent_id === undefined)) {
+				throw new BadRequestException('二级分类不能改为一级分类');
+			}
+			newParentId = dto.parent_id ?? null;
+		}
+
+		if (newParentId === id) {
+			throw new BadRequestException('不能将自身设为上级分类');
+		}
+
+		if (newParentId !== null && newParentId !== undefined && newParentId !== oldParentId) {
 			const parentCategory = await this.courseCategoryRepository.findOne({
 				where: { id: newParentId },
 			});
 			if (!parentCategory) {
 				throw new BadRequestException('父级分类不存在');
 			}
-			// 如果父级分类本身也有父级（即它是二级分类），则不允许设置为父级
 			if (parentCategory.parent_id !== null && parentCategory.parent_id !== undefined) {
 				throw new BadRequestException('二级分类不允许作为父级分类');
 			}
 		}
 
-		const oldName = category.name;
 		const nextName = dto.name ?? category.name;
 
 		Object.assign(category, {
 			...dto,
 			parent_id: newParentId,
+			name: nextName,
 		});
 		await this.courseCategoryRepository.save(category);
 
-		if (oldName !== nextName) {
-			if (category.parent_id) {
-				await this.courseRepository.update(
-					{ sub_category: oldName },
-					{ sub_category: nextName },
+		let syncedCourseCount = 0;
+		if (isSecondary && newParentId) {
+			const newParentName = await this.getCategoryNameById(newParentId);
+			if (oldParentName && newParentName && (oldParentName !== newParentName || oldName !== nextName)) {
+				const updateResult = await this.courseRepository.update(
+					{ category: oldParentName, sub_category: oldName },
+					{ category: newParentName, sub_category: nextName },
 				);
-			} else {
-				await this.courseRepository.update(
-					{ category: oldName },
-					{ category: nextName },
-				);
+				syncedCourseCount = updateResult.affected || 0;
 			}
+		} else if (!isSecondary && oldName !== nextName) {
+			const updateResult = await this.courseRepository.update(
+				{ category: oldName },
+				{ category: nextName },
+			);
+			syncedCourseCount = updateResult.affected || 0;
 		}
 
-		return category;
+		return {
+			...category,
+			syncedCourseCount,
+		};
 	}
 
 	async deleteCategory(id: number) {
