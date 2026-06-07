@@ -1556,6 +1556,7 @@ export class OrderService {
         'user.nickname AS userNickname',
         'user.phone AS userPhone',
         'user.avatar AS userAvatar',
+        'user.openid AS userOpenid',
       ])
       .orderBy('o.create_time', 'DESC');
 
@@ -1572,12 +1573,12 @@ export class OrderService {
       const userId = Number(keyword);
       if (!Number.isNaN(userId) && userId > 0) {
         query.andWhere(
-          '(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR o.user_id = :userId OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, \'$.coin_purchase.recharge_order_no\')) LIKE :keyword)',
+          '(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR user.openid LIKE :keyword OR o.user_id = :userId OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, \'$.coin_purchase.recharge_order_no\')) LIKE :keyword)',
           { keyword: `%${keyword}%`, userId },
         );
       } else {
         query.andWhere(
-          `(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.coin_purchase.recharge_order_no')) LIKE :keyword)`,
+          `(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR user.openid LIKE :keyword OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.coin_purchase.recharge_order_no')) LIKE :keyword)`,
           {
             keyword: `%${keyword}%`,
           },
@@ -1587,6 +1588,20 @@ export class OrderService {
 
     const total = await query.clone().getCount();
     const rows = await query.offset(skip).limit(pageSize).getRawMany();
+
+    const orderIds = rows.map((row) => Number(row.id)).filter((id) => id > 0);
+    const afterSaleMap = new Map<number, OrderAfterSale>();
+    if (orderIds.length > 0) {
+      const afterSales = await this.afterSaleRepository.find({
+        where: { order_id: In(orderIds) },
+        order: { create_time: 'DESC' },
+      });
+      for (const afterSale of afterSales) {
+        if (!afterSaleMap.has(afterSale.order_id)) {
+          afterSaleMap.set(afterSale.order_id, afterSale);
+        }
+      }
+    }
 
     const list = rows.map((row) => {
       let payPayload: Record<string, any> | null = null;
@@ -1609,12 +1624,16 @@ export class OrderService {
             ? row.packageSectionName || '套餐'
             : row.courseName || '课程';
 
+      const afterSale = afterSaleMap.get(Number(row.id));
+
       return {
         id: Number(row.id),
         orderNo: row.orderNo,
         userId: Number(row.userId),
+        openid: row.userOpenid || '',
         user: {
           id: Number(row.userId),
+          openid: row.userOpenid || '',
           nickname: row.userNickname || '未设置',
           phone: row.userPhone || '',
           avatar: row.userAvatar || '',
@@ -1634,6 +1653,17 @@ export class OrderService {
         wechatRechargeOrderNo: payPayload?.coin_purchase?.recharge_order_no || '',
         refunded: Boolean(payPayload?.refund?.refunded_at),
         refundRemark: payPayload?.refund?.remark || '',
+        afterSale: afterSale
+          ? {
+              id: afterSale.id,
+              reason: afterSale.reason || '',
+              description: afterSale.description || '',
+              status: afterSale.status,
+              adminReply: afterSale.admin_reply || '',
+              createTime: afterSale.create_time,
+              processTime: afterSale.process_time,
+            }
+          : null,
         productName,
         cartItems,
         isCart: cartItems.length > 1,
