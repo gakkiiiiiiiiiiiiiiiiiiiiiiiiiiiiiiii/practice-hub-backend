@@ -108,6 +108,14 @@ export class AdminOrderController {
     return CommonResponseDto.success(result);
   }
 
+  @Get(':id')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取订单详情' })
+  async getOrderDetail(@Param('id', ParseIntPipe) id: number) {
+    const result = await this.orderService.getAdminOrderDetail(id);
+    return CommonResponseDto.success(result);
+  }
+
   @Post(':id/sync-payment')
   @Roles(AdminRole.SUPER_ADMIN)
   @ApiOperation({ summary: '同步微信支付状态（补单）' })

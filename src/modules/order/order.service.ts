@@ -1352,6 +1352,9 @@ export class OrderService {
     }
 
     const rows = await query.getRawMany();
+    const orderIds = rows.map((row) => Number(row.id)).filter((id) => id > 0);
+    const afterSaleMap = await this.getLatestAfterSaleMap(orderIds);
+
     return rows.map((row) => {
       let payPayload: Record<string, any> | null = null;
       if (row.payPayload) {
@@ -1366,24 +1369,25 @@ export class OrderService {
             : row.courseName || '课程';
 
       return {
-      id: Number(row.id),
-      orderNo: row.orderNo,
-      amount: Number(row.amount || 0),
-      discountAmount: Number(row.discountAmount || 0),
-      status: row.status,
-      orderType: row.orderType || 'course',
-      courseId: row.courseId ? Number(row.courseId) : null,
-      packageSectionId: row.packageSectionId ? Number(row.packageSectionId) : null,
-      packagePlanId: row.packagePlanId ? Number(row.packagePlanId) : null,
-      productName,
-      coverImg: row.orderType === 'package' ? row.packageCoverImg || '' : row.coverImg || '',
-      contentType: row.contentType || 'normal',
-      fileType: row.fileType || '',
-      createTime: row.createTime,
-      paidTime: row.paidTime,
-      isCart: cartCount > 1,
-      cartCount,
-    };
+        id: Number(row.id),
+        orderNo: row.orderNo,
+        amount: Number(row.amount || 0),
+        discountAmount: Number(row.discountAmount || 0),
+        status: row.status,
+        orderType: row.orderType || 'course',
+        courseId: row.courseId ? Number(row.courseId) : null,
+        packageSectionId: row.packageSectionId ? Number(row.packageSectionId) : null,
+        packagePlanId: row.packagePlanId ? Number(row.packagePlanId) : null,
+        productName,
+        coverImg: row.orderType === 'package' ? row.packageCoverImg || '' : row.coverImg || '',
+        contentType: row.contentType || 'normal',
+        fileType: row.fileType || '',
+        createTime: row.createTime,
+        paidTime: row.paidTime,
+        isCart: cartCount > 1,
+        cartCount,
+        afterSale: this.formatAfterSaleInfo(afterSaleMap.get(Number(row.id))),
+      };
     });
   }
 
@@ -1524,6 +1528,136 @@ export class OrderService {
     };
   }
 
+  private formatAfterSaleInfo(afterSale?: OrderAfterSale | null) {
+    if (!afterSale) {
+      return null;
+    }
+    return {
+      id: afterSale.id,
+      reason: afterSale.reason || '',
+      description: afterSale.description || '',
+      status: afterSale.status,
+      adminReply: afterSale.admin_reply || '',
+      createTime: afterSale.create_time,
+      processTime: afterSale.process_time,
+    };
+  }
+
+  private async getLatestAfterSaleMap(orderIds: number[]) {
+    const afterSaleMap = new Map<number, OrderAfterSale>();
+    if (!orderIds.length) {
+      return afterSaleMap;
+    }
+    const afterSales = await this.afterSaleRepository.find({
+      where: { order_id: In(orderIds) },
+      order: { create_time: 'DESC' },
+    });
+    for (const afterSale of afterSales) {
+      if (!afterSaleMap.has(afterSale.order_id)) {
+        afterSaleMap.set(afterSale.order_id, afterSale);
+      }
+    }
+    return afterSaleMap;
+  }
+
+  async getAdminOrderDetail(orderId: number) {
+    const row = await this.orderRepository
+      .createQueryBuilder('o')
+      .leftJoin(Course, 'course', 'course.id = o.course_id')
+      .leftJoin('package_section', 'packageSection', 'packageSection.id = o.package_section_id')
+      .leftJoin(AppUser, 'user', 'user.id = o.user_id')
+      .where('o.id = :orderId', { orderId })
+      .select([
+        'o.id AS id',
+        'o.order_no AS orderNo',
+        'o.user_id AS userId',
+        'o.amount AS amount',
+        'o.original_amount AS originalAmount',
+        'o.discount_amount AS discountAmount',
+        'o.status AS status',
+        'o.order_type AS orderType',
+        'o.course_id AS courseId',
+        'o.package_section_id AS packageSectionId',
+        'o.package_plan_id AS packagePlanId',
+        'o.coupon_id AS couponId',
+        'o.pay_provider AS payProvider',
+        'o.pay_payload AS payPayload',
+        'o.create_time AS createTime',
+        'o.paid_time AS paidTime',
+        'course.name AS courseName',
+        'packageSection.name AS packageSectionName',
+        'user.nickname AS userNickname',
+        'user.phone AS userPhone',
+        'user.avatar AS userAvatar',
+        'user.openid AS userOpenid',
+      ])
+      .getRawOne();
+
+    if (!row) {
+      throw new NotFoundException('订单不存在');
+    }
+
+    const afterSaleMap = await this.getLatestAfterSaleMap([orderId]);
+    return this.mapAdminOrderRow(row, afterSaleMap.get(orderId));
+  }
+
+  private mapAdminOrderRow(row: Record<string, any>, afterSale?: OrderAfterSale) {
+    let payPayload: Record<string, any> | null = null;
+    if (row.payPayload) {
+      payPayload = typeof row.payPayload === 'string' ? JSON.parse(row.payPayload) : row.payPayload;
+    }
+
+    const cartItems = Array.isArray(payPayload?.cart_items)
+      ? payPayload.cart_items.map((item: Record<string, any>) => ({
+          courseId: Number(item.course_id || item.courseId || 0),
+          name: item.name || '课程',
+          price: Number(item.price || 0),
+        }))
+      : [];
+
+    const productName =
+      cartItems.length > 1
+        ? `购物车(${cartItems.length}门课程)`
+        : row.orderType === 'package'
+          ? row.packageSectionName || '套餐'
+          : row.courseName || '课程';
+
+    return {
+      id: Number(row.id),
+      orderNo: row.orderNo,
+      userId: Number(row.userId),
+      openid: row.userOpenid || '',
+      user: {
+        id: Number(row.userId),
+        openid: row.userOpenid || '',
+        nickname: row.userNickname || '未设置',
+        phone: row.userPhone || '',
+        avatar: row.userAvatar || '',
+      },
+      amount: Number(row.amount || 0),
+      originalAmount: row.originalAmount != null ? Number(row.originalAmount) : null,
+      discountAmount: Number(row.discountAmount || 0),
+      status: row.status,
+      orderType: row.orderType || 'course',
+      courseId: row.courseId ? Number(row.courseId) : null,
+      courseName: row.courseName || '',
+      packageSectionId: row.packageSectionId ? Number(row.packageSectionId) : null,
+      packageSectionName: row.packageSectionName || '',
+      packagePlanId: row.packagePlanId ? Number(row.packagePlanId) : null,
+      couponId: row.couponId ? Number(row.couponId) : null,
+      payProvider: row.payProvider || '',
+      wechatRechargeOrderNo: payPayload?.coin_purchase?.recharge_order_no || '',
+      refunded: Boolean(payPayload?.refund?.refunded_at),
+      refundRemark: payPayload?.refund?.remark || '',
+      afterSale: this.formatAfterSaleInfo(afterSale),
+      productName,
+      cartItems,
+      isCart: cartItems.length > 1,
+      createTime: row.createTime,
+      paidTime: row.paidTime,
+    };
+  }
+
   async getAdminOrderList(dto: GetAdminOrderListDto) {
     const page = Math.max(1, Number(dto.page) || 1);
     const pageSize = Math.min(50, Math.max(1, Number(dto.pageSize) || 10));
@@ -1590,87 +1724,9 @@ export class OrderService {
     const rows = await query.offset(skip).limit(pageSize).getRawMany();
 
     const orderIds = rows.map((row) => Number(row.id)).filter((id) => id > 0);
-    const afterSaleMap = new Map<number, OrderAfterSale>();
-    if (orderIds.length > 0) {
-      const afterSales = await this.afterSaleRepository.find({
-        where: { order_id: In(orderIds) },
-        order: { create_time: 'DESC' },
-      });
-      for (const afterSale of afterSales) {
-        if (!afterSaleMap.has(afterSale.order_id)) {
-          afterSaleMap.set(afterSale.order_id, afterSale);
-        }
-      }
-    }
+    const afterSaleMap = await this.getLatestAfterSaleMap(orderIds);
 
-    const list = rows.map((row) => {
-      let payPayload: Record<string, any> | null = null;
-      if (row.payPayload) {
-        payPayload = typeof row.payPayload === 'string' ? JSON.parse(row.payPayload) : row.payPayload;
-      }
-
-      const cartItems = Array.isArray(payPayload?.cart_items)
-        ? payPayload.cart_items.map((item: Record<string, any>) => ({
-            courseId: Number(item.course_id || item.courseId || 0),
-            name: item.name || '课程',
-            price: Number(item.price || 0),
-          }))
-        : [];
-
-      const productName =
-        cartItems.length > 1
-          ? `购物车(${cartItems.length}门课程)`
-          : row.orderType === 'package'
-            ? row.packageSectionName || '套餐'
-            : row.courseName || '课程';
-
-      const afterSale = afterSaleMap.get(Number(row.id));
-
-      return {
-        id: Number(row.id),
-        orderNo: row.orderNo,
-        userId: Number(row.userId),
-        openid: row.userOpenid || '',
-        user: {
-          id: Number(row.userId),
-          openid: row.userOpenid || '',
-          nickname: row.userNickname || '未设置',
-          phone: row.userPhone || '',
-          avatar: row.userAvatar || '',
-        },
-        amount: Number(row.amount || 0),
-        originalAmount: row.originalAmount != null ? Number(row.originalAmount) : null,
-        discountAmount: Number(row.discountAmount || 0),
-        status: row.status,
-        orderType: row.orderType || 'course',
-        courseId: row.courseId ? Number(row.courseId) : null,
-        courseName: row.courseName || '',
-        packageSectionId: row.packageSectionId ? Number(row.packageSectionId) : null,
-        packageSectionName: row.packageSectionName || '',
-        packagePlanId: row.packagePlanId ? Number(row.packagePlanId) : null,
-        couponId: row.couponId ? Number(row.couponId) : null,
-        payProvider: row.payProvider || '',
-        wechatRechargeOrderNo: payPayload?.coin_purchase?.recharge_order_no || '',
-        refunded: Boolean(payPayload?.refund?.refunded_at),
-        refundRemark: payPayload?.refund?.remark || '',
-        afterSale: afterSale
-          ? {
-              id: afterSale.id,
-              reason: afterSale.reason || '',
-              description: afterSale.description || '',
-              status: afterSale.status,
-              adminReply: afterSale.admin_reply || '',
-              createTime: afterSale.create_time,
-              processTime: afterSale.process_time,
-            }
-          : null,
-        productName,
-        cartItems,
-        isCart: cartItems.length > 1,
-        createTime: row.createTime,
-        paidTime: row.paidTime,
-      };
-    });
+    const list = rows.map((row) => this.mapAdminOrderRow(row, afterSaleMap.get(Number(row.id))));
 
     return {
       list,
