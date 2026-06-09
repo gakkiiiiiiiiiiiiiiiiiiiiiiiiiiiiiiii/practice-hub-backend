@@ -1536,6 +1536,7 @@ export class OrderService {
       id: afterSale.id,
       reason: afterSale.reason || '',
       description: afterSale.description || '',
+      wechatContact: afterSale.wechat_contact || '',
       status: afterSale.status,
       adminReply: afterSale.admin_reply || '',
       createTime: afterSale.create_time,

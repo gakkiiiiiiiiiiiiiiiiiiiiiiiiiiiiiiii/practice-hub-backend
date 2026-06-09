@@ -46,11 +46,17 @@ export class AfterSaleService {
     }
 
     // 创建售后申请
+    const wechatContact = String(dto.wechat_contact || '').trim();
+    if (!wechatContact) {
+      throw new BadRequestException('微信联系方式不能为空');
+    }
+
     const afterSale = this.afterSaleRepository.create({
       order_id: dto.order_id,
       user_id: userId,
-      reason: dto.reason,
-      description: dto.description || '',
+      reason: dto.reason.trim(),
+      description: dto.description?.trim() || '',
+      wechat_contact: wechatContact,
       status: AfterSaleStatus.PENDING,
     });
 
@@ -88,6 +94,7 @@ export class AfterSaleService {
       order_no: orderMap.get(as.order_id)?.order_no || '',
       reason: as.reason,
       description: as.description,
+      wechat_contact: as.wechat_contact || '',
       status: as.status,
       admin_reply: as.admin_reply,
       create_time: as.create_time,
@@ -129,6 +136,7 @@ export class AfterSaleService {
         user_id: as.user_id,
         reason: as.reason,
         description: as.description,
+        wechat_contact: as.wechat_contact || '',
         status: as.status,
         admin_id: as.admin_id,
         admin_reply: as.admin_reply,
@@ -163,8 +171,13 @@ export class AfterSaleService {
     afterSale.process_time = new Date();
     await this.afterSaleRepository.save(afterSale);
 
-    // 如果已处理，可以在这里添加退款逻辑
-    // TODO: 对接退款接口
+    const order = await this.orderRepository.findOne({ where: { id: afterSale.order_id } });
+    if (order) {
+      if (dto.status === AfterSaleStatus.REJECTED) {
+        order.status = OrderStatus.PAID;
+        await this.orderRepository.save(order);
+      }
+    }
 
     return afterSale;
   }

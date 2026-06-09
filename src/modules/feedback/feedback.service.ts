@@ -21,6 +21,7 @@ export class FeedbackService {
 			user_id: userId,
 			type: dto.type,
 			description: dto.description,
+			wechat_contact: String(dto.wechat_contact || '').trim(),
 			images: dto.images || [],
 			status: FeedbackStatus.PENDING,
 		});
@@ -37,6 +38,7 @@ export class FeedbackService {
 			user_id: 0, // 0 表示管理员提交的反馈
 			type: dto.type,
 			description: dto.description,
+			wechat_contact: String(dto.wechat_contact || '').trim(),
 			images: dto.images || [],
 			status: FeedbackStatus.PENDING,
 			handler_id: adminId, // 记录提交反馈的管理员ID

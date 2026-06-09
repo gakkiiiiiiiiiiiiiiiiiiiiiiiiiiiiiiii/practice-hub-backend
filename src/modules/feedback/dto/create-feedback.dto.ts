@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsString, IsArray, IsOptional, MinLength, MaxLength } from 'class-validator';
+import { IsEnum, IsString, IsArray, IsOptional, MinLength, MaxLength, ValidateIf } from 'class-validator';
 import { FeedbackType } from '../../../database/entities/feedback.entity';
 
 export class CreateFeedbackDto {
@@ -21,6 +21,18 @@ export class CreateFeedbackDto {
 	@MinLength(5, { message: '问题描述至少5个字符' })
 	@MaxLength(2000, { message: '问题描述最多2000个字符' })
 	description: string;
+
+	@ApiProperty({
+		description: '微信联系方式（微信号或手机号，选填）',
+		required: false,
+		example: 'wxid_abc123',
+	})
+	@IsOptional()
+	@ValidateIf((o) => o.wechat_contact != null && String(o.wechat_contact).trim() !== '')
+	@IsString({ message: '微信联系方式必须是字符串' })
+	@MinLength(2, { message: '微信联系方式至少2个字符' })
+	@MaxLength(64, { message: '微信联系方式最多64个字符' })
+	wechat_contact?: string;
 
 	@ApiProperty({
 		description: '图片URL数组',

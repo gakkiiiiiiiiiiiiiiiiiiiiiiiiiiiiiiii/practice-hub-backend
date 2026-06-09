@@ -44,6 +44,9 @@ export class Feedback {
 	@Column({ type: 'text', comment: '问题描述' })
 	description: string;
 
+	@Column({ type: 'varchar', length: 64, default: '', comment: '微信联系方式（微信号/手机号，选填）' })
+	wechat_contact: string;
+
 	@Column({ type: 'json', nullable: true, comment: '图片URL数组' })
 	images: string[];
 

@@ -29,6 +29,9 @@ export class OrderAfterSale {
   @Column({ type: 'text', nullable: true })
   description: string;
 
+  @Column({ length: 64, default: '' })
+  wechat_contact: string;
+
   @Column({
     type: 'tinyint',
     default: AfterSaleStatus.PENDING,
