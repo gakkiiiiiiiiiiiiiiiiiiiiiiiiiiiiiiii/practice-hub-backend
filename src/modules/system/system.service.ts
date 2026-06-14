@@ -633,6 +633,76 @@ export class SystemService {
     };
   }
 
+  private getDefaultHomePopupConfig() {
+    return {
+      enabled: false,
+      title: '',
+      content: '',
+      image: '',
+      showMode: 'once' as 'once' | 'always',
+      version: 0,
+    };
+  }
+
+  private stripRichText(html: string) {
+    return String(html || '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/gi, ' ')
+      .trim();
+  }
+
+  private normalizeHomePopupConfig(input: Record<string, any>) {
+    const showMode = input?.showMode === 'always' ? 'always' : 'once';
+    return {
+      enabled: Boolean(input?.enabled),
+      title: String(input?.title || '').trim(),
+      content: String(input?.content || '').trim(),
+      image: String(input?.image || '').trim(),
+      showMode,
+      version: Number(input?.version) || 0,
+    };
+  }
+
+  async getHomePopupConfig() {
+    const value = await this.getJsonConfig(
+      'home_popup_config',
+      this.getDefaultHomePopupConfig(),
+    );
+    return this.normalizeHomePopupConfig(value as Record<string, any>);
+  }
+
+  async setHomePopupConfig(input: Record<string, any>) {
+    const current = await this.getHomePopupConfig();
+    const next = this.normalizeHomePopupConfig(input);
+    const contentChanged =
+      next.enabled !== current.enabled ||
+      next.title !== current.title ||
+      next.content !== current.content ||
+      next.image !== current.image ||
+      next.showMode !== current.showMode;
+
+    if (
+      next.enabled &&
+      !this.stripRichText(next.content) &&
+      !next.title &&
+      !next.image
+    ) {
+      throw new Error('启用弹窗时请填写标题、正文或图片');
+    }
+
+    if (contentChanged) {
+      next.version = Date.now();
+    } else {
+      next.version = current.version;
+    }
+
+    await this.setJsonConfig('home_popup_config', '小程序首页弹窗配置', next);
+    return {
+      success: true,
+      config: next,
+    };
+  }
+
   /** 小程序版本策略：发布新版本时在环境变量或 system_config(miniapp_version) 中提高 minVersion */
   async getMiniappVersionPolicy() {
     const fromDb = await this.getJsonConfig<{

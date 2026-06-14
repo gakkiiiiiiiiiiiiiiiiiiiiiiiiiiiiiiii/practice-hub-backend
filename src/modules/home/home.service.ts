@@ -20,10 +20,12 @@ export class HomeService {
     
     // 从数据库获取启用的轮播图列表
     const banners = await this.bannerService.getActiveBanners();
+    const popup = await this.systemService.getHomePopupConfig();
 
     return {
       countdown_date: countdownDate,
       banners,
+      popup,
     };
   }
 

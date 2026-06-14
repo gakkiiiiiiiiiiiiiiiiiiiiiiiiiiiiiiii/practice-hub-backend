@@ -142,6 +142,31 @@ export class SystemController {
     return CommonResponseDto.success(result);
   }
 
+  @Get('settings/home-popup')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+  @ApiOperation({ summary: '获取小程序首页弹窗配置' })
+  async getHomePopupConfig() {
+    const result = await this.systemService.getHomePopupConfig();
+    return CommonResponseDto.success(result);
+  }
+
+  @Put('settings/home-popup')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+  @ApiOperation({ summary: '设置小程序首页弹窗配置' })
+  async setHomePopupConfig(
+    @Body()
+    body: {
+      enabled?: boolean;
+      title?: string;
+      content?: string;
+      image?: string;
+      showMode?: 'once' | 'always';
+    },
+  ) {
+    const result = await this.systemService.setHomePopupConfig(body || {});
+    return CommonResponseDto.success(result);
+  }
+
   @Get('settings/referral-coupon')
   @Roles(AdminRole.SUPER_ADMIN)
   @ApiOperation({ summary: '获取拉新优惠券配置' })
