@@ -160,6 +160,7 @@ export class SystemController {
       title?: string;
       content?: string;
       image?: string;
+      buttonText?: string;
       showMode?: 'once' | 'always';
     },
   ) {

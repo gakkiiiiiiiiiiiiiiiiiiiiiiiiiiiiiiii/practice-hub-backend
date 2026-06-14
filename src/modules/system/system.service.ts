@@ -639,6 +639,7 @@ export class SystemService {
       title: '',
       content: '',
       image: '',
+      buttonText: '我知道了',
       showMode: 'once' as 'once' | 'always',
       version: 0,
     };
@@ -658,6 +659,7 @@ export class SystemService {
       title: String(input?.title || '').trim(),
       content: String(input?.content || '').trim(),
       image: String(input?.image || '').trim(),
+      buttonText: String(input?.buttonText || '').trim() || '我知道了',
       showMode,
       version: Number(input?.version) || 0,
     };
@@ -679,6 +681,7 @@ export class SystemService {
       next.title !== current.title ||
       next.content !== current.content ||
       next.image !== current.image ||
+      next.buttonText !== current.buttonText ||
       next.showMode !== current.showMode;
 
     if (
