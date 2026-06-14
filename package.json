@@ -29,6 +29,7 @@
 		"import:from-remote": "ts-node -r tsconfig-paths/register scripts/import-from-remote.ts",
 		"migrate": "node scripts/migrate.js",
 		"migrate:remote": "node scripts/migrate.js --remote",
+		"wxcloud:login": "node scripts/wxcloud-login.js",
 		"check:remote": "node scripts/check-remote-db.js",
 		"check:wechat": "node scripts/check-wechat-config.js",
 		"test:wechat": "node scripts/test-wechat-login.js",
