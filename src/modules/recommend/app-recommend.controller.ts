@@ -36,8 +36,14 @@ export class AppRecommendController {
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: '获取首页推荐版块列表（包含课程详情）' })
-  async getCategories(@CurrentUser() user?: any) {
+  async getCategories(
+    @CurrentUser() user?: any,
+    @Query('mode') mode?: string,
+    @Query('category') categoryName?: string,
+    @Query('subCategory') subCategoryName?: string,
+  ) {
     try {
+      const professionalFilter = this.buildProfessionalFilter(mode, categoryName, subCategoryName);
       // 查询所有启用的推荐版块
       const columnsExists = await this.hasColumnsColumn();
       const categories = await this.createCategoryQuery('category', columnsExists)
@@ -140,26 +146,29 @@ export class AppRecommendController {
         itemsByCategory.set(item.category_id, list);
       });
 
-      const result = categories.map((category) => {
+      const result = categories
+        .map((category) => {
         if (category.type === 'category') {
           const primaryCategory = category.bind_category_id ? primaryCategoryMap.get(category.bind_category_id) : null;
           const primaryName = primaryCategory?.name || '';
-          const items = (secondaryByParent.get(category.bind_category_id || 0) || []).map((subCategory) => ({
-            id: subCategory.id,
-            item_type: 'sub_category',
-            name: subCategory.name,
-            title: subCategory.name,
-            category: primaryName,
-            sub_category: subCategory.name,
-            parent_id: subCategory.parent_id,
-            cover: subCategory.cover_img || '',
-            cover_img: subCategory.cover_img || '',
-            course_count: courseCountMap.get(subCategory.id) || 0,
-          }));
+          const items = (secondaryByParent.get(category.bind_category_id || 0) || [])
+            .filter((subCategory) => this.matchesProfessionalFilter(primaryName, subCategory.name, professionalFilter))
+            .map((subCategory) => ({
+              id: subCategory.id,
+              item_type: 'sub_category',
+              name: subCategory.name,
+              title: subCategory.name,
+              category: primaryName,
+              sub_category: subCategory.name,
+              parent_id: subCategory.parent_id,
+              cover: subCategory.cover_img || '',
+              cover_img: subCategory.cover_img || '',
+              course_count: courseCountMap.get(subCategory.id) || 0,
+            }));
 
           return {
             id: category.id,
-            name: category.name,
+            name: professionalFilter ? professionalFilter.subCategory || professionalFilter.category : category.name,
             type: 'category',
             bind_category_id: category.bind_category_id || null,
             bind_category_name: primaryName,
@@ -186,16 +195,21 @@ export class AppRecommendController {
               expireTime,
             };
           })
-          .filter(Boolean);
+          .filter((course) =>
+            course
+              ? this.matchesProfessionalFilter(course.category, course.sub_category, professionalFilter)
+              : false,
+          );
 
         return {
           id: category.id,
-          name: category.name,
+          name: professionalFilter ? `${professionalFilter.subCategory || professionalFilter.category}推荐` : category.name,
           type: category.type || 'course',
           columns: this.normalizeColumns(category.columns),
           items: sortedCourses,
         };
-      });
+      })
+      .filter((category) => Array.isArray(category.items) && category.items.length > 0);
 
       return CommonResponseDto.success(result);
     } catch (error) {
@@ -243,6 +257,39 @@ export class AppRecommendController {
     const value = Number(columns || 3);
     if (!Number.isFinite(value)) return 3;
     return Math.min(4, Math.max(1, Math.round(value)));
+  }
+
+  private buildProfessionalFilter(mode?: string, categoryName?: string, subCategoryName?: string) {
+    if (String(mode || '').trim() !== 'professional') {
+      return null;
+    }
+    const category = this.normalizeCategoryText(categoryName);
+    const subCategory = this.normalizeCategoryText(subCategoryName);
+    if (!category) {
+      return null;
+    }
+    return { category, subCategory };
+  }
+
+  private normalizeCategoryText(value?: string | null) {
+    return String(value || '').trim();
+  }
+
+  private matchesProfessionalFilter(
+    categoryName: string | null | undefined,
+    subCategoryName: string | null | undefined,
+    filter: { category: string; subCategory: string } | null,
+  ) {
+    if (!filter) {
+      return true;
+    }
+    if (this.normalizeCategoryText(categoryName) !== filter.category) {
+      return false;
+    }
+    if (filter.subCategory) {
+      return this.normalizeCategoryText(subCategoryName) === filter.subCategory;
+    }
+    return true;
   }
 
   private createCategoryQuery(alias: string, includeColumns: boolean) {
