@@ -14,13 +14,13 @@ export class HomeService {
   /**
    * 获取首页配置
    */
-  async getHomeConfig() {
+  async getHomeConfig(userId?: number) {
     // 从配置或数据库获取倒计时日期
     const countdownDate = this.configService.get('COUNTDOWN_DATE', '2024-12-23');
     
     // 从数据库获取启用的轮播图列表
     const banners = await this.bannerService.getActiveBanners();
-    const popup = await this.systemService.getHomePopupConfig();
+    const popup = await this.systemService.getHomePopupConfigForUser(userId);
 
     return {
       countdown_date: countdownDate,

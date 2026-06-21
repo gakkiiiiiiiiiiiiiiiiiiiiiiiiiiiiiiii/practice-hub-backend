@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, QueryFailedError } from 'typeorm';
 import axios from 'axios';
 import { PDFDocument } from 'pdf-lib';
 import * as fs from 'fs';
@@ -112,6 +112,50 @@ export class CourseService {
     private packageService: PackageService,
   ) {}
 
+  private isMissingCourseTypeTableError(error: unknown) {
+    const dbError = error as QueryFailedError & {
+      code?: string;
+      errno?: number;
+      sqlMessage?: string;
+      query?: string;
+    };
+    const errorText = `${dbError.message || ''} ${dbError.sqlMessage || ''} ${dbError.query || ''}`;
+    return (
+      error instanceof QueryFailedError &&
+      (dbError.code === 'ER_NO_SUCH_TABLE' || dbError.errno === 1146) &&
+      errorText.includes('course_type')
+    );
+  }
+
+  private async findActiveCourseType(id: number) {
+    try {
+      return await this.courseTypeRepository.findOne({
+        where: { id, status: 1 },
+      });
+    } catch (error) {
+      if (this.isMissingCourseTypeTableError(error)) {
+        this.logger.warn('course_type 表不存在，课程类型筛选暂不可用，请执行数据库迁移');
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private async listActiveCourseTypes() {
+    try {
+      return await this.courseTypeRepository.find({
+        where: { status: 1 },
+        order: { sort: 'ASC', id: 'ASC' },
+      });
+    } catch (error) {
+      if (this.isMissingCourseTypeTableError(error)) {
+        this.logger.warn('course_type 表不存在，课程列表将暂不附加 courseType，请执行数据库迁移');
+        return [];
+      }
+      throw error;
+    }
+  }
+
   /**
    * 获取所有课程列表
    */
@@ -163,9 +207,7 @@ export class CourseService {
     let activeTypes: CourseType[] = [];
     let selectedCourseType: CourseType | null = null;
     if (normalizedCourseTypeId > 0) {
-      selectedCourseType = await this.courseTypeRepository.findOne({
-        where: { id: normalizedCourseTypeId, status: 1 },
-      });
+      selectedCourseType = await this.findActiveCourseType(normalizedCourseTypeId);
       if (selectedCourseType) {
         appendWhere('course.name LIKE :courseTypeKeyword', {
           courseTypeKeyword: `%${selectedCourseType.match_keyword}%`,
@@ -194,10 +236,7 @@ export class CourseService {
     }
 
     const courses = await queryBuilder.getMany();
-    activeTypes = await this.courseTypeRepository.find({
-      where: { status: 1 },
-      order: { sort: 'ASC', id: 'ASC' },
-    });
+    activeTypes = await this.listActiveCourseTypes();
     const attachCourseType = (course: Course) => {
       const matchedType =
         selectedCourseType ||

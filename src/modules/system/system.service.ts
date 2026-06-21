@@ -671,6 +671,21 @@ export class SystemService {
       .trim();
   }
 
+  private normalizeHomePopupTargetUserIds(input: unknown) {
+    const rawValues = Array.isArray(input)
+      ? input
+      : String(input || '')
+          .split(/[\s,，;；]+/)
+          .filter(Boolean);
+    return Array.from(
+      new Set(
+        rawValues
+          .map((item) => Number(item))
+          .filter((id) => Number.isInteger(id) && id > 0),
+      ),
+    );
+  }
+
   private normalizeHomePopupPage(input: Record<string, any>, index: number) {
     return {
       id: String(input?.id || `page_${index + 1}`).trim(),
@@ -697,6 +712,8 @@ export class SystemService {
       )
       .filter((page) => page.id);
     const showMode = input?.showMode === 'always' ? 'always' : 'once';
+    const targetMode = input?.targetMode === 'specified' ? 'specified' : 'all';
+    const targetUserIds = this.normalizeHomePopupTargetUserIds(input?.targetUserIds);
     const firstPage = pages[0] || this.normalizeHomePopupPage({}, 0);
 
     return {
@@ -707,6 +724,8 @@ export class SystemService {
       title: String(input?.title || firstPage.title || '').trim(),
       buttonText: String(input?.buttonText || '').trim() || '我知道了',
       showMode,
+      targetMode,
+      targetUserIds,
       pages: pages.length ? pages : [firstPage],
     };
   }
@@ -720,6 +739,8 @@ export class SystemService {
       image: input?.image,
       buttonText: input?.buttonText,
       showMode: input?.showMode,
+      targetMode: input?.targetMode,
+      targetUserIds: input?.targetUserIds,
     };
     const rawTemplates = Array.isArray(input?.templates)
       ? input.templates
@@ -749,10 +770,21 @@ export class SystemService {
       image: activePage.image,
       buttonText: activeTemplate.buttonText,
       showMode: activeTemplate.showMode,
+      targetMode: activeTemplate.targetMode,
+      targetUserIds: activeTemplate.targetUserIds,
       pages: activeTemplate.pages,
       templates: fallbackTemplates,
       version: Number(input?.version) || 0,
     };
+  }
+
+  private isHomePopupTemplateVisibleToUser(
+    template: ReturnType<typeof this.normalizeHomePopupTemplate>,
+    userId?: number,
+  ) {
+    if (template.targetMode !== 'specified') return true;
+    if (!userId) return false;
+    return template.targetUserIds.includes(userId);
   }
 
   async getHomePopupConfig() {
@@ -761,6 +793,27 @@ export class SystemService {
       this.getDefaultHomePopupConfig(),
     );
     return this.normalizeHomePopupConfig(value as Record<string, any>);
+  }
+
+  async getHomePopupConfigForUser(userId?: number) {
+    const config = await this.getHomePopupConfig();
+    const activeTemplate = config.templates.find(
+      (template) => template.id === config.activeTemplateId,
+    );
+    if (!activeTemplate || !this.isHomePopupTemplateVisibleToUser(activeTemplate, userId)) {
+      return null;
+    }
+    return {
+      enabled: config.enabled,
+      activeTemplateId: config.activeTemplateId,
+      title: config.title,
+      content: config.content,
+      image: config.image,
+      buttonText: config.buttonText,
+      showMode: config.showMode,
+      pages: config.pages,
+      version: config.version,
+    };
   }
 
   async setHomePopupConfig(input: Record<string, any>) {
