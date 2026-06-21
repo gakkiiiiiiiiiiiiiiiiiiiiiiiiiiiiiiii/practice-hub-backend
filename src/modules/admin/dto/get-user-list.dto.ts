@@ -29,7 +29,7 @@ export class GetUserListDto {
 	@Min(1)
 	pageSize?: number;
 
-	@ApiProperty({ description: '搜索关键词（昵称、OpenID）', required: false })
+	@ApiProperty({ description: '搜索关键词（昵称、OpenID、手机号）', required: false })
 	@IsOptional()
 	@IsString()
 	keyword?: string;

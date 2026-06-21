@@ -48,7 +48,7 @@ export class AdminService {
 		// 搜索条件
 		if (keyword) {
 			queryBuilder.where(
-				'(user.nickname LIKE :keyword OR user.openid LIKE :keyword)',
+				'(user.nickname LIKE :keyword OR user.openid LIKE :keyword OR user.phone LIKE :keyword)',
 				{ keyword: `%${keyword}%` }
 			);
 		}
