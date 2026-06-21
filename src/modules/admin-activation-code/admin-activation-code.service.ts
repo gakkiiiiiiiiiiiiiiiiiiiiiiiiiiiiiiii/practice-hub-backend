@@ -2,11 +2,18 @@ import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/com
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, In, Repository } from 'typeorm';
 import * as ExcelJS from 'exceljs';
-import { ActivationCode, ActivationCodeSourceType, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
+import {
+  ActivationCode,
+  ActivationCodeSourceType,
+  ActivationCodeStatus,
+  ActivationCodeTargetType,
+} from '../../database/entities/activation-code.entity';
 import { Course } from '../../database/entities/course.entity';
+import { PackagePlan } from '../../database/entities/package-plan.entity';
 import { SysUser, AdminRole } from '../../database/entities/sys-user.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { Distributor } from '../../database/entities/distributor.entity';
+import { UserPackageSubscription } from '../../database/entities/user-package-subscription.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { GenerateCodeDto } from './dto/generate-code.dto';
@@ -24,6 +31,8 @@ export class AdminActivationCodeService {
     private distributorRepository: Repository<Distributor>,
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
+    @InjectRepository(PackagePlan)
+    private packagePlanRepository: Repository<PackagePlan>,
     @InjectRepository(UserCourseAuth)
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     @InjectRepository(Order)
@@ -41,14 +50,11 @@ export class AdminActivationCodeService {
       throw new ForbiddenException('用户不存在');
     }
 
+    const target = await this.resolveCodeTarget(dto);
+
     // SUPER_ADMIN 可以免费生成，AGENT 需要检查余额
     if (agent.role === AdminRole.AGENT) {
-      const course = await this.courseRepository.findOne({ where: { id: dto.course_id } });
-      if (!course) {
-        throw new BadRequestException('课程不存在');
-      }
-
-      const unitPrice = dto.price ?? course.agent_price ?? course.price ?? 0;
+      const unitPrice = dto.price ?? target.agentPrice ?? target.price ?? 0;
 
       // 校验余额（如果设置了单价）
       const totalCost = unitPrice * dto.count;
@@ -74,7 +80,9 @@ export class AdminActivationCodeService {
         agent_id: agentId,
         source_type: sourceType,
         source_id: agentId,
-        course_id: dto.course_id,
+        course_id: target.courseId,
+        target_type: target.type,
+        target_id: target.id,
         status: ActivationCodeStatus.PENDING,
       });
     }
@@ -84,8 +92,7 @@ export class AdminActivationCodeService {
 
     // 扣除余额（仅代理商）
     if (agent.role === AdminRole.AGENT) {
-      const course = await this.courseRepository.findOne({ where: { id: dto.course_id } });
-      const unitPrice = dto.price ?? course?.agent_price ?? course?.price ?? 0;
+      const unitPrice = dto.price ?? target.agentPrice ?? target.price ?? 0;
       const totalCost = unitPrice * dto.count;
       if (totalCost > 0) {
         agent.balance -= totalCost;
@@ -99,14 +106,18 @@ export class AdminActivationCodeService {
 
     worksheet.columns = [
       { header: '激活码', key: 'code', width: 30 },
-      { header: '科目ID', key: 'subject_id', width: 10 },
+      { header: '目标类型', key: 'targetType', width: 14 },
+      { header: '目标名称', key: 'targetName', width: 30 },
+      { header: '目标ID', key: 'targetId', width: 10 },
       { header: '批次ID', key: 'batch_id', width: 20 },
     ];
 
     codes.forEach((item) => {
       worksheet.addRow({
         code: item.code,
-        subject_id: item.course_id,
+        targetType: this.getTargetTypeText(item.target_type),
+        targetName: target.name,
+        targetId: item.target_id || item.course_id,
         batch_id: item.batch_id,
       });
     });
@@ -163,13 +174,17 @@ export class AdminActivationCodeService {
     const generatorUserMap = await this.buildGeneratorUserMap(codes);
 
     return {
-      list: codes.map((code) => ({
-        ...code,
-        courseName: code.course?.name || '-',
-        source_text: this.getSourceText(code),
-        batch_prefix: code.batch_prefix || this.getBatchPrefix(code.batch_id),
-        generator_user: generatorUserMap.get(code.id) || '-',
-      })),
+      list: await Promise.all(
+        codes.map(async (code) => ({
+          ...code,
+          courseName: code.course?.name || '-',
+          target_text: await this.getCodeTargetText(code),
+          target_type_text: this.getTargetTypeText(code.target_type || ActivationCodeTargetType.COURSE),
+          source_text: this.getSourceText(code),
+          batch_prefix: code.batch_prefix || this.getBatchPrefix(code.batch_id),
+          generator_user: generatorUserMap.get(code.id) || '-',
+        })),
+      ),
       total,
       page,
       pageSize,
@@ -201,6 +216,8 @@ export class AdminActivationCodeService {
 
     return {
       ...code,
+      target_text: await this.getCodeTargetText(code),
+      target_type_text: this.getTargetTypeText(code.target_type || ActivationCodeTargetType.COURSE),
       source_text: this.getSourceText(code),
       batch_prefix: code.batch_prefix || this.getBatchPrefix(code.batch_id),
       generator_user: generatorUserMap.get(code.id) || '-',
@@ -237,7 +254,11 @@ export class AdminActivationCodeService {
       code.status = ActivationCodeStatus.INVALID;
       await queryRunner.manager.save(ActivationCode, code);
 
-      await this.revokeCodeCourseAuth(queryRunner.manager, code);
+      if ((code.target_type || ActivationCodeTargetType.COURSE) === ActivationCodeTargetType.PACKAGE) {
+        await this.revokeCodePackageAuth(queryRunner.manager, code);
+      } else {
+        await this.revokeCodeCourseAuth(queryRunner.manager, code);
+      }
 
       await queryRunner.commitTransaction();
       return { success: true };
@@ -346,19 +367,21 @@ export class AdminActivationCodeService {
 
     worksheet.columns = [
       { header: '激活码', key: 'code', width: 30 },
-      { header: '课程名称', key: 'courseName', width: 30 },
+      { header: '目标类型', key: 'targetType', width: 14 },
+      { header: '目标名称', key: 'targetName', width: 30 },
       { header: '批次ID', key: 'batch_id', width: 20 },
       { header: '状态', key: 'status', width: 10 },
     ];
 
-    codes.forEach((code) => {
+    for (const code of codes) {
       worksheet.addRow({
         code: code.code,
-        courseName: code.course?.name || '-',
+        targetType: this.getTargetTypeText(code.target_type || ActivationCodeTargetType.COURSE),
+        targetName: await this.getCodeTargetText(code),
         batch_id: code.batch_id,
         status: this.getStatusText(code.status),
       });
-    });
+    }
 
     const buffer = await workbook.xlsx.writeBuffer();
 
@@ -375,6 +398,60 @@ export class AdminActivationCodeService {
       code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return code;
+  }
+
+  private async resolveCodeTarget(dto: GenerateCodeDto) {
+    const type = dto.target_type || ActivationCodeTargetType.COURSE;
+    const id = Number(dto.target_id || dto.course_id);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new BadRequestException(type === ActivationCodeTargetType.PACKAGE ? '请选择套餐/VIP计划' : '请选择目标课程');
+    }
+
+    if (type === ActivationCodeTargetType.PACKAGE) {
+      const plan = await this.packagePlanRepository.findOne({ where: { id }, relations: ['section'] });
+      if (!plan || plan.status === 0) {
+        throw new BadRequestException('套餐计划不存在或已禁用');
+      }
+      if (!plan.section || plan.section.status === 0) {
+        throw new BadRequestException('套餐不存在或已禁用');
+      }
+      return {
+        type,
+        id: plan.id,
+        courseId: null,
+        name: `${plan.section.name} - ${plan.name}`,
+        price: Number(plan.price || 0),
+        agentPrice: Number(plan.price || 0),
+      };
+    }
+
+    const course = await this.courseRepository.findOne({ where: { id } });
+    if (!course) {
+      throw new BadRequestException('课程不存在');
+    }
+    return {
+      type: ActivationCodeTargetType.COURSE,
+      id: course.id,
+      courseId: course.id,
+      name: course.name,
+      price: Number(course.price || 0),
+      agentPrice: Number(course.agent_price || course.price || 0),
+    };
+  }
+
+  private async getCodeTargetText(code: ActivationCode) {
+    const targetType = code.target_type || ActivationCodeTargetType.COURSE;
+    if (targetType === ActivationCodeTargetType.PACKAGE) {
+      const plan = code.target_id
+        ? await this.packagePlanRepository.findOne({ where: { id: code.target_id }, relations: ['section'] })
+        : null;
+      return plan ? `${plan.section?.name || '套餐'} - ${plan.name}` : '套餐/VIP';
+    }
+    return code.course?.name || '-';
+  }
+
+  private getTargetTypeText(type: ActivationCodeTargetType) {
+    return type === ActivationCodeTargetType.PACKAGE ? '套餐/VIP' : '课程';
   }
 
   private async revokeCodeCourseAuth(manager: any, code: ActivationCode) {
@@ -409,6 +486,58 @@ export class AdminActivationCodeService {
       course_id: code.course_id,
       source: AuthSource.CODE,
     });
+  }
+
+  private async revokeCodePackageAuth(manager: any, code: ActivationCode) {
+    if (!code.used_by_uid || !code.target_id) {
+      return;
+    }
+    const plan = await manager.findOne(PackagePlan, { where: { id: code.target_id } });
+    if (!plan) return;
+
+    const paidOrder = await manager.findOne(Order, {
+      where: {
+        user_id: code.used_by_uid,
+        package_section_id: plan.section_id,
+        package_plan_id: plan.id,
+        status: OrderStatus.PAID,
+      },
+    });
+    if (paidOrder) {
+      return;
+    }
+
+    const otherUsedCodeCount = await manager.count(ActivationCode, {
+      where: {
+        used_by_uid: code.used_by_uid,
+        target_type: ActivationCodeTargetType.PACKAGE,
+        target_id: code.target_id,
+        status: ActivationCodeStatus.USED,
+      },
+    });
+    if (otherUsedCodeCount > 0) {
+      return;
+    }
+
+    await manager.delete(UserPackageSubscription, {
+      user_id: code.used_by_uid,
+      section_id: plan.section_id,
+      order_id: null,
+    });
+    await this.syncUserPackageExpireTime(manager, code.used_by_uid);
+  }
+
+  private async syncUserPackageExpireTime(manager: any, userId: number) {
+    const subscriptions = await manager.find(UserPackageSubscription, { where: { user_id: userId } });
+    const now = new Date();
+    let maxExpire: Date | null = null;
+    for (const item of subscriptions) {
+      if (item.expire_time <= now) continue;
+      if (!maxExpire || item.expire_time > maxExpire) {
+        maxExpire = item.expire_time;
+      }
+    }
+    await manager.update(AppUser, userId, { package_expire_time: maxExpire });
   }
 
   private getBatchPrefix(batchId?: string) {

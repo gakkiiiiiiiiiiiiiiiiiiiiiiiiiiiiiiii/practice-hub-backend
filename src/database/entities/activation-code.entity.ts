@@ -7,6 +7,11 @@ export enum ActivationCodeStatus {
 	INVALID = 2, // 作废
 }
 
+export enum ActivationCodeTargetType {
+	COURSE = 'course',
+	PACKAGE = 'package',
+}
+
 export enum ActivationCodeSourceType {
 	ADMIN = 'admin', // 管理后台超级管理员生成
 	AGENT = 'agent', // 管理后台代理商生成
@@ -41,8 +46,18 @@ export class ActivationCode {
 	@Column({ length: 20, nullable: true })
 	batch_prefix: string;
 
-	@Column()
+	@Column({ nullable: true })
 	course_id: number; // 从 subject_id 改为 course_id
+
+	@Column({
+		type: 'varchar',
+		length: 20,
+		default: ActivationCodeTargetType.COURSE,
+	})
+	target_type: ActivationCodeTargetType;
+
+	@Column({ nullable: true })
+	target_id: number;
 
 	@Column({
 		type: 'tinyint',

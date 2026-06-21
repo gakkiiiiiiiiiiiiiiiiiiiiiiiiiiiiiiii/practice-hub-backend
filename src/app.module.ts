@@ -41,6 +41,7 @@ import { ProcessPdfModule } from './modules/process-pdf/process-pdf.module';
 import { MarketingModule } from './modules/marketing/marketing.module';
 import { PackageModule } from './modules/package/package.module';
 import { AdminPackageModule } from './modules/admin-package/admin-package.module';
+import { CourseTypeModule } from './modules/course-type/course-type.module';
 
 @Module({
 	imports: [
@@ -132,6 +133,7 @@ import { AdminPackageModule } from './modules/admin-package/admin-package.module
 		MarketingModule,
 		PackageModule,
 		AdminPackageModule,
+		CourseTypeModule,
 	],
 	controllers: [AppController],
 	providers: [

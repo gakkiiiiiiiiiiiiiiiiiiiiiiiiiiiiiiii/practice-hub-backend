@@ -69,7 +69,7 @@ export class PackageService {
 	}
 
 	async batchUserHasCourseAccessViaPackage(userId: number, courses: Course[]) {
-		const accessMap = new Map<number, boolean>();
+		const accessMap = new Map<number, { hasAccess: boolean; expireTime: Date | null }>();
 		if (!userId || courses.length === 0) {
 			return accessMap;
 		}
@@ -77,9 +77,8 @@ export class PackageService {
 		const subscriptions = await this.userPackageSubscriptionRepository.find({
 			where: { user_id: userId },
 		});
-		const activeSectionIds = subscriptions
-			.filter((item) => item.expire_time > new Date())
-			.map((item) => item.section_id);
+		const activeSubscriptions = subscriptions.filter((item) => item.expire_time > new Date());
+		const activeSectionIds = activeSubscriptions.map((item) => item.section_id);
 		if (activeSectionIds.length === 0) {
 			return accessMap;
 		}
@@ -87,31 +86,30 @@ export class PackageService {
 		const sections = await this.getActiveSectionsWithScopes();
 		const activeSections = sections.filter((section) => activeSectionIds.includes(section.id));
 		for (const course of courses) {
-			const hasAccess = activeSections.some((section) =>
+			const matchedSections = activeSections.filter((section) =>
 				(section.scopes || []).some((scope) => this.courseMatchesScope(course, scope)),
 			);
-			if (hasAccess) {
-				accessMap.set(course.id, true);
+			if (matchedSections.length > 0) {
+				const matchedSectionIds = matchedSections.map((section) => section.id);
+				const expireTime = activeSubscriptions
+					.filter((item) => matchedSectionIds.includes(item.section_id))
+					.reduce<Date | null>((max, item) => {
+						if (!max || item.expire_time > max) return item.expire_time;
+						return max;
+					}, null);
+				accessMap.set(course.id, { hasAccess: true, expireTime });
 			}
 		}
 		return accessMap;
 	}
 
-	async userHasCourseAccessViaPackage(userId: number, course: Course) {
-		const subscriptions = await this.userPackageSubscriptionRepository.find({
-			where: { user_id: userId },
-		});
-		const activeSectionIds = subscriptions
-			.filter((item) => item.expire_time > new Date())
-			.map((item) => item.section_id);
-		if (activeSectionIds.length === 0) return false;
+	async userCoursePackageAccess(userId: number, course: Course) {
+		const accessMap = await this.batchUserHasCourseAccessViaPackage(userId, [course]);
+		return accessMap.get(course.id) || { hasAccess: false, expireTime: null };
+	}
 
-		const sections = await this.getActiveSectionsWithScopes();
-		return sections.some(
-			(section) =>
-				activeSectionIds.includes(section.id) &&
-				(section.scopes || []).some((scope) => this.courseMatchesScope(course, scope)),
-		);
+	async userHasCourseAccessViaPackage(userId: number, course: Course) {
+		return (await this.userCoursePackageAccess(userId, course)).hasAccess;
 	}
 
 	async getUserActiveSubscriptions(userId: number) {

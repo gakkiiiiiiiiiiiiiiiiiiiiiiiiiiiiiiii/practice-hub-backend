@@ -35,6 +35,7 @@ import { UserCheckin } from './entities/user-checkin.entity';
 import { UserFileCourseProgress } from './entities/user-file-course-progress.entity';
 import { PreviewCacheTask } from './entities/preview-cache-task.entity';
 import { CourseFile } from './entities/course-file.entity';
+import { CourseType } from './entities/course-type.entity';
 import { UserReferral } from './entities/user-referral.entity';
 import { UserCoupon } from './entities/user-coupon.entity';
 import { UserPointsLog } from './entities/user-points-log.entity';
@@ -82,6 +83,7 @@ import { CoinTransaction } from './entities/coin-transaction.entity';
 			UserFileCourseProgress,
 			PreviewCacheTask,
 			CourseFile,
+			CourseType,
 			UserReferral,
 			UserCoupon,
 			UserPointsLog,

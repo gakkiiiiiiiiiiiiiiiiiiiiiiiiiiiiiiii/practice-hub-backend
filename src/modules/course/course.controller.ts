@@ -32,9 +32,17 @@ export class CourseController {
     @Query('category') category?: string,
     @Query('subCategory') subCategory?: string,
     @Query('sortBy') sortBy?: string,
+    @Query('courseTypeId') courseTypeId?: string,
     @CurrentUser() user?: any,
   ) {
-    const result = await this.courseService.getAllCourses(keyword, category, subCategory, sortBy, user?.userId);
+    const result = await this.courseService.getAllCourses(
+      keyword,
+      category,
+      subCategory,
+      sortBy,
+      user?.userId,
+      courseTypeId ? Number(courseTypeId) : undefined,
+    );
     return CommonResponseDto.success(result);
   }
 

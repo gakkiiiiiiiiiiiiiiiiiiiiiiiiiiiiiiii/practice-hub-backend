@@ -17,6 +17,7 @@ import { CourseFileService } from './course-file.service';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
 import { CourseRecommendation } from '../../database/entities/course-recommendation.entity';
+import { CourseType } from '../../database/entities/course-type.entity';
 import { UserFileCourseProgress } from '../../database/entities/user-file-course-progress.entity';
 import { UploadService } from '../upload/upload.service';
 import { PackageService } from '../package/package.service';
@@ -100,6 +101,8 @@ export class CourseService {
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     @InjectRepository(CourseRecommendation)
     private courseRecommendationRepository: Repository<CourseRecommendation>,
+    @InjectRepository(CourseType)
+    private courseTypeRepository: Repository<CourseType>,
     @InjectRepository(UserFileCourseProgress)
     private userFileCourseProgressRepository: Repository<UserFileCourseProgress>,
     private configService: ConfigService,
@@ -112,11 +115,19 @@ export class CourseService {
   /**
    * 获取所有课程列表
    */
-  async getAllCourses(keyword?: string, category?: string, subCategory?: string, sortBy?: string, userId?: number) {
+  async getAllCourses(
+    keyword?: string,
+    category?: string,
+    subCategory?: string,
+    sortBy?: string,
+    userId?: number,
+    courseTypeId?: number,
+  ) {
     const queryBuilder = this.courseRepository.createQueryBuilder('course');
     const normalizedKeyword = String(keyword || '').trim();
     const normalizedCategory = String(category || '').trim();
     const normalizedSubCategory = String(subCategory || '').trim();
+    const normalizedCourseTypeId = Number(courseTypeId) || 0;
     let hasWhere = false;
 
     const appendWhere = (condition: string, parameters?: Record<string, unknown>) => {
@@ -149,6 +160,21 @@ export class CourseService {
       appendWhere('course.sub_category = :subCategory', { subCategory: normalizedSubCategory });
     }
 
+    let activeTypes: CourseType[] = [];
+    let selectedCourseType: CourseType | null = null;
+    if (normalizedCourseTypeId > 0) {
+      selectedCourseType = await this.courseTypeRepository.findOne({
+        where: { id: normalizedCourseTypeId, status: 1 },
+      });
+      if (selectedCourseType) {
+        appendWhere('course.name LIKE :courseTypeKeyword', {
+          courseTypeKeyword: `%${selectedCourseType.match_keyword}%`,
+        });
+      } else {
+        appendWhere('1 = 0');
+      }
+    }
+
     // 排序
     if (sortBy === 'sales') {
       // 按学习人数排序（销量优先）
@@ -168,9 +194,29 @@ export class CourseService {
     }
 
     const courses = await queryBuilder.getMany();
+    activeTypes = await this.courseTypeRepository.find({
+      where: { status: 1 },
+      order: { sort: 'ASC', id: 'ASC' },
+    });
+    const attachCourseType = (course: Course) => {
+      const matchedType =
+        selectedCourseType ||
+        activeTypes.find((type) => String(course.name || '').includes(type.match_keyword)) ||
+        null;
+      return {
+        ...course,
+        courseType: matchedType
+          ? {
+              id: matchedType.id,
+              name: matchedType.name,
+              match_keyword: matchedType.match_keyword,
+            }
+          : null,
+      };
+    };
     if (!userId || courses.length === 0) {
       return courses.map((course) => ({
-        ...course,
+        ...attachCourseType(course),
         hasAuth: Number(course.price) === 0 || course.is_free === 1,
       }));
     }
@@ -191,13 +237,13 @@ export class CourseService {
     const packageAccessMap = await this.packageService.batchUserHasCourseAccessViaPackage(userId, courses);
 
     return courses.map((course) => ({
-      ...course,
+      ...attachCourseType(course),
       hasAuth:
         Number(course.price) === 0 ||
         course.is_free === 1 ||
         authMap.has(course.id) ||
-        packageAccessMap.get(course.id) === true,
-      expireTime: authMap.get(course.id)?.expire_time || null,
+        packageAccessMap.get(course.id)?.hasAccess === true,
+      expireTime: authMap.get(course.id)?.expire_time || packageAccessMap.get(course.id)?.expireTime || null,
     }));
   }
 
@@ -325,7 +371,9 @@ export class CourseService {
         expireTime = auth.expire_time;
       }
       if (!hasAuth) {
-        hasAuth = await this.packageService.userHasCourseAccessViaPackage(userId, course);
+        const packageAccess = await this.packageService.userCoursePackageAccess(userId, course);
+        hasAuth = packageAccess.hasAccess;
+        expireTime = packageAccess.expireTime;
       }
     }
 

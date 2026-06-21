@@ -636,11 +636,30 @@ export class SystemService {
   private getDefaultHomePopupConfig() {
     return {
       enabled: false,
+      activeTemplateId: 'default',
       title: '',
       content: '',
       image: '',
       buttonText: '我知道了',
       showMode: 'once' as 'once' | 'always',
+      pages: [],
+      templates: [
+        {
+          id: 'default',
+          name: '默认模板',
+          title: '',
+          buttonText: '我知道了',
+          showMode: 'once' as 'once' | 'always',
+          pages: [
+            {
+              id: 'page_1',
+              title: '',
+              content: '',
+              image: '',
+            },
+          ],
+        },
+      ],
       version: 0,
     };
   }
@@ -652,15 +671,86 @@ export class SystemService {
       .trim();
   }
 
-  private normalizeHomePopupConfig(input: Record<string, any>) {
-    const showMode = input?.showMode === 'always' ? 'always' : 'once';
+  private normalizeHomePopupPage(input: Record<string, any>, index: number) {
     return {
-      enabled: Boolean(input?.enabled),
+      id: String(input?.id || `page_${index + 1}`).trim(),
       title: String(input?.title || '').trim(),
       content: String(input?.content || '').trim(),
       image: String(input?.image || '').trim(),
+    };
+  }
+
+  private normalizeHomePopupTemplate(
+    input: Record<string, any>,
+    index: number,
+  ) {
+    const fallbackPage = {
+      id: 'page_1',
+      title: input?.title,
+      content: input?.content,
+      image: input?.image,
+    };
+    const rawPages = Array.isArray(input?.pages) ? input.pages : [fallbackPage];
+    const pages = rawPages
+      .map((page, pageIndex) =>
+        this.normalizeHomePopupPage(page || {}, pageIndex),
+      )
+      .filter((page) => page.id);
+    const showMode = input?.showMode === 'always' ? 'always' : 'once';
+    const firstPage = pages[0] || this.normalizeHomePopupPage({}, 0);
+
+    return {
+      id: String(input?.id || `template_${index + 1}`).trim(),
+      name:
+        String(input?.name || input?.title || `模板 ${index + 1}`).trim() ||
+        `模板 ${index + 1}`,
+      title: String(input?.title || firstPage.title || '').trim(),
       buttonText: String(input?.buttonText || '').trim() || '我知道了',
       showMode,
+      pages: pages.length ? pages : [firstPage],
+    };
+  }
+
+  private normalizeHomePopupConfig(input: Record<string, any>) {
+    const legacyTemplate = {
+      id: 'default',
+      name: '默认模板',
+      title: input?.title,
+      content: input?.content,
+      image: input?.image,
+      buttonText: input?.buttonText,
+      showMode: input?.showMode,
+    };
+    const rawTemplates = Array.isArray(input?.templates)
+      ? input.templates
+      : [legacyTemplate];
+    const templates = rawTemplates
+      .map((template, index) =>
+        this.normalizeHomePopupTemplate(template || {}, index),
+      )
+      .filter((template) => template.id);
+    const fallbackTemplates = templates.length
+      ? templates
+      : [this.normalizeHomePopupTemplate(legacyTemplate, 0)];
+    const requestedActiveTemplateId = String(
+      input?.activeTemplateId || input?.active_template_id || '',
+    ).trim();
+    const activeTemplate =
+      fallbackTemplates.find(
+        (template) => template.id === requestedActiveTemplateId,
+      ) || fallbackTemplates[0];
+    const activePage = activeTemplate.pages[0] || this.normalizeHomePopupPage({}, 0);
+
+    return {
+      enabled: Boolean(input?.enabled),
+      activeTemplateId: activeTemplate.id,
+      title: activeTemplate.title || activePage.title,
+      content: activePage.content,
+      image: activePage.image,
+      buttonText: activeTemplate.buttonText,
+      showMode: activeTemplate.showMode,
+      pages: activeTemplate.pages,
+      templates: fallbackTemplates,
       version: Number(input?.version) || 0,
     };
   }
@@ -676,21 +766,22 @@ export class SystemService {
   async setHomePopupConfig(input: Record<string, any>) {
     const current = await this.getHomePopupConfig();
     const next = this.normalizeHomePopupConfig(input);
+    const getVersionlessSnapshot = (config: Record<string, any>) => {
+      const { version, ...rest } = config;
+      return rest;
+    };
     const contentChanged =
-      next.enabled !== current.enabled ||
-      next.title !== current.title ||
-      next.content !== current.content ||
-      next.image !== current.image ||
-      next.buttonText !== current.buttonText ||
-      next.showMode !== current.showMode;
+      JSON.stringify(getVersionlessSnapshot(next)) !==
+      JSON.stringify(getVersionlessSnapshot(current as Record<string, any>));
 
     if (
       next.enabled &&
-      !this.stripRichText(next.content) &&
-      !next.title &&
-      !next.image
+      !next.pages.some(
+        (page) =>
+          this.stripRichText(page.content) || page.title || page.image,
+      )
     ) {
-      throw new Error('启用弹窗时请填写标题、正文或图片');
+      throw new Error('启用弹窗时请至少填写一个轮播页的标题、正文或图片');
     }
 
     if (contentChanged) {
