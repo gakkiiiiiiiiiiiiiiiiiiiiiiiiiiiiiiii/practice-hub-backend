@@ -803,15 +803,16 @@ export class SystemService {
     if (!activeTemplate || !this.isHomePopupTemplateVisibleToUser(activeTemplate, userId)) {
       return null;
     }
+    const firstPage = activeTemplate.pages[0] || this.normalizeHomePopupPage({}, 0);
     return {
       enabled: config.enabled,
       activeTemplateId: config.activeTemplateId,
-      title: config.title,
-      content: config.content,
-      image: config.image,
-      buttonText: config.buttonText,
-      showMode: config.showMode,
-      pages: config.pages,
+      title: activeTemplate.title || firstPage.title,
+      content: firstPage.content,
+      image: firstPage.image,
+      buttonText: activeTemplate.buttonText,
+      showMode: activeTemplate.showMode,
+      pages: activeTemplate.pages,
       version: config.version,
     };
   }
