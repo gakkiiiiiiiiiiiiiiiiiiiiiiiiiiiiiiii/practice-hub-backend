@@ -5,14 +5,15 @@ import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import * as https from 'https';
 import axios from 'axios';
-import { Order, OrderStatus } from '../../database/entities/order.entity';
+import { Order, OrderDeliveryStatus, OrderShippingAddress, OrderStatus } from '../../database/entities/order.entity';
 import { Course } from '../../database/entities/course.entity';
-import { AppUser } from '../../database/entities/app-user.entity';
+import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreateCartOrderDto } from './dto/create-cart-order.dto';
 import { GetAdminOrderListDto } from './dto/get-admin-order-list.dto';
 import { RefundOrderDto } from './dto/refund-order.dto';
+import { ShipOrderDto } from './dto/ship-order.dto';
 import { OrderAfterSale, AfterSaleStatus } from '../../database/entities/order-after-sale.entity';
 import { DistributorService } from '../distributor/distributor.service';
 import { XpayService } from './xpay.service';
@@ -20,6 +21,30 @@ import { ReferralCouponService } from '../marketing/referral-coupon.service';
 import { PackageService } from '../package/package.service';
 import { CoinService } from './coin.service';
 import { normalizePayAmountYuan, assertIntegerYuanPrice } from '../../common/utils/price.util';
+
+type ShipOrderActor = {
+  operatorType: 'admin' | 'app_admin';
+  operatorId?: number;
+};
+
+type LogisticsSnapshot = {
+  provider: 'kdniao';
+  configured: boolean;
+  success: boolean;
+  message?: string;
+  reason?: string;
+  state?: string;
+  stateText?: string;
+  shipperCode?: string;
+  shipperName?: string;
+  trackingNo: string;
+  traces: Array<{
+    time: string;
+    text: string;
+    location?: string;
+  }>;
+  queriedAt: string;
+};
 
 @Injectable()
 export class OrderService {
@@ -71,7 +96,8 @@ export class OrderService {
       throw new NotFoundException('部分课程不存在或已下架');
     }
 
-    const cartItems: Array<{ course_id: number; name: string; price: number }> = [];
+    const shippingAddress = this.resolveShippingAddressForCourses(courses, dto.shipping_address);
+    const cartItems: Array<{ course_id: number; name: string; price: number; content_type: string }> = [];
     let originalAmount = 0;
 
     for (const courseId of courseIds) {
@@ -101,6 +127,7 @@ export class OrderService {
         course_id: course.id,
         name: course.name || '课程',
         price,
+        content_type: course.content_type || 'normal',
       });
       originalAmount += price;
     }
@@ -132,6 +159,7 @@ export class OrderService {
         coupon_id: couponId,
         status: OrderStatus.PENDING,
         pay_provider: 'free',
+        shipping_address: shippingAddress,
         pay_payload: {
           is_cart: true,
           cart_items: cartItems,
@@ -165,6 +193,7 @@ export class OrderService {
       coupon_id: couponId,
       status: OrderStatus.PENDING,
       pay_provider: 'virtual_payment',
+      shipping_address: shippingAddress,
       pay_payload: {
         is_cart: true,
         cart_items: cartItems,
@@ -197,6 +226,7 @@ export class OrderService {
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
+    const shippingAddress = this.resolveShippingAddressForCourses([course], dto.shipping_address);
 
     const originalAmount = Number(course.price || 0);
     if (course.is_free !== 1 && originalAmount > 0) {
@@ -225,6 +255,7 @@ export class OrderService {
         coupon_id: couponId,
         status: OrderStatus.PENDING,
         pay_provider: 'free',
+        shipping_address: shippingAddress,
       });
       await this.orderRepository.save(freeOrder);
       await this.handlePaymentSuccess(freeOrder.id);
@@ -256,6 +287,7 @@ export class OrderService {
       coupon_id: couponId,
       status: OrderStatus.PENDING,
       pay_provider: 'virtual_payment',
+      shipping_address: shippingAddress,
     });
 
     await this.orderRepository.save(order);
@@ -309,6 +341,68 @@ export class OrderService {
       existingAuth.expire_time = expireTime;
       await this.userCourseAuthRepository.save(existingAuth);
     }
+  }
+
+  private resolveShippingAddressForCourses(
+    courses: Array<Pick<Course, 'content_type' | 'name'>>,
+    input?: Record<string, any>,
+  ): OrderShippingAddress | null {
+    const hasPaperExamCourse = courses.some((course) => course.content_type === 'paper_exam');
+    if (!hasPaperExamCourse) {
+      return input ? this.normalizeShippingAddress(input, false) : null;
+    }
+    return this.normalizeShippingAddress(input, true);
+  }
+
+  private normalizeShippingAddress(input: Record<string, any> | undefined, required: boolean): OrderShippingAddress | null {
+    if (!input || typeof input !== 'object') {
+      if (required) {
+        throw new BadRequestException('纸质专业真题需要填写收货地址');
+      }
+      return null;
+    }
+
+    const normalized: OrderShippingAddress = {
+      name: this.pickString(input, ['name', 'userName', 'receiverName', 'contactName']),
+      phone: this.pickString(input, ['phone', 'telNumber', 'mobile', 'contactPhone']),
+      province: this.pickString(input, ['province', 'provinceName']),
+      city: this.pickString(input, ['city', 'cityName']),
+      district: this.pickString(input, ['district', 'countyName', 'area']),
+      detail: this.pickString(input, ['detail', 'detailInfo', 'addressDetail']),
+      postalCode: this.pickString(input, ['postalCode', 'postCode']),
+      nationalCode: this.pickString(input, ['nationalCode']),
+      raw: input,
+    };
+
+    if (required) {
+      const missing = [
+        ['name', normalized.name],
+        ['phone', normalized.phone],
+        ['province', normalized.province],
+        ['city', normalized.city],
+        ['district', normalized.district],
+        ['detail', normalized.detail],
+      ].filter(([, value]) => !value);
+      if (missing.length > 0) {
+        throw new BadRequestException('收货地址不完整，请重新选择微信收货地址');
+      }
+    }
+
+    if (!normalized.name && !normalized.phone && !normalized.detail) {
+      return null;
+    }
+    return normalized;
+  }
+
+  private pickString(input: Record<string, any>, keys: string[]) {
+    for (const key of keys) {
+      const value = input[key];
+      if (value !== undefined && value !== null) {
+        const text = String(value).trim();
+        if (text) return text;
+      }
+    }
+    return '';
   }
 
   private async createPackageOrder(userId: number, dto: CreateOrderDto, clientIp?: string) {
@@ -1228,6 +1322,107 @@ export class OrderService {
     };
   }
 
+  async shipOrder(orderId: number, dto: ShipOrderDto, actor: ShipOrderActor) {
+    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+    if (order.status !== OrderStatus.PAID) {
+      throw new BadRequestException('仅已支付订单可发货');
+    }
+    if (!(await this.orderRequiresShipping(order))) {
+      throw new BadRequestException('该订单不是纸质专业真题订单');
+    }
+    if (!order.shipping_address) {
+      throw new BadRequestException('订单缺少收货地址，无法发货');
+    }
+
+    const trackingNo = String(dto.tracking_no || '').trim();
+    if (!trackingNo) {
+      throw new BadRequestException('请填写物流运单号');
+    }
+
+    order.delivery_status = OrderDeliveryStatus.SHIPPED;
+    order.tracking_no = trackingNo;
+    order.shipper_code = this.normalizeOptionalText(dto.shipper_code);
+    order.shipper_name = this.normalizeOptionalText(dto.shipper_name);
+    order.shipped_at = order.shipped_at || new Date();
+    order.ship_operator_type = actor.operatorType;
+    order.ship_operator_id = actor.operatorId || null;
+    order.shipment_remark = this.normalizeOptionalText(dto.remark);
+
+    const logisticsSnapshot = await this.queryLogisticsSnapshot({
+      trackingNo,
+      shipperCode: order.shipper_code || undefined,
+      shipperName: order.shipper_name || undefined,
+    });
+    order.logistics_snapshot = logisticsSnapshot;
+    if (logisticsSnapshot.shipperCode && !order.shipper_code) {
+      order.shipper_code = logisticsSnapshot.shipperCode;
+    }
+    if (logisticsSnapshot.shipperName && !order.shipper_name) {
+      order.shipper_name = logisticsSnapshot.shipperName;
+    }
+
+    await this.orderRepository.save(order);
+
+    return {
+      message: '发货信息已保存',
+      orderId: order.id,
+      orderNo: order.order_no,
+      deliveryStatus: order.delivery_status,
+      trackingNo: order.tracking_no,
+      shipperCode: order.shipper_code,
+      shipperName: order.shipper_name,
+      shippedAt: order.shipped_at,
+      logistics: logisticsSnapshot,
+    };
+  }
+
+  async shipOrderByAppAdmin(appUserId: number, orderId: number, dto: ShipOrderDto) {
+    await this.assertAppSuperAdmin(appUserId);
+    return this.shipOrder(orderId, dto, {
+      operatorType: 'app_admin',
+      operatorId: appUserId,
+    });
+  }
+
+  async queryOrderLogistics(orderId: number, requester?: { userId?: number; appUserId?: number; allowAdmin?: boolean }) {
+    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+
+    if (requester?.appUserId && order.user_id !== requester.appUserId) {
+      const user = await this.appUserRepository.findOne({ where: { id: requester.appUserId }, select: ['id', 'role'] });
+      if (!requester.allowAdmin || user?.role !== AppUserRole.ADMIN) {
+        throw new ForbiddenException('无权查看该订单物流');
+      }
+    }
+
+    if (!(await this.orderRequiresShipping(order))) {
+      throw new BadRequestException('该订单不是纸质专业真题订单');
+    }
+    if (!order.tracking_no) {
+      throw new BadRequestException('订单尚未录入运单号');
+    }
+
+    const logisticsSnapshot = await this.queryLogisticsSnapshot({
+      trackingNo: order.tracking_no,
+      shipperCode: order.shipper_code || undefined,
+      shipperName: order.shipper_name || undefined,
+    });
+    order.logistics_snapshot = logisticsSnapshot;
+    if (logisticsSnapshot.shipperCode && !order.shipper_code) {
+      order.shipper_code = logisticsSnapshot.shipperCode;
+    }
+    if (logisticsSnapshot.shipperName && !order.shipper_name) {
+      order.shipper_name = logisticsSnapshot.shipperName;
+    }
+    await this.orderRepository.save(order);
+    return logisticsSnapshot;
+  }
+
   /** 微信虚拟支付消息推送（xpay_coin_pay_notify 等） */
   async handleXpayNotify(body: Record<string, any>) {
     const event = body?.Event || body?.event;
@@ -1334,6 +1529,14 @@ export class OrderService {
         'o.create_time AS createTime',
         'o.paid_time AS paidTime',
         'o.pay_payload AS payPayload',
+        'o.shipping_address AS shippingAddress',
+        'o.delivery_status AS deliveryStatus',
+        'o.tracking_no AS trackingNo',
+        'o.shipper_code AS shipperCode',
+        'o.shipper_name AS shipperName',
+        'o.shipped_at AS shippedAt',
+        'o.shipment_remark AS shipmentRemark',
+        'o.logistics_snapshot AS logisticsSnapshot',
         'course.name AS courseName',
         'course.cover_img AS coverImg',
         'course.content_type AS contentType',
@@ -1361,6 +1564,18 @@ export class OrderService {
         payPayload = typeof row.payPayload === 'string' ? JSON.parse(row.payPayload) : row.payPayload;
       }
       const cartCount = Array.isArray(payPayload?.cart_items) ? payPayload.cart_items.length : 0;
+      const cartItems = Array.isArray(payPayload?.cart_items)
+        ? payPayload.cart_items.map((item: Record<string, any>) => ({
+            courseId: Number(item.course_id || item.courseId || 0),
+            name: item.name || '课程',
+            price: Number(item.price || 0),
+            contentType: item.content_type || item.contentType || 'normal',
+          }))
+        : [];
+      const requiresShipping =
+        row.contentType === 'paper_exam' ||
+        cartItems.some((item) => item.contentType === 'paper_exam') ||
+        Boolean(row.shippingAddress);
       const productName =
         cartCount > 1
           ? `购物车(${cartCount}门课程)`
@@ -1386,6 +1601,16 @@ export class OrderService {
         paidTime: row.paidTime,
         isCart: cartCount > 1,
         cartCount,
+        cartItems,
+        shippingAddress: this.parseJsonColumn(row.shippingAddress),
+        requiresShipping,
+        deliveryStatus: row.deliveryStatus || OrderDeliveryStatus.PENDING,
+        trackingNo: row.trackingNo || '',
+        shipperCode: row.shipperCode || '',
+        shipperName: row.shipperName || '',
+        shippedAt: row.shippedAt || null,
+        shipmentRemark: row.shipmentRemark || '',
+        logisticsSnapshot: this.parseJsonColumn(row.logisticsSnapshot),
         afterSale: this.formatAfterSaleInfo(afterSaleMap.get(Number(row.id))),
       };
     });
@@ -1561,6 +1786,221 @@ export class OrderService {
     return afterSaleMap;
   }
 
+  private normalizeOptionalText(value: unknown) {
+    const text = String(value ?? '').trim();
+    return text || null;
+  }
+
+  private getCartItemsFromOrder(order: Pick<Order, 'pay_payload'>) {
+    const payPayload = this.parseJsonColumn(order.pay_payload) || {};
+    return Array.isArray(payPayload.cart_items) ? payPayload.cart_items : [];
+  }
+
+  private async orderRequiresShipping(order: Pick<Order, 'course_id' | 'pay_payload' | 'shipping_address'>) {
+    const cartItems = this.getCartItemsFromOrder(order);
+    if (cartItems.some((item: Record<string, any>) => (item.content_type || item.contentType) === 'paper_exam')) {
+      return true;
+    }
+
+    const courseIds = [
+      order.course_id ? Number(order.course_id) : 0,
+      ...cartItems.map((item: Record<string, any>) => Number(item.course_id || item.courseId || 0)),
+    ].filter((id) => id > 0);
+
+    if (!courseIds.length) {
+      return false;
+    }
+
+    const courses = await this.courseRepository.find({
+      where: { id: In([...new Set(courseIds)]) },
+      select: ['id', 'content_type'],
+    });
+    return courses.some((course) => course.content_type === 'paper_exam');
+  }
+
+  private async assertAppSuperAdmin(appUserId: number) {
+    const user = await this.appUserRepository.findOne({
+      where: { id: appUserId },
+      select: ['id', 'role'],
+    });
+    if (!user || user.role !== AppUserRole.ADMIN) {
+      throw new ForbiddenException('仅小程序超管可录入发货信息');
+    }
+    return user;
+  }
+
+  private getKdniaoConfig() {
+    const businessId = String(
+      this.configService.get<string>('KDNIAO_EBUSINESS_ID') ||
+      this.configService.get<string>('KDNIAO_BUSINESS_ID') ||
+      '',
+    ).trim();
+    const apiKey = String(
+      this.configService.get<string>('KDNIAO_API_KEY') ||
+      this.configService.get<string>('KDNIAO_APP_KEY') ||
+      '',
+    ).trim();
+
+    return {
+      enabled: Boolean(businessId && apiKey),
+      businessId,
+      apiKey,
+      apiUrl:
+        this.configService.get<string>('KDNIAO_API_URL') ||
+        'https://api.kdniao.com/Ebusiness/EbusinessOrderHandle.aspx',
+      queryRequestType: this.configService.get<string>('KDNIAO_QUERY_REQUEST_TYPE') || '1002',
+      recognizeRequestType: this.configService.get<string>('KDNIAO_RECOGNIZE_REQUEST_TYPE') || '2002',
+    };
+  }
+
+  private createKdniaoDataSign(requestData: string, apiKey: string) {
+    return crypto.createHash('md5').update(requestData + apiKey, 'utf8').digest('base64');
+  }
+
+  private async callKdniaoApi(requestType: string, requestBody: Record<string, any>) {
+    const config = this.getKdniaoConfig();
+    if (!config.enabled) {
+      throw new Error('快递鸟 API 未配置');
+    }
+
+    const requestData = JSON.stringify(requestBody);
+    const form = new URLSearchParams();
+    form.set('RequestData', requestData);
+    form.set('EBusinessID', config.businessId);
+    form.set('RequestType', requestType);
+    form.set('DataSign', this.createKdniaoDataSign(requestData, config.apiKey));
+    form.set('DataType', '2');
+
+    const response = await axios.post(config.apiUrl, form.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
+      timeout: 10000,
+    });
+    return typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+  }
+
+  private async recognizeKdniaoShipper(trackingNo: string) {
+    const config = this.getKdniaoConfig();
+    if (!config.enabled) {
+      return null;
+    }
+
+    try {
+      const result = await this.callKdniaoApi(config.recognizeRequestType, {
+        LogisticCode: trackingNo,
+      });
+      const candidates = Array.isArray(result?.Shippers)
+        ? result.Shippers
+        : Array.isArray(result?.shippers)
+          ? result.shippers
+          : [];
+      const first = candidates[0] || result;
+      const shipperCode = String(first?.ShipperCode || first?.shipperCode || result?.ShipperCode || '').trim();
+      const shipperName = String(first?.ShipperName || first?.shipperName || result?.ShipperName || '').trim();
+      if (!shipperCode && !shipperName) {
+        return null;
+      }
+      return { shipperCode, shipperName };
+    } catch (error) {
+      this.logger.warn(`快递鸟单号识别失败 ${trackingNo}: ${error?.message || error}`);
+      return null;
+    }
+  }
+
+  private getLogisticsStateText(state?: string) {
+    const map: Record<string, string> = {
+      '0': '无轨迹',
+      '1': '已揽收',
+      '2': '在途中',
+      '3': '已签收',
+      '4': '问题件',
+      '5': '转寄',
+      '6': '清关中',
+      '10': '待清关',
+      '11': '清关中',
+      '12': '已清关',
+      '13': '清关异常',
+      '14': '拒签',
+    };
+    return state ? map[state] || state : '';
+  }
+
+  private async queryLogisticsSnapshot(input: {
+    trackingNo: string;
+    shipperCode?: string;
+    shipperName?: string;
+  }): Promise<LogisticsSnapshot> {
+    const trackingNo = String(input.trackingNo || '').trim();
+    const config = this.getKdniaoConfig();
+    const queriedAt = new Date().toISOString();
+
+    if (!config.enabled) {
+      return {
+        provider: 'kdniao',
+        configured: false,
+        success: false,
+        message: '快递鸟 API 未配置，已保存运单号',
+        trackingNo,
+        shipperCode: input.shipperCode || '',
+        shipperName: input.shipperName || '',
+        traces: [],
+        queriedAt,
+      };
+    }
+
+    try {
+      const recognized = input.shipperCode
+        ? null
+        : await this.recognizeKdniaoShipper(trackingNo);
+      const shipperCode = input.shipperCode || recognized?.shipperCode || '';
+      const shipperName = input.shipperName || recognized?.shipperName || '';
+
+      const result = await this.callKdniaoApi(config.queryRequestType, {
+        OrderCode: '',
+        ShipperCode: shipperCode || undefined,
+        LogisticCode: trackingNo,
+      });
+      const traces = Array.isArray(result?.Traces)
+        ? result.Traces
+        : Array.isArray(result?.traces)
+          ? result.traces
+          : [];
+      const state = String(result?.State || result?.state || '').trim();
+      const success = result?.Success !== false && result?.success !== false;
+
+      return {
+        provider: 'kdniao',
+        configured: true,
+        success,
+        message: success ? '查询成功' : '物流查询失败',
+        reason: result?.Reason || result?.reason || result?.Message || result?.message || '',
+        state,
+        stateText: this.getLogisticsStateText(state),
+        shipperCode: String(result?.ShipperCode || result?.shipperCode || shipperCode || '').trim(),
+        shipperName: String(result?.ShipperName || result?.shipperName || shipperName || '').trim(),
+        trackingNo: String(result?.LogisticCode || result?.logisticCode || trackingNo).trim(),
+        traces: traces.map((item: Record<string, any>) => ({
+          time: String(item.AcceptTime || item.acceptTime || item.time || '').trim(),
+          text: String(item.AcceptStation || item.acceptStation || item.remark || item.text || '').trim(),
+          location: String(item.Location || item.location || '').trim(),
+        })),
+        queriedAt,
+      };
+    } catch (error) {
+      this.logger.warn(`快递鸟物流查询失败 ${trackingNo}: ${error?.message || error}`);
+      return {
+        provider: 'kdniao',
+        configured: true,
+        success: false,
+        message: error?.message || '物流查询失败',
+        trackingNo,
+        shipperCode: input.shipperCode || '',
+        shipperName: input.shipperName || '',
+        traces: [],
+        queriedAt,
+      };
+    }
+  }
+
   async getAdminOrderDetail(orderId: number) {
     const row = await this.orderRepository
       .createQueryBuilder('o')
@@ -1583,9 +2023,20 @@ export class OrderService {
         'o.coupon_id AS couponId',
         'o.pay_provider AS payProvider',
         'o.pay_payload AS payPayload',
+        'o.shipping_address AS shippingAddress',
+        'o.delivery_status AS deliveryStatus',
+        'o.tracking_no AS trackingNo',
+        'o.shipper_code AS shipperCode',
+        'o.shipper_name AS shipperName',
+        'o.shipped_at AS shippedAt',
+        'o.ship_operator_type AS shipOperatorType',
+        'o.ship_operator_id AS shipOperatorId',
+        'o.shipment_remark AS shipmentRemark',
+        'o.logistics_snapshot AS logisticsSnapshot',
         'o.create_time AS createTime',
         'o.paid_time AS paidTime',
         'course.name AS courseName',
+        'course.content_type AS contentType',
         'packageSection.name AS packageSectionName',
         'user.nickname AS userNickname',
         'user.phone AS userPhone',
@@ -1613,6 +2064,7 @@ export class OrderService {
           courseId: Number(item.course_id || item.courseId || 0),
           name: item.name || '课程',
           price: Number(item.price || 0),
+          contentType: item.content_type || item.contentType || 'normal',
         }))
       : [];
 
@@ -1650,8 +2102,23 @@ export class OrderService {
       wechatRechargeOrderNo: payPayload?.coin_purchase?.recharge_order_no || '',
       refunded: Boolean(payPayload?.refund?.refunded_at),
       refundRemark: payPayload?.refund?.remark || '',
+      shippingAddress: this.parseJsonColumn(row.shippingAddress),
+      requiresShipping:
+        row.contentType === 'paper_exam' ||
+        cartItems.some((item) => item.contentType === 'paper_exam') ||
+        Boolean(row.shippingAddress),
+      deliveryStatus: row.deliveryStatus || OrderDeliveryStatus.PENDING,
+      trackingNo: row.trackingNo || '',
+      shipperCode: row.shipperCode || '',
+      shipperName: row.shipperName || '',
+      shippedAt: row.shippedAt || null,
+      shipOperatorType: row.shipOperatorType || '',
+      shipOperatorId: row.shipOperatorId ? Number(row.shipOperatorId) : null,
+      shipmentRemark: row.shipmentRemark || '',
+      logisticsSnapshot: this.parseJsonColumn(row.logisticsSnapshot),
       afterSale: this.formatAfterSaleInfo(afterSale),
       productName,
+      contentType: row.contentType || 'normal',
       cartItems,
       isCart: cartItems.length > 1,
       createTime: row.createTime,
@@ -1684,9 +2151,20 @@ export class OrderService {
         'o.coupon_id AS couponId',
         'o.pay_provider AS payProvider',
         'o.pay_payload AS payPayload',
+        'o.shipping_address AS shippingAddress',
+        'o.delivery_status AS deliveryStatus',
+        'o.tracking_no AS trackingNo',
+        'o.shipper_code AS shipperCode',
+        'o.shipper_name AS shipperName',
+        'o.shipped_at AS shippedAt',
+        'o.ship_operator_type AS shipOperatorType',
+        'o.ship_operator_id AS shipOperatorId',
+        'o.shipment_remark AS shipmentRemark',
+        'o.logistics_snapshot AS logisticsSnapshot',
         'o.create_time AS createTime',
         'o.paid_time AS paidTime',
         'course.name AS courseName',
+        'course.content_type AS contentType',
         'packageSection.name AS packageSectionName',
         'user.nickname AS userNickname',
         'user.phone AS userPhone',
@@ -1735,5 +2213,17 @@ export class OrderService {
       page,
       pageSize,
     };
+  }
+
+  private parseJsonColumn(value: any) {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch (_) {
+        return null;
+      }
+    }
+    return value;
   }
 }

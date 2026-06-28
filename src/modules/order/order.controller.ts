@@ -13,6 +13,7 @@ import { CreateCartOrderDto } from './dto/create-cart-order.dto';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
 import { GetAdminOrderListDto } from './dto/get-admin-order-list.dto';
 import { RefundOrderDto } from './dto/refund-order.dto';
+import { ShipOrderDto } from './dto/ship-order.dto';
 
 function resolveClientIp(req: Request) {
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0]?.trim();
@@ -58,6 +59,23 @@ export class OrderController {
   @ApiOperation({ summary: '继续支付待支付订单' })
   async payPendingOrder(@CurrentUser() user: any, @Param('id', ParseIntPipe) id: number, @Req() req: Request) {
     const result = await this.orderService.payPendingOrder(user.userId, id, resolveClientIp(req));
+    return CommonResponseDto.success(result);
+  }
+
+  @Post(':id/ship')
+  @ApiOperation({ summary: '小程序超管录入纸质真题发货信息' })
+  async shipOrder(@CurrentUser() user: any, @Param('id', ParseIntPipe) id: number, @Body() dto: ShipOrderDto) {
+    const result = await this.orderService.shipOrderByAppAdmin(user.userId, id, dto);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get(':id/logistics')
+  @ApiOperation({ summary: '查询订单物流信息' })
+  async queryLogistics(@CurrentUser() user: any, @Param('id', ParseIntPipe) id: number) {
+    const result = await this.orderService.queryOrderLogistics(id, {
+      appUserId: user.userId,
+      allowAdmin: true,
+    });
     return CommonResponseDto.success(result);
   }
 
@@ -121,6 +139,29 @@ export class AdminOrderController {
   @ApiOperation({ summary: '同步微信支付状态（补单）' })
   async syncPaymentStatus(@Param('id', ParseIntPipe) id: number) {
     const result = await this.orderService.syncOrderPaymentStatus(id);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post(':id/ship')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '录入纸质真题发货信息' })
+  async shipOrder(
+    @CurrentUser() user: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ShipOrderDto,
+  ) {
+    const result = await this.orderService.shipOrder(id, dto, {
+      operatorType: 'admin',
+      operatorId: user.userId || user.adminId,
+    });
+    return CommonResponseDto.success(result);
+  }
+
+  @Get(':id/logistics')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '查询订单物流信息' })
+  async queryLogistics(@Param('id', ParseIntPipe) id: number) {
+    const result = await this.orderService.queryOrderLogistics(id);
     return CommonResponseDto.success(result);
   }
 

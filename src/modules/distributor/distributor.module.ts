@@ -8,6 +8,7 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { Order } from '../../database/entities/order.entity';
 import { ActivationCode } from '../../database/entities/activation-code.entity';
 import { Course } from '../../database/entities/course.entity';
+import { PackagePlan } from '../../database/entities/package-plan.entity';
 import { DistributorService } from './distributor.service';
 import { DistributorController } from './distributor.controller';
 import { AdminDistributorController } from './admin-distributor.controller';
@@ -25,6 +26,7 @@ import { UploadModule } from '../upload/upload.module';
 			Order,
 			ActivationCode,
 			Course,
+			PackagePlan,
 		]),
 		forwardRef(() => OrderModule),
 		forwardRef(() => UploadModule),

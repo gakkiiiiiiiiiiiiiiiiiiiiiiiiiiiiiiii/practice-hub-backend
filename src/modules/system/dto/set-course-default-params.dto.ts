@@ -65,10 +65,10 @@ export class SetCourseDefaultParamsDto {
 	@IsIn([0, 1])
 	allow_source_file?: number;
 
-	@ApiProperty({ description: '课程内容类型', example: 'normal', enum: ['normal', 'file'] })
+	@ApiProperty({ description: '课程内容类型', example: 'normal', enum: ['normal', 'file', 'paper_exam'] })
 	@IsOptional()
 	@IsString()
-	@IsIn(['normal', 'file'])
+	@IsIn(['normal', 'file', 'paper_exam'])
 	content_type?: string;
 
 	@ApiProperty({ description: '课程状态', example: 0, enum: [0, 1] })

@@ -89,9 +89,15 @@ export class CreateCourseDto {
 	@IsString()
 	introduction?: string;
 
-	@ApiProperty({ description: '课程内容类型：normal=普通题库，file=文件课程', example: 'normal', required: false })
+	@ApiProperty({
+		description: '课程内容类型：normal=普通题库，file=文件课程，paper_exam=纸质专业真题',
+		example: 'normal',
+		enum: ['normal', 'file', 'paper_exam'],
+		required: false,
+	})
 	@IsOptional()
 	@IsString()
+	@IsIn(['normal', 'file', 'paper_exam'], { message: '课程内容类型无效' })
 	content_type?: string;
 
 	@ApiProperty({ description: '文件课程：文件 URL', required: false })

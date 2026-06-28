@@ -4,6 +4,7 @@ import { DistributorService } from './distributor.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
+import { ActivationCodeTargetType } from '../../database/entities/activation-code.entity';
 import { ApplyDistributorDto } from './dto/apply-distributor.dto';
 import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
@@ -71,8 +72,17 @@ export class DistributorController {
 		@UseGuards(JwtAuthGuard)
 		@ApiBearerAuth()
 		@ApiOperation({ summary: '小程序管理员生成激活码' })
-		async generateAdminCodes(@CurrentUser() user: any, @Body() body: { course_id: number; count: number }) {
-			const result = await this.distributorService.generateAdminActivationCodes(user.userId, body.course_id, body.count);
+		async generateAdminCodes(
+			@CurrentUser() user: any,
+			@Body()
+			body: {
+				course_id?: number;
+				count: number;
+				target_type?: ActivationCodeTargetType;
+				target_id?: number;
+			},
+		) {
+			const result = await this.distributorService.generateAdminActivationCodes(user.userId, body);
 			return CommonResponseDto.success(result);
 		}
 

@@ -10,8 +10,14 @@ import { DistributionOrder } from '../../database/entities/distribution-order.en
 import { DistributionConfig } from '../../database/entities/distribution-config.entity';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
-import { ActivationCode, ActivationCodeSourceType, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
+import {
+	ActivationCode,
+	ActivationCodeSourceType,
+	ActivationCodeStatus,
+	ActivationCodeTargetType,
+} from '../../database/entities/activation-code.entity';
 import { Course } from '../../database/entities/course.entity';
+import { PackagePlan } from '../../database/entities/package-plan.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
@@ -39,6 +45,8 @@ export class DistributorService {
 		private activationCodeRepository: Repository<ActivationCode>,
 		@InjectRepository(Course)
 		private courseRepository: Repository<Course>,
+		@InjectRepository(PackagePlan)
+		private packagePlanRepository: Repository<PackagePlan>,
 		private configService: ConfigService,
 		@Inject(forwardRef(() => OrderService))
 		private orderService: OrderService,
@@ -930,30 +938,51 @@ export class DistributorService {
 					})
 				: [];
 		const userMap = new Map(usedUsers.map((u) => [u.id, u]));
+		const packagePlanIds = Array.from(
+			new Set(
+				codes
+					.filter((code) => (code.target_type || ActivationCodeTargetType.COURSE) === ActivationCodeTargetType.PACKAGE && code.target_id)
+					.map((code) => code.target_id),
+			),
+		);
+		const packagePlans =
+			packagePlanIds.length > 0
+				? await this.packagePlanRepository.find({ where: { id: In(packagePlanIds) }, relations: ['section'] })
+				: [];
+		const packagePlanMap = new Map(packagePlans.map((plan) => [plan.id, plan]));
 
 		// 格式化返回数据
 		return {
-			list: codes.map((code) => ({
-				id: code.id,
-				code: code.code,
+			list: codes.map((code) => {
+				const targetType = code.target_type || ActivationCodeTargetType.COURSE;
+				const plan = targetType === ActivationCodeTargetType.PACKAGE && code.target_id ? packagePlanMap.get(code.target_id) : null;
+				const targetName = plan ? `${plan.section?.name || '套餐/VIP'} - ${plan.name}` : code.course?.name || '-';
+				return {
+					id: code.id,
+					code: code.code,
 					batch_id: code.batch_id,
 					batch_prefix: code.batch_prefix || this.getBatchPrefix(code.batch_id),
 					source_type: code.source_type,
 					source_text: this.getSourceText(code),
+					target_type: targetType,
+					target_type_text: targetType === ActivationCodeTargetType.PACKAGE ? '套餐/VIP' : '课程',
+					target_id: code.target_id || code.course_id,
+					target_name: targetName,
 					course_id: code.course_id,
-				course_name: code.course?.name || '-',
-				status: code.status,
-				status_text:
-					code.status === ActivationCodeStatus.PENDING
-						? '待用'
-						: code.status === ActivationCodeStatus.USED
-							? '已用'
-							: '作废',
-				used_by_uid: code.used_by_uid,
-				used_by_name: code.used_by_uid ? userMap.get(code.used_by_uid)?.nickname || '未知用户' : null,
-				used_time: code.used_time,
-				create_time: code.create_time,
-			})),
+					course_name: targetName,
+					status: code.status,
+					status_text:
+						code.status === ActivationCodeStatus.PENDING
+							? '待用'
+							: code.status === ActivationCodeStatus.USED
+								? '已用'
+								: '作废',
+					used_by_uid: code.used_by_uid,
+					used_by_name: code.used_by_uid ? userMap.get(code.used_by_uid)?.nickname || '未知用户' : null,
+					used_time: code.used_time,
+					create_time: code.create_time,
+				};
+			}),
 			total,
 			page: validPage,
 			pageSize: validPageSize,
@@ -966,28 +995,42 @@ export class DistributorService {
 			};
 		}
 
-		async generateAdminActivationCodes(userId: number, courseId: number, count: number) {
+		async generateAdminActivationCodes(
+			userId: number,
+			input:
+				| {
+						course_id?: number;
+						count: number;
+						target_type?: ActivationCodeTargetType;
+						target_id?: number;
+				  }
+				| number,
+			legacyCount?: number,
+		) {
 			const appUser = await this.appUserRepository.findOne({ where: { id: userId } });
 			if (appUser?.role !== AppUserRole.ADMIN) {
 				throw new BadRequestException('仅小程序管理员可以生成激活码');
 			}
 
-			const normalizedCount = Number(count);
+			const payload =
+				typeof input === 'number'
+					? { course_id: input, count: legacyCount || 0, target_type: ActivationCodeTargetType.COURSE }
+					: input;
+			const normalizedCount = Number(payload.count);
 			if (!Number.isInteger(normalizedCount) || normalizedCount < 1) {
 				throw new BadRequestException('生成数量需为大于 0 的整数');
 			}
 
-			const course = await this.courseRepository.findOne({ where: { id: courseId } });
-			if (!course) {
-				throw new NotFoundException('课程不存在');
-			}
+			const target = await this.resolveAppAdminActivationTarget(payload);
 
 			const batchPrefix = 'APP';
 			const batchId = `${batchPrefix}${userId}${Date.now()}`;
 			const codes = Array.from({ length: normalizedCount }, () =>
 				this.activationCodeRepository.create({
 					code: this.generateActivationCode(),
-					course_id: courseId,
+					course_id: target.courseId,
+					target_type: target.type,
+					target_id: target.id,
 					batch_id: batchId,
 					batch_prefix: batchPrefix,
 					agent_id: null,
@@ -1003,8 +1046,50 @@ export class DistributorService {
 				batch_no: batchId,
 				batch_id: batchId,
 				count: codes.length,
-				course_id: courseId,
-				course_name: course.name,
+				target_type: target.type,
+				target_id: target.id,
+				course_id: target.courseId,
+				course_name: target.name,
+				target_name: target.name,
+			};
+		}
+
+		private async resolveAppAdminActivationTarget(input: {
+			course_id?: number;
+			target_type?: ActivationCodeTargetType;
+			target_id?: number;
+		}) {
+			const type = input.target_type || ActivationCodeTargetType.COURSE;
+			const id = Number(input.target_id || input.course_id);
+			if (!Number.isInteger(id) || id <= 0) {
+				throw new BadRequestException(type === ActivationCodeTargetType.PACKAGE ? '请选择套餐/VIP计划' : '请选择课程');
+			}
+
+			if (type === ActivationCodeTargetType.PACKAGE) {
+				const plan = await this.packagePlanRepository.findOne({ where: { id }, relations: ['section'] });
+				if (!plan || plan.status === 0) {
+					throw new NotFoundException('套餐计划不存在或已禁用');
+				}
+				if (!plan.section || plan.section.status === 0) {
+					throw new NotFoundException('套餐不存在或已禁用');
+				}
+				return {
+					type,
+					id: plan.id,
+					courseId: null,
+					name: `${plan.section.name} - ${plan.name}`,
+				};
+			}
+
+			const course = await this.courseRepository.findOne({ where: { id } });
+			if (!course) {
+				throw new NotFoundException('课程不存在');
+			}
+			return {
+				type: ActivationCodeTargetType.COURSE,
+				id: course.id,
+				courseId: course.id,
+				name: course.name,
 			};
 		}
 

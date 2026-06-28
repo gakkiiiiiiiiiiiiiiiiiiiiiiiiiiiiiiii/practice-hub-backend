@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsNumber, IsOptional, ValidateIf } from 'class-validator';
+import { IsIn, IsNumber, IsObject, IsOptional, ValidateIf } from 'class-validator';
 
 export class CreateOrderDto {
   @ApiPropertyOptional({ description: '课程ID（购买课程时必填）', example: 1 })
@@ -26,4 +26,9 @@ export class CreateOrderDto {
   @IsOptional()
   @IsNumber()
   coupon_id?: number;
+
+  @ApiPropertyOptional({ description: '纸质专业真题收货地址' })
+  @IsOptional()
+  @IsObject()
+  shipping_address?: Record<string, any>;
 }

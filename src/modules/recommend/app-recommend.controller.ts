@@ -13,6 +13,15 @@ import { UserCourseAuth } from '../../database/entities/user-course-auth.entity'
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
+type ProfessionalScope = {
+  category: string;
+  subCategory: string;
+};
+
+type ProfessionalFilter = {
+  scopes: ProfessionalScope[];
+};
+
 @ApiTags('小程序-首页推荐')
 @Controller('app/recommend')
 export class AppRecommendController {
@@ -41,9 +50,10 @@ export class AppRecommendController {
     @Query('mode') mode?: string,
     @Query('category') categoryName?: string,
     @Query('subCategory') subCategoryName?: string,
+    @Query('professionalScopes') professionalScopes?: string,
   ) {
     try {
-      const professionalFilter = this.buildProfessionalFilter(mode, categoryName, subCategoryName);
+      const professionalFilter = this.buildProfessionalFilter(mode, categoryName, subCategoryName, professionalScopes);
       // 查询所有启用的推荐版块
       const columnsExists = await this.hasColumnsColumn();
       const categories = await this.createCategoryQuery('category', columnsExists)
@@ -168,7 +178,7 @@ export class AppRecommendController {
 
           return {
             id: category.id,
-            name: professionalFilter ? professionalFilter.subCategory || professionalFilter.category : category.name,
+            name: professionalFilter ? this.getProfessionalFilterLabel(professionalFilter) : category.name,
             type: 'category',
             bind_category_id: category.bind_category_id || null,
             bind_category_name: primaryName,
@@ -203,7 +213,7 @@ export class AppRecommendController {
 
         return {
           id: category.id,
-          name: professionalFilter ? `${professionalFilter.subCategory || professionalFilter.category}推荐` : category.name,
+          name: professionalFilter ? `${this.getProfessionalFilterLabel(professionalFilter)}推荐` : category.name,
           type: category.type || 'course',
           columns: this.normalizeColumns(category.columns),
           items: sortedCourses,
@@ -259,37 +269,73 @@ export class AppRecommendController {
     return Math.min(4, Math.max(1, Math.round(value)));
   }
 
-  private buildProfessionalFilter(mode?: string, categoryName?: string, subCategoryName?: string) {
+  private buildProfessionalFilter(
+    mode?: string,
+    categoryName?: string,
+    subCategoryName?: string,
+    professionalScopes?: string,
+  ): ProfessionalFilter | null {
     if (String(mode || '').trim() !== 'professional') {
       return null;
     }
+    const scopes = this.parseProfessionalScopes(professionalScopes);
+    if (scopes.length > 0) {
+      return { scopes };
+    }
     const category = this.normalizeCategoryText(categoryName);
     const subCategory = this.normalizeCategoryText(subCategoryName);
-    if (!category) {
+    if (!category || !subCategory) {
       return null;
     }
-    return { category, subCategory };
+    return { scopes: [{ category, subCategory }] };
   }
 
   private normalizeCategoryText(value?: string | null) {
     return String(value || '').trim();
   }
 
+  private parseProfessionalScopes(value?: string): ProfessionalScope[] {
+    if (!value) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(value);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      const uniqueMap = new Map<string, ProfessionalScope>();
+      parsed.forEach((item) => {
+        const category = this.normalizeCategoryText(item?.category);
+        const subCategory = this.normalizeCategoryText(item?.subCategory || item?.sub_category);
+        if (!category || !subCategory) return;
+        uniqueMap.set(`${category}__${subCategory}`, { category, subCategory });
+      });
+      return Array.from(uniqueMap.values());
+    } catch (error) {
+      console.warn('解析专业模式筛选条件失败:', error);
+      return [];
+    }
+  }
+
+  private getProfessionalFilterLabel(filter: ProfessionalFilter) {
+    const names = filter.scopes.map((scope) => scope.subCategory).filter(Boolean);
+    if (names.length <= 1) {
+      return names[0] || '专业模式';
+    }
+    return names.length <= 2 ? names.join('、') : `${names.slice(0, 2).join('、')}等${names.length}个专业`;
+  }
+
   private matchesProfessionalFilter(
     categoryName: string | null | undefined,
     subCategoryName: string | null | undefined,
-    filter: { category: string; subCategory: string } | null,
+    filter: ProfessionalFilter | null,
   ) {
     if (!filter) {
       return true;
     }
-    if (this.normalizeCategoryText(categoryName) !== filter.category) {
-      return false;
-    }
-    if (filter.subCategory) {
-      return this.normalizeCategoryText(subCategoryName) === filter.subCategory;
-    }
-    return true;
+    const category = this.normalizeCategoryText(categoryName);
+    const subCategory = this.normalizeCategoryText(subCategoryName);
+    return filter.scopes.some((scope) => category === scope.category && subCategory === scope.subCategory);
   }
 
   private createCategoryQuery(alias: string, includeColumns: boolean) {

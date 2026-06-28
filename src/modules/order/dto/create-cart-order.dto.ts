@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsNumber, IsOptional } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsNumber, IsObject, IsOptional } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 
 export class CreateCartOrderDto {
@@ -27,4 +27,9 @@ export class CreateCartOrderDto {
 	})
 	@IsNumber()
 	coupon_id?: number;
+
+	@ApiPropertyOptional({ description: '纸质专业真题收货地址' })
+	@IsOptional()
+	@IsObject()
+	shipping_address?: Record<string, any>;
 }

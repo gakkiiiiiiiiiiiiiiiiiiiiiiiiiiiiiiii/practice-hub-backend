@@ -319,7 +319,9 @@ export class SystemService {
     const fallback = this.getDefaultCourseDefaultParams();
     const source = input || {};
     const isFree = Number(source.is_free ?? fallback.is_free) === 1 ? 1 : 0;
-    const contentType = source.content_type === 'file' ? 'file' : 'normal';
+    const contentType = ['normal', 'file', 'paper_exam'].includes(source.content_type)
+      ? source.content_type
+      : 'normal';
     return {
       subject: String(source.subject || '').trim(),
       school: String(source.school || '').trim(),

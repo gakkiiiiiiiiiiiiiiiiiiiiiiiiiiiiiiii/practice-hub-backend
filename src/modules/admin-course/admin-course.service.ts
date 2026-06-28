@@ -138,6 +138,9 @@ export class AdminCourseService {
 
   private async applyCreateCourseDefaults(dto: CreateCourseDto) {
     const defaults = await this.systemService.getCourseDefaultParams();
+    if (!dto.content_type) {
+      dto.content_type = defaults.content_type || 'normal';
+    }
     if (dto.subject === undefined || dto.subject === null) {
       dto.subject = defaults.subject || undefined;
     }
@@ -154,7 +157,7 @@ export class AdminCourseService {
       dto.answer_year = defaults.answer_year || undefined;
     }
     if (dto.price === undefined || dto.price === null) {
-      dto.price = defaults.price;
+      dto.price = dto.content_type === 'paper_exam' ? 80 : defaults.price;
     }
     if (dto.agent_price === undefined || dto.agent_price === null) {
       dto.agent_price = defaults.agent_price;
@@ -167,9 +170,6 @@ export class AdminCourseService {
     }
     if (dto.allow_source_file === undefined || dto.allow_source_file === null) {
       dto.allow_source_file = defaults.allow_source_file;
-    }
-    if (!dto.content_type) {
-      dto.content_type = defaults.content_type || 'normal';
     }
     if (dto.status === undefined || dto.status === null) {
       dto.status = defaults.status ?? 0;
