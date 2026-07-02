@@ -12,6 +12,7 @@ import { createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { Course } from '../../database/entities/course.entity';
+import { CourseCategory } from '../../database/entities/course-category.entity';
 import { CourseFile } from '../../database/entities/course-file.entity';
 import { CourseFileService } from './course-file.service';
 import { Chapter } from '../../database/entities/chapter.entity';
@@ -95,6 +96,8 @@ export class CourseService {
   constructor(
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
+    @InjectRepository(CourseCategory)
+    private courseCategoryRepository: Repository<CourseCategory>,
     @InjectRepository(Chapter)
     private chapterRepository: Repository<Chapter>,
     @InjectRepository(UserCourseAuth)
@@ -284,6 +287,114 @@ export class CourseService {
         packageAccessMap.get(course.id)?.hasAccess === true,
       expireTime: authMap.get(course.id)?.expire_time || packageAccessMap.get(course.id)?.expireTime || null,
     }));
+  }
+
+  async getCategoryBundleInfo(category?: string, subCategory?: string, userId?: number) {
+    const target = await this.resolveCategoryBundleTarget(category, subCategory);
+    if (!target) {
+      return {
+        available: false,
+        categoryId: null,
+        categoryName: String(subCategory || category || '').trim(),
+        primaryCategory: String(category || '').trim(),
+        subCategory: String(subCategory || '').trim(),
+        price: 30,
+        courseCount: 0,
+        purchasedCount: 0,
+        hasPurchasedAll: false,
+      };
+    }
+
+    const courses = await this.courseRepository.find({
+      where: {
+        category: target.primaryCategory,
+        ...(target.subCategory ? { sub_category: target.subCategory } : {}),
+        status: 1,
+      },
+      order: { sort: 'ASC', id: 'ASC' },
+    });
+    const courseIds = courses.map((course) => course.id);
+    let authMap = new Map<number, UserCourseAuth>();
+    let packageAccessMap = new Map<number, { hasAccess: boolean; expireTime: Date | null }>();
+    if (userId && courseIds.length > 0) {
+      const auths = await this.userCourseAuthRepository.find({
+        where: {
+          user_id: userId,
+          course_id: In(courseIds),
+        },
+      });
+      const now = Date.now();
+      authMap = new Map(
+        auths
+          .filter((auth) => !auth.expire_time || new Date(auth.expire_time).getTime() > now)
+          .map((auth) => [auth.course_id, auth]),
+      );
+      packageAccessMap = await this.packageService.batchUserHasCourseAccessViaPackage(userId, courses);
+    }
+
+    const purchasedCount = courses.filter(
+      (course) =>
+        Number(course.price || 0) === 0 ||
+        course.is_free === 1 ||
+        authMap.has(course.id) ||
+        packageAccessMap.get(course.id)?.hasAccess === true,
+    ).length;
+
+    return {
+      available: true,
+      categoryId: target.category.id,
+      categoryName: target.category.name,
+      primaryCategory: target.primaryCategory,
+      subCategory: target.subCategory,
+      price: Number(target.category.bundle_price ?? 30),
+      courseCount: courses.length,
+      purchasedCount,
+      hasPurchasedAll: courses.length > 0 && purchasedCount >= courses.length,
+    };
+  }
+
+  private async resolveCategoryBundleTarget(category?: string, subCategory?: string) {
+    const normalizedCategory = String(category || '').trim();
+    const normalizedSubCategory = String(subCategory || '').trim();
+    if (!normalizedCategory && !normalizedSubCategory) {
+      return null;
+    }
+
+    if (normalizedSubCategory) {
+      const query = this.courseCategoryRepository
+        .createQueryBuilder('category')
+        .leftJoin(CourseCategory, 'parent', 'parent.id = category.parent_id')
+        .where('category.status = :status', { status: 1 })
+        .andWhere('category.parent_id IS NOT NULL')
+        .andWhere('category.name = :subCategory', { subCategory: normalizedSubCategory });
+      if (normalizedCategory) {
+        query.andWhere('parent.name = :category', { category: normalizedCategory });
+      }
+      const matchedCategory = await query.getOne();
+      if (!matchedCategory) return null;
+      const parentCategory = matchedCategory.parent_id
+        ? await this.courseCategoryRepository.findOne({ where: { id: matchedCategory.parent_id } })
+        : null;
+      if (!parentCategory) return null;
+      return {
+        category: matchedCategory,
+        primaryCategory: parentCategory.name,
+        subCategory: matchedCategory.name,
+      };
+    }
+
+    const matchedCategory = await this.courseCategoryRepository.findOne({
+      where: {
+        name: normalizedCategory,
+        parent_id: null,
+      },
+    });
+    if (!matchedCategory) return null;
+    return {
+      category: matchedCategory,
+      primaryCategory: matchedCategory.name,
+      subCategory: '',
+    };
   }
 
   /**

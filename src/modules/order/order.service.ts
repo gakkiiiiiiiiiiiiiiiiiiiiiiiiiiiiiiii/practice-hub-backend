@@ -7,6 +7,7 @@ import * as https from 'https';
 import axios from 'axios';
 import { Order, OrderDeliveryStatus, OrderShippingAddress, OrderStatus } from '../../database/entities/order.entity';
 import { Course } from '../../database/entities/course.entity';
+import { CourseCategory } from '../../database/entities/course-category.entity';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -55,6 +56,8 @@ export class OrderService {
     private orderRepository: Repository<Order>,
     @InjectRepository(Course)
     private courseRepository: Repository<Course>,
+    @InjectRepository(CourseCategory)
+    private courseCategoryRepository: Repository<CourseCategory>,
     @InjectRepository(AppUser)
     private appUserRepository: Repository<AppUser>,
     @InjectRepository(UserCourseAuth)
@@ -77,6 +80,9 @@ export class OrderService {
     const orderType = dto.order_type || 'course';
     if (orderType === 'package') {
       return this.createPackageOrder(userId, dto, clientIp);
+    }
+    if (orderType === 'category') {
+      return this.createCategoryOrder(userId, dto, clientIp);
     }
     return this.createCourseOrder(userId, dto, clientIp);
   }
@@ -306,6 +312,143 @@ export class OrderService {
     });
   }
 
+  private async createCategoryOrder(userId: number, dto: CreateOrderDto, clientIp?: string) {
+    const categoryId = Number(dto.category_id || 0);
+    if (!categoryId) {
+      throw new BadRequestException('分类ID不能为空');
+    }
+
+    const category = await this.courseCategoryRepository.findOne({ where: { id: categoryId } });
+    if (!category) {
+      throw new NotFoundException('分类不存在');
+    }
+
+    const parentCategory = category.parent_id
+      ? await this.courseCategoryRepository.findOne({ where: { id: category.parent_id } })
+      : null;
+    if (category.parent_id && !parentCategory) {
+      throw new BadRequestException('上级分类不存在');
+    }
+
+    const primaryCategoryName = parentCategory?.name || category.name;
+    const subCategoryName = parentCategory ? category.name : '';
+    const courses = await this.courseRepository.find({
+      where: {
+        category: primaryCategoryName,
+        ...(subCategoryName ? { sub_category: subCategoryName } : {}),
+        status: 1,
+      },
+      order: { sort: 'ASC', id: 'ASC' },
+    });
+    if (courses.length === 0) {
+      throw new BadRequestException('该分类下暂无可购买课程');
+    }
+
+    const courseIds = courses.map((course) => course.id);
+    const [auths, packageAccessMap] = await Promise.all([
+      this.userCourseAuthRepository.find({
+        where: {
+          user_id: userId,
+          course_id: In(courseIds),
+        },
+      }),
+      this.packageService.batchUserHasCourseAccessViaPackage(userId, courses),
+    ]);
+    const now = Date.now();
+    const authMap = new Map(
+      auths
+        .filter((auth) => !auth.expire_time || new Date(auth.expire_time).getTime() > now)
+        .map((auth) => [auth.course_id, auth]),
+    );
+    const unownedCourses = courses.filter((course) => {
+      if (Number(course.price || 0) === 0 || course.is_free === 1) return false;
+      if (authMap.has(course.id)) return false;
+      return packageAccessMap.get(course.id)?.hasAccess !== true;
+    });
+    if (unownedCourses.length === 0) {
+      throw new BadRequestException('您已拥有该分类下全部课程');
+    }
+
+    const originalAmount = Number(category.bundle_price ?? 30);
+    if (originalAmount > 0) {
+      assertIntegerYuanPrice(originalAmount, '整类课程购买价格');
+    }
+    const amount = normalizePayAmountYuan(originalAmount);
+    const title = subCategoryName ? `${subCategoryName}全部课程` : `${primaryCategoryName}全部课程`;
+    const categoryBundlePayload = {
+      category_id: category.id,
+      category: primaryCategoryName,
+      sub_category: subCategoryName || null,
+      title,
+      course_ids: unownedCourses.map((course) => course.id),
+      course_count: courses.length,
+      grant_count: unownedCourses.length,
+    };
+
+    if (amount <= 0) {
+      const freeOrder = this.orderRepository.create({
+        order_no: this.generateOrderNo(),
+        user_id: userId,
+        course_id: null,
+        order_type: 'category',
+        amount: 0,
+        original_amount: originalAmount,
+        discount_amount: 0,
+        status: OrderStatus.PENDING,
+        pay_provider: 'free',
+        pay_payload: {
+          category_bundle: categoryBundlePayload,
+        },
+      });
+      await this.orderRepository.save(freeOrder);
+      await this.handlePaymentSuccess(freeOrder.id);
+      return {
+        order_no: freeOrder.order_no,
+        amount: freeOrder.amount,
+        order_type: 'category',
+        category_id: category.id,
+        course_ids: categoryBundlePayload.course_ids,
+        status: OrderStatus.PAID,
+        payment_params: null,
+      };
+    }
+
+    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+
+    const order = this.orderRepository.create({
+      order_no: this.generateOrderNo(),
+      user_id: userId,
+      course_id: null,
+      order_type: 'category',
+      amount,
+      original_amount: originalAmount,
+      discount_amount: 0,
+      status: OrderStatus.PENDING,
+      pay_provider: 'virtual_payment',
+      pay_payload: {
+        category_bundle: categoryBundlePayload,
+      },
+    });
+    await this.orderRepository.save(order);
+
+    return this.processCoinBasedPayment({
+      user,
+      userId,
+      order,
+      payAmountYuan: amount,
+      goodsTitle: title,
+      clientIp,
+      responseExtras: {
+        order_type: order.order_type,
+        category_id: category.id,
+        course_ids: categoryBundlePayload.course_ids,
+      },
+    });
+  }
+
   private async grantCourseAccess(userId: number, courseId: number) {
     const course = await this.courseRepository.findOne({
       where: { id: courseId },
@@ -530,6 +673,7 @@ export class OrderService {
       order.pay_provider = 'wechat_coin';
       order.amount = payAmountYuan;
       order.pay_payload = {
+        ...(order.pay_payload || {}),
         coin_purchase: {
           ...coinPurchase,
           recharge_coins: 0,
@@ -570,6 +714,7 @@ export class OrderService {
     order.amount = payAmountYuan;
     order.pay_provider = 'virtual_payment';
     order.pay_payload = {
+      ...(order.pay_payload || {}),
       coin_purchase: {
         ...coinPurchase,
         recharge_order_no: rechargeOrderNo,
@@ -586,6 +731,7 @@ export class OrderService {
     });
 
     order.pay_payload = {
+      ...(order.pay_payload || {}),
       coin_purchase: {
         ...coinPurchase,
         recharge_order_no: rechargeOrderNo,
@@ -633,6 +779,7 @@ export class OrderService {
       course_id: order.course_id,
       package_section_id: order.package_section_id,
       package_plan_id: order.package_plan_id,
+      category_id: order.pay_payload?.category_bundle?.category_id || null,
       goods_title: goodsTitle,
     });
     const signDataObject = {
@@ -1082,6 +1229,20 @@ export class OrderService {
         await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
       }
       return { message: '套餐订单支付成功' };
+    }
+
+    if (order.order_type === 'category') {
+      const categoryBundle = order.pay_payload?.category_bundle || {};
+      const courseIds = Array.isArray(categoryBundle.course_ids)
+        ? categoryBundle.course_ids.map((id: unknown) => Number(id)).filter((id: number) => id > 0)
+        : [];
+      for (const courseId of courseIds) {
+        await this.grantCourseAccess(order.user_id, courseId);
+      }
+      if (order.coupon_id) {
+        await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
+      }
+      return { message: '分类课程订单支付成功' };
     }
 
     const cartItems = Array.isArray(order.pay_payload?.cart_items) ? order.pay_payload.cart_items : [];
@@ -1576,11 +1737,14 @@ export class OrderService {
         row.contentType === 'paper_exam' ||
         cartItems.some((item) => item.contentType === 'paper_exam') ||
         Boolean(row.shippingAddress);
+      const categoryBundle = payPayload?.category_bundle || null;
       const productName =
         cartCount > 1
           ? `购物车(${cartCount}门课程)`
           : row.orderType === 'package'
             ? row.packageSectionName || '套餐'
+            : row.orderType === 'category'
+              ? categoryBundle?.title || '分类全部课程'
             : row.courseName || '课程';
 
       return {
@@ -1602,6 +1766,7 @@ export class OrderService {
         isCart: cartCount > 1,
         cartCount,
         cartItems,
+        categoryBundle,
         shippingAddress: this.parseJsonColumn(row.shippingAddress),
         requiresShipping,
         deliveryStatus: row.deliveryStatus || OrderDeliveryStatus.PENDING,
@@ -1683,6 +1848,23 @@ export class OrderService {
           order_type: order.order_type,
           package_section_id: order.package_section_id,
           package_plan_id: order.package_plan_id,
+        },
+      });
+    }
+
+    if (order.order_type === 'category') {
+      const categoryBundle = order.pay_payload?.category_bundle || {};
+      return this.processCoinBasedPayment({
+        user,
+        userId,
+        order,
+        payAmountYuan: this.getOrderPayAmountYuan(order),
+        goodsTitle: categoryBundle.title || '分类全部课程',
+        clientIp,
+        responseExtras: {
+          order_type: order.order_type,
+          category_id: categoryBundle.category_id || null,
+          course_ids: Array.isArray(categoryBundle.course_ids) ? categoryBundle.course_ids : [],
         },
       });
     }
@@ -2067,12 +2249,15 @@ export class OrderService {
           contentType: item.content_type || item.contentType || 'normal',
         }))
       : [];
+    const categoryBundle = payPayload?.category_bundle || null;
 
     const productName =
       cartItems.length > 1
         ? `购物车(${cartItems.length}门课程)`
         : row.orderType === 'package'
           ? row.packageSectionName || '套餐'
+          : row.orderType === 'category'
+            ? categoryBundle?.title || '分类全部课程'
           : row.courseName || '课程';
 
     return {
@@ -2120,6 +2305,7 @@ export class OrderService {
       productName,
       contentType: row.contentType || 'normal',
       cartItems,
+      categoryBundle,
       isCart: cartItems.length > 1,
       createTime: row.createTime,
       paidTime: row.paidTime,

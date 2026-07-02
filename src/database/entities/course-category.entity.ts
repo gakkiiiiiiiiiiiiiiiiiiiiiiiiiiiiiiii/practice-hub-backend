@@ -20,6 +20,9 @@ export class CourseCategory {
 	@Column({ type: 'varchar', length: 500, nullable: true })
 	cover_img: string | null; // 二级分类封面图
 
+	@Column({ type: 'decimal', precision: 10, scale: 2, default: 30 })
+	bundle_price: number; // 整个分类课程购买价（整数元）
+
 	@Column({ type: 'int', default: 0 })
 	sort: number; // 排序
 

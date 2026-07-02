@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsOptional, IsNumber } from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional, IsNumber, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateCourseCategoryDto {
@@ -18,6 +18,13 @@ export class CreateCourseCategoryDto {
 	@IsOptional()
 	@IsString()
 	cover_img?: string | null;
+
+	@ApiProperty({ description: '整类课程购买价格（整数元）', example: 30, required: false })
+	@IsOptional()
+	@Type(() => Number)
+	@IsNumber()
+	@Min(0)
+	bundle_price?: number;
 
 	@ApiProperty({ description: '排序', example: 0, required: false })
 	@IsOptional()

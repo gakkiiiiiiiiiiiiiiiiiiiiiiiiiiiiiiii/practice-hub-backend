@@ -49,7 +49,7 @@ export class Order {
 	course_id: number | null;
 
 	@Column({ type: 'varchar', length: 20, default: 'course' })
-	order_type: 'course' | 'package';
+	order_type: 'course' | 'package' | 'category';
 
 	@Column({ nullable: true })
 	package_section_id: number | null;

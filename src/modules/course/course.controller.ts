@@ -46,6 +46,19 @@ export class CourseController {
     return CommonResponseDto.success(result);
   }
 
+  @Get('category-bundle')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取分类整包购买信息' })
+  async getCategoryBundleInfo(
+    @Query('category') category?: string,
+    @Query('subCategory') subCategory?: string,
+    @CurrentUser() user?: any,
+  ) {
+    const result = await this.courseService.getCategoryBundleInfo(category, subCategory, user?.userId);
+    return CommonResponseDto.success(result);
+  }
+
   @Post(':id/preview-ticket')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()

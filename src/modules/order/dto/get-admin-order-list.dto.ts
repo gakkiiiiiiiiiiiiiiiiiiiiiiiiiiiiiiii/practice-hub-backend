@@ -24,10 +24,10 @@ export class GetAdminOrderListDto {
 	@IsIn(Object.values(OrderStatus))
 	status?: OrderStatus;
 
-	@ApiPropertyOptional({ description: '订单类型 course/package' })
+	@ApiPropertyOptional({ description: '订单类型 course/package/category' })
 	@IsOptional()
-	@IsIn(['course', 'package'])
-	order_type?: 'course' | 'package';
+	@IsIn(['course', 'package', 'category'])
+	order_type?: 'course' | 'package' | 'category';
 
 	@ApiPropertyOptional({ description: '关键词：订单号/用户昵称/手机号/用户ID' })
 	@IsOptional()

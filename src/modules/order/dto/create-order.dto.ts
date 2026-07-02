@@ -1,4 +1,4 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsNumber, IsObject, IsOptional, ValidateIf } from 'class-validator';
 
 export class CreateOrderDto {
@@ -7,10 +7,15 @@ export class CreateOrderDto {
   @IsNumber()
   course_id?: number;
 
-  @ApiPropertyOptional({ description: '订单类型', enum: ['course', 'package'], default: 'course' })
+  @ApiPropertyOptional({ description: '订单类型', enum: ['course', 'package', 'category'], default: 'course' })
   @IsOptional()
-  @IsIn(['course', 'package'])
-  order_type?: 'course' | 'package';
+  @IsIn(['course', 'package', 'category'])
+  order_type?: 'course' | 'package' | 'category';
+
+  @ApiPropertyOptional({ description: '分类ID（购买整类课程时必填）' })
+  @ValidateIf((dto) => dto.order_type === 'category')
+  @IsNumber()
+  category_id?: number;
 
   @ApiPropertyOptional({ description: '套餐ID（购买套餐时必填）' })
   @ValidateIf((dto) => dto.order_type === 'package')
