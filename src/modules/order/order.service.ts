@@ -152,6 +152,7 @@ export class OrderService {
 
     const amount = normalizePayAmountYuan(Math.max(0, originalAmount - discountAmount));
     const goodsTitle = cartItems.length > 1 ? `购物车(${cartItems.length}门课程)` : cartItems[0].name;
+    const requiresWechatPay = cartItems.some((item) => item.content_type === 'paper_exam');
 
     if (amount <= 0) {
       const freeOrder = this.orderRepository.create({
@@ -198,7 +199,7 @@ export class OrderService {
       discount_amount: discountAmount,
       coupon_id: couponId,
       status: OrderStatus.PENDING,
-      pay_provider: 'virtual_payment',
+      pay_provider: requiresWechatPay ? 'wechat_pay' : 'virtual_payment',
       shipping_address: shippingAddress,
       pay_payload: {
         is_cart: true,
@@ -206,6 +207,20 @@ export class OrderService {
       },
     });
     await this.orderRepository.save(order);
+
+    if (requiresWechatPay) {
+      return this.processWechatPayPayment({
+        user,
+        order,
+        goodsTitle,
+        clientIp,
+        responseExtras: {
+          order_type: order.order_type,
+          course_ids: cartItems.map((item) => item.course_id),
+          is_cart: true,
+        },
+      });
+    }
 
     return this.processCoinBasedPayment({
       user,
@@ -248,6 +263,7 @@ export class OrderService {
     }
 
     const amount = normalizePayAmountYuan(Math.max(0, originalAmount - discountAmount));
+    const requiresWechatPay = course.content_type === 'paper_exam';
 
     if (amount <= 0 || course.is_free === 1) {
       const freeOrder = this.orderRepository.create({
@@ -292,11 +308,24 @@ export class OrderService {
       discount_amount: discountAmount,
       coupon_id: couponId,
       status: OrderStatus.PENDING,
-      pay_provider: 'virtual_payment',
+      pay_provider: requiresWechatPay ? 'wechat_pay' : 'virtual_payment',
       shipping_address: shippingAddress,
     });
 
     await this.orderRepository.save(order);
+
+    if (requiresWechatPay) {
+      return this.processWechatPayPayment({
+        user,
+        order,
+        goodsTitle: course.name || '纸质专业真题',
+        clientIp,
+        responseExtras: {
+          course_id: order.course_id,
+          order_type: order.order_type,
+        },
+      });
+    }
 
     return this.processCoinBasedPayment({
       user,
@@ -689,6 +718,7 @@ export class OrderService {
         amount: order.amount,
         ...responseExtras,
         status: OrderStatus.PAID,
+        pay_provider: order.pay_provider,
         payment_params: null,
       };
     }
@@ -704,6 +734,7 @@ export class OrderService {
             amount: order.amount,
             ...responseExtras,
             status: OrderStatus.PAID,
+            pay_provider: order.pay_provider,
             payment_params: null,
           };
         }
@@ -746,8 +777,105 @@ export class OrderService {
       amount: order.amount,
       ...responseExtras,
       status: order.status,
+      pay_provider: order.pay_provider,
       payment_params: paymentParams.payment_params,
     };
+  }
+
+  private async processWechatPayPayment({
+    user,
+    order,
+    goodsTitle,
+    clientIp,
+    responseExtras,
+  }: {
+    user: AppUser;
+    order: Order;
+    goodsTitle: string;
+    clientIp?: string;
+    responseExtras: Record<string, unknown>;
+  }) {
+    const paymentParams = await this.createWechatPayPaymentParams({
+      user,
+      order,
+      goodsTitle,
+      clientIp,
+    });
+
+    order.pay_provider = 'wechat_pay';
+    order.pay_payload = {
+      ...(order.pay_payload || {}),
+      wechat_pay: {
+        out_trade_no: order.order_no,
+        total_fee: Math.max(1, Math.round(Number(order.amount || 0) * 100)),
+        body: goodsTitle,
+        payment_params: paymentParams,
+      },
+      payment_params: paymentParams,
+    };
+    await this.orderRepository.save(order);
+
+    return {
+      order_no: order.order_no,
+      amount: order.amount,
+      ...responseExtras,
+      status: order.status,
+      pay_provider: 'wechat_pay',
+      payment_params: paymentParams,
+    };
+  }
+
+  private async createWechatPayPaymentParams({
+    user,
+    order,
+    goodsTitle,
+    clientIp,
+  }: {
+    user: AppUser;
+    order: Order;
+    goodsTitle: string;
+    clientIp?: string;
+  }) {
+    if (!user.openid) {
+      throw new BadRequestException('用户 openid 缺失，请重新登录后再试');
+    }
+
+    const config = this.getCloudPayConfig();
+    const totalFee = Math.max(1, Math.round(Number(order.amount || 0) * 100));
+    const result = await this.callWechatPayOpenApi('unifiedorder', {
+      body: String(goodsTitle || '订单支付').slice(0, 127),
+      out_trade_no: order.order_no,
+      sub_mch_id: config.subMchId,
+      total_fee: totalFee,
+      openid: user.openid,
+      spbill_create_ip: clientIp || config.spbillCreateIp,
+      env_id: config.callbackEnvId,
+      callback_type: 2,
+      container: {
+        service: config.callbackService,
+        path: config.callbackPath,
+      },
+    });
+
+    return this.normalizeWechatPayPaymentParams(result);
+  }
+
+  private normalizeWechatPayPaymentParams(result: Record<string, any>) {
+    const payment = result?.payment || result?.pay_info || result?.payInfo || result || {};
+    const paymentParams = {
+      timeStamp: String(payment.timeStamp || payment.timestamp || payment.time_stamp || ''),
+      nonceStr: String(payment.nonceStr || payment.nonce_str || ''),
+      package: String(payment.package || payment.packageValue || payment.package_value || ''),
+      signType: String(payment.signType || payment.sign_type || 'MD5'),
+      paySign: String(payment.paySign || payment.pay_sign || ''),
+    };
+
+    if (!paymentParams.timeStamp || !paymentParams.nonceStr || !paymentParams.package || !paymentParams.paySign) {
+      this.logger.error('微信普通支付统一下单返回参数不完整', { result });
+      throw new BadRequestException('微信支付统一下单返回参数不完整，请稍后重试');
+    }
+
+    return paymentParams;
   }
 
   private generateRechargeOrderNo(orderNo: string) {
@@ -1306,13 +1434,41 @@ export class OrderService {
     if (order.status !== OrderStatus.PENDING) {
       throw new BadRequestException('当前订单状态不可确认支付');
     }
-    if (!['virtual_payment', 'wechat_coin'].includes(String(order.pay_provider || ''))) {
+    if (!['virtual_payment', 'wechat_coin', 'wechat_pay'].includes(String(order.pay_provider || ''))) {
       throw new BadRequestException('订单支付方式不匹配');
     }
 
     const user = await this.appUserRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('用户不存在');
+    }
+
+    if (order.pay_provider === 'wechat_pay') {
+      const result = await this.waitForWechatPaySuccess(
+        order.order_no,
+        Number(this.configService.get<string>('WECHAT_PAY_QUERY_ATTEMPTS') || 5),
+      );
+      const tradeState = result?.trade_state || result?.tradeState;
+      if (tradeState !== 'SUCCESS') {
+        throw new BadRequestException('暂未查询到微信支付成功记录，请稍后再试');
+      }
+
+      order.pay_payload = {
+        ...(order.pay_payload || {}),
+        wechat_pay_confirm: {
+          confirmed_at: new Date().toISOString(),
+          source: 'client_confirm',
+          query_result: result,
+        },
+      };
+      await this.orderRepository.save(order);
+      await this.handlePaymentSuccess(order.id);
+
+      return {
+        message: '支付确认成功',
+        order_no: order.order_no,
+        status: OrderStatus.PAID,
+      };
     }
 
     const result = await this.tryFulfillVirtualPaymentOrder(order, user, clientIp, {
@@ -1331,6 +1487,20 @@ export class OrderService {
 
   private generateRefundOrderId(orderNo: string, suffix: string) {
     return `${orderNo}_${suffix}`.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32);
+  }
+
+  private async refundWechatPayOrder(order: Order, refundOrderId: string, remark: string) {
+    const config = this.getCloudPayConfig();
+    const refundFeeCents = Math.max(1, Math.round(Number(order.amount || 0) * 100));
+    return this.callWechatPayOpenApi('refund', {
+      sub_mch_id: config.subMchId,
+      out_trade_no: order.order_no,
+      out_refund_no: refundOrderId,
+      total_fee: refundFeeCents,
+      refund_fee: refundFeeCents,
+      refund_desc: String(remark || '售后退款').slice(0, 80),
+      nonce_str: this.generateNonceStr(),
+    });
   }
 
   private async revokeCourseAccess(userId: number, courseId: number) {
@@ -1385,7 +1555,15 @@ export class OrderService {
     const refundRecords: Record<string, unknown> = {};
 
     if (Number(order.amount || 0) > 0) {
-      if (coinPurchase.currency_paid) {
+      if (order.pay_provider === 'wechat_pay') {
+        const wechatPayRefundOrderId = this.generateRefundOrderId(order.order_no, 'WX_RF');
+        refundRecords.wechat_pay_refund = await this.refundWechatPayOrder(
+          order,
+          wechatPayRefundOrderId,
+          dto?.remark || '售后退款',
+        );
+        refundRecords.wechat_pay_refund_order_id = wechatPayRefundOrderId;
+      } else if (coinPurchase.currency_paid) {
         const currencyPayOrderId = String(coinPurchase.currency_pay_order_id || `${order.order_no}_COIN`);
         const currencyRefundOrderId = this.generateRefundOrderId(order.order_no, 'COIN_RF');
         refundRecords.currency_refund = await this.coinService.cancelCurrencyPayForOrder({
@@ -1668,6 +1846,29 @@ export class OrderService {
     });
   }
 
+  private async waitForWechatPaySuccess(orderNo: string, attempts = 5) {
+    const maxAttempts = Math.max(1, attempts);
+    let lastResult: Record<string, any> | null = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        lastResult = await this.queryWechatPayOrder(orderNo);
+        const tradeState = lastResult?.trade_state || lastResult?.tradeState;
+        if (tradeState === 'SUCCESS') {
+          return lastResult;
+        }
+      } catch (error) {
+        if (attempt >= maxAttempts) {
+          throw error;
+        }
+        this.logger.warn(`查询微信普通支付订单失败 ${orderNo}: ${error?.message || error}`);
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+    }
+    return lastResult || {};
+  }
+
   /**
    * 获取订单统计数量
    */
@@ -1800,13 +2001,49 @@ export class OrderService {
         payment_params: null,
       };
     }
-    if (order.status !== OrderStatus.PENDING || order.pay_provider !== 'virtual_payment') {
+    if (
+      order.status !== OrderStatus.PENDING ||
+      !['virtual_payment', 'wechat_pay'].includes(String(order.pay_provider || ''))
+    ) {
       throw new BadRequestException('当前订单不可继续支付');
     }
 
     const user = await this.appUserRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException('用户不存在');
+    }
+
+    const course = order.course_id
+      ? await this.courseRepository.findOne({ where: { id: order.course_id } })
+      : null;
+    if (order.pay_provider === 'wechat_pay') {
+      const cartCount = Array.isArray(order.pay_payload?.cart_items) ? order.pay_payload.cart_items.length : 0;
+      const goodsTitle = order.pay_payload?.is_cart
+        ? cartCount > 1
+          ? `购物车(${cartCount}门课程)`
+          : order.pay_payload?.cart_items?.[0]?.name || course?.name || '纸质专业真题'
+        : course?.name || '纸质专业真题';
+
+      return this.processWechatPayPayment({
+        user,
+        order,
+        goodsTitle,
+        clientIp,
+        responseExtras: {
+          course_id: order.course_id,
+          order_type: order.order_type,
+          ...(order.pay_payload?.is_cart
+            ? {
+                course_ids: Array.isArray(order.pay_payload?.cart_items)
+                  ? order.pay_payload.cart_items
+                      .map((item: Record<string, any>) => Number(item?.course_id))
+                      .filter((id) => id > 0)
+                  : [],
+                is_cart: true,
+              }
+            : {}),
+        },
+      });
     }
 
     const fulfilled = await this.tryFulfillVirtualPaymentOrder(order, user, clientIp);
@@ -1869,9 +2106,6 @@ export class OrderService {
       });
     }
 
-    const course = order.course_id
-      ? await this.courseRepository.findOne({ where: { id: order.course_id } })
-      : null;
     if (!course && !order.pay_payload?.is_cart) {
       throw new NotFoundException('课程不存在');
     }

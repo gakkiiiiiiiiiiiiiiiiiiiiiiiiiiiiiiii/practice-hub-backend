@@ -61,6 +61,16 @@ import { CourseTypeModule } from './modules/course-type/course-type.module';
 				const dbConnectionLimit = configService.get<number>('DB_CONNECTION_LIMIT', 10);
 				const dbMaxIdle = configService.get<number>('DB_MAX_IDLE', Math.max(1, Math.floor(dbConnectionLimit / 2)));
 				const dbIdleTimeout = configService.get<number>('DB_IDLE_TIMEOUT', 30000);
+				const dbSynchronizeEnabled =
+					String(configService.get('DB_SYNCHRONIZE', 'false')).toLowerCase() === 'true';
+				const synchronize = nodeEnv !== 'production' && dbSynchronizeEnabled;
+				const logging =
+					String(configService.get('DB_LOGGING', nodeEnv === 'development' ? 'true' : 'false')).toLowerCase() ===
+					'true';
+
+				if (nodeEnv === 'production' && dbSynchronizeEnabled) {
+					console.warn('[数据库配置] 生产环境已忽略 DB_SYNCHRONIZE=true，请使用迁移脚本更新表结构');
+				}
 
 				// 安全：不在日志中打印敏感信息（如密码）
 				console.log(`[数据库配置] 连接地址: ${dbHost}:${dbPort}, 数据库: ${dbDatabase}`);
@@ -73,8 +83,8 @@ import { CourseTypeModule } from './modules/course-type/course-type.module';
 					password: dbPassword,
 					database: dbDatabase,
 					entities: [__dirname + '/**/*.entity{.ts,.js}'],
-					synchronize: nodeEnv === 'development',
-					logging: nodeEnv === 'development',
+					synchronize,
+					logging,
 					timezone: '+08:00',
 					charset: 'utf8mb4',
 					retryAttempts: 10,

@@ -81,6 +81,12 @@ npm run migrate
 # 远程数据库
 npm run migrate:remote
 
+# 检查本地数据库结构是否与实体定义一致
+npm run check:schema
+
+# 检查远程数据库结构是否与实体定义一致
+npm run check:schema:remote
+
 # 只执行指定文件
 npm run migrate -- --file=update_feedback_for_admin.sql
 
@@ -106,6 +112,9 @@ docker exec practice-hub-mysql mysqldump -uroot -proot123456 practice_hub > back
 # 通用迁移脚本（推荐）
 cd back-end
 npm run migrate
+
+# 迁移后检查实体字段是否都已落库
+npm run check:schema
 ```
 
 ### 验证迁移结果
@@ -209,6 +218,8 @@ AND COLUMN_NAME = 'user_id';
 ## 通用迁移脚本说明
 
 1. 迁移脚本默认按文件名排序执行
-2. 自动创建 `schema_migrations` 记录执行历史
-3. 默认跳过以 `rollback_` 开头的 SQL 文件
-4. 如需重新执行，使用 `--force` 参数
+2. 默认排除文件名包含 `rollback` 的 SQL 文件
+3. 脚本不维护 `schema_migrations` 执行历史，重复执行依赖 SQL 自身的幂等性
+4. 明确的重复字段、重复索引、重复表、待删除字段/索引不存在等幂等错误会跳过
+5. 缺表、缺字段、SQL 语法错误会中断执行，避免静默跳过真实结构问题
+6. 迁移完成后运行 `npm run check:schema` 或 `npm run check:schema:remote` 验证实体字段是否都已落库

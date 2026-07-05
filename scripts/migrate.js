@@ -93,16 +93,14 @@ async function runMigration(conn, fileName) {
 				code === 'ER_DUP_KEYNAME' ||
 				code === 'ER_TABLE_EXISTS_ERROR' ||
 				code === 'ER_CANT_DROP_FIELD_OR_KEY' ||
-				code === 'ER_DUP_ENTRY' ||
-				code === 'ER_NO_SUCH_TABLE' ||
-				code === 'ER_BAD_FIELD_ERROR' ||
-				msg.includes("doesn't exist") ||
-				msg.includes('Unknown column') ||
 				msg.includes('Duplicate column') ||
 				msg.includes('already exists') ||
 				msg.includes('Duplicate key') ||
 				msg.includes("check that column/key exists");
-			if (skip) continue;
+			if (skip) {
+				console.log('    - 跳过幂等错误:', code || msg);
+				continue;
+			}
 			throw err;
 		}
 	}
