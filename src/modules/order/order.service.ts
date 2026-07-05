@@ -351,6 +351,9 @@ export class OrderService {
     if (!category) {
       throw new NotFoundException('分类不存在');
     }
+    if (Number(category.bundle_enabled ?? 1) !== 1) {
+      throw new BadRequestException('该分类未开启整类购买');
+    }
 
     const parentCategory = category.parent_id
       ? await this.courseCategoryRepository.findOne({ where: { id: category.parent_id } })

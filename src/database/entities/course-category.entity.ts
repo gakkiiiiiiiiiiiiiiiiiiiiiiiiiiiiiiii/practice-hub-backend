@@ -23,6 +23,9 @@ export class CourseCategory {
 	@Column({ type: 'decimal', precision: 10, scale: 2, default: 30 })
 	bundle_price: number; // 整个分类课程购买价（整数元）
 
+	@Column({ type: 'tinyint', default: 1 })
+	bundle_enabled: number; // 是否在小程序分类列表展示整类购买入口
+
 	@Column({ type: 'int', default: 0 })
 	sort: number; // 排序
 

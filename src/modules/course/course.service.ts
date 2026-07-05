@@ -304,6 +304,20 @@ export class CourseService {
         hasPurchasedAll: false,
       };
     }
+    if (Number(target.category.bundle_enabled ?? 1) !== 1) {
+      return {
+        available: false,
+        categoryId: target.category.id,
+        categoryName: target.category.name,
+        primaryCategory: target.primaryCategory,
+        subCategory: target.subCategory,
+        price: Number(target.category.bundle_price ?? 30),
+        courseCount: 0,
+        purchasedCount: 0,
+        hasPurchasedAll: false,
+        bundleEnabled: false,
+      };
+    }
 
     const courses = await this.courseRepository.find({
       where: {
@@ -347,6 +361,7 @@ export class CourseService {
       primaryCategory: target.primaryCategory,
       subCategory: target.subCategory,
       price: Number(target.category.bundle_price ?? 30),
+      bundleEnabled: true,
       courseCount: courses.length,
       purchasedCount,
       hasPurchasedAll: courses.length > 0 && purchasedCount >= courses.length,

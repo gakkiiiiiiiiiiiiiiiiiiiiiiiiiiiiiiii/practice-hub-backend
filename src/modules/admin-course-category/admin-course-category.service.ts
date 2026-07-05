@@ -68,6 +68,7 @@ export class AdminCourseCategoryService {
 			parent_id: dto.parent_id ?? null,
 			cover_img: dto.cover_img ?? null,
 			bundle_price: dto.bundle_price ?? 30,
+			bundle_enabled: dto.bundle_enabled ?? 1,
 			sort: dto.sort ?? 0,
 			status: dto.status ?? 1,
 		});
