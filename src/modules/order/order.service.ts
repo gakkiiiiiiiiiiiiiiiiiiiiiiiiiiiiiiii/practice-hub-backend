@@ -117,16 +117,18 @@ export class OrderService {
       const price = Number(course.price || 0);
       assertIntegerYuanPrice(price, `《${course.name}》价格`);
 
-      const existingAuth = await this.userCourseAuthRepository.findOne({
-        where: { user_id: userId, course_id: courseId },
-      });
-      if (existingAuth) {
-        throw new BadRequestException(`您已拥有《${course.name}》`);
-      }
+      if (course.content_type !== 'paper_exam') {
+        const existingAuth = await this.userCourseAuthRepository.findOne({
+          where: { user_id: userId, course_id: courseId },
+        });
+        if (existingAuth) {
+          throw new BadRequestException(`您已拥有《${course.name}》`);
+        }
 
-      const hasPackageAccess = await this.packageService.userHasCourseAccessViaPackage(userId, course);
-      if (hasPackageAccess) {
-        throw new BadRequestException(`套餐已包含《${course.name}》`);
+        const hasPackageAccess = await this.packageService.userHasCourseAccessViaPackage(userId, course);
+        if (hasPackageAccess) {
+          throw new BadRequestException(`套餐已包含《${course.name}》`);
+        }
       }
 
       cartItems.push({
