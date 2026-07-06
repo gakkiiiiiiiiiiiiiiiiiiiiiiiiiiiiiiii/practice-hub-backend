@@ -28,6 +28,15 @@ type ShipOrderActor = {
   operatorId?: number;
 };
 
+type CloudPayConfig = {
+  subAppid: string;
+  subMchId: string;
+  callbackEnvId: string;
+  callbackService: string;
+  callbackPath: string;
+  spbillCreateIp: string;
+};
+
 type LogisticsSnapshot = {
   provider: 'kdniao';
   configured: boolean;
@@ -800,11 +809,13 @@ export class OrderService {
     clientIp?: string;
     responseExtras: Record<string, unknown>;
   }) {
+    const config = this.getCloudPayConfig();
     const paymentParams = await this.createWechatPayPaymentParams({
       user,
       order,
       goodsTitle,
       clientIp,
+      config,
     });
 
     order.pay_provider = 'wechat_pay';
@@ -812,6 +823,10 @@ export class OrderService {
       ...(order.pay_payload || {}),
       wechat_pay: {
         out_trade_no: order.order_no,
+        sub_mch_id: config.subMchId,
+        callback_env_id: config.callbackEnvId,
+        callback_service: config.callbackService,
+        callback_path: config.callbackPath,
         total_fee: Math.max(1, Math.round(Number(order.amount || 0) * 100)),
         body: goodsTitle,
         payment_params: paymentParams,
@@ -835,30 +850,32 @@ export class OrderService {
     order,
     goodsTitle,
     clientIp,
+    config,
   }: {
     user: AppUser;
     order: Order;
     goodsTitle: string;
     clientIp?: string;
+    config?: CloudPayConfig;
   }) {
     if (!user.openid) {
       throw new BadRequestException('用户 openid 缺失，请重新登录后再试');
     }
 
-    const config = this.getCloudPayConfig();
+    const cloudPayConfig = config || this.getCloudPayConfig();
     const totalFee = Math.max(1, Math.round(Number(order.amount || 0) * 100));
     const result = await this.callWechatPayOpenApi('unifiedorder', {
       body: String(goodsTitle || '订单支付').slice(0, 127),
       out_trade_no: order.order_no,
-      sub_mch_id: config.subMchId,
+      sub_mch_id: cloudPayConfig.subMchId,
       total_fee: totalFee,
       openid: user.openid,
-      spbill_create_ip: clientIp || config.spbillCreateIp,
-      env_id: config.callbackEnvId,
+      spbill_create_ip: clientIp || cloudPayConfig.spbillCreateIp,
+      env_id: cloudPayConfig.callbackEnvId,
       callback_type: 2,
       container: {
-        service: config.callbackService,
-        path: config.callbackPath,
+        service: cloudPayConfig.callbackService,
+        path: cloudPayConfig.callbackPath,
       },
     });
 
@@ -1028,7 +1045,7 @@ export class OrderService {
     return crypto.createHmac('sha256', secret).update(data).digest('hex');
   }
 
-  private getCloudPayConfig() {
+  private getCloudPayConfig(): CloudPayConfig {
     const subAppid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
     const subMchId = this.configService.get<string>('WECHAT_PAY_MCH_ID') || this.configService.get<string>('MCH_ID') || '1111726570';
     const callbackEnvId =
@@ -1051,6 +1068,52 @@ export class OrderService {
       callbackService,
       callbackPath,
       spbillCreateIp,
+    };
+  }
+
+  private pickPayloadString(payload: Record<string, any> | undefined | null, keys: string[]) {
+    if (!payload || typeof payload !== 'object') {
+      return '';
+    }
+
+    for (const key of keys) {
+      const value = payload[key];
+      if (value !== undefined && value !== null) {
+        const text = String(value).trim();
+        if (text) {
+          return text;
+        }
+      }
+    }
+    return '';
+  }
+
+  private getWechatPaySubMchIdFromOrder(order: Pick<Order, 'pay_payload'> | null | undefined) {
+    const payPayload = order?.pay_payload || {};
+    return (
+      this.pickPayloadString(payPayload.wechat_pay, ['sub_mch_id', 'subMchId']) ||
+      this.pickPayloadString(payPayload.wechat_pay_callback, ['sub_mch_id', 'subMchId']) ||
+      this.pickPayloadString(payPayload.wechat_pay_confirm?.query_result, ['sub_mch_id', 'subMchId']) ||
+      this.pickPayloadString(payPayload.wechat_pay_admin_sync?.query_result, ['sub_mch_id', 'subMchId'])
+    );
+  }
+
+  private getWechatPayTransactionIdFromOrder(order: Pick<Order, 'pay_payload'> | null | undefined) {
+    const payPayload = order?.pay_payload || {};
+    return (
+      this.pickPayloadString(payPayload.wechat_pay, ['transaction_id', 'transactionId']) ||
+      this.pickPayloadString(payPayload.wechat_pay_callback, ['transaction_id', 'transactionId']) ||
+      this.pickPayloadString(payPayload.wechat_pay_confirm?.query_result, ['transaction_id', 'transactionId']) ||
+      this.pickPayloadString(payPayload.wechat_pay_admin_sync?.query_result, ['transaction_id', 'transactionId'])
+    );
+  }
+
+  private getCloudPayConfigForOrder(order: Pick<Order, 'pay_payload'> | null | undefined) {
+    const config = this.getCloudPayConfig();
+    const orderSubMchId = this.getWechatPaySubMchIdFromOrder(order);
+    return {
+      ...config,
+      subMchId: orderSubMchId || config.subMchId,
     };
   }
 
@@ -1279,7 +1342,7 @@ export class OrderService {
           result,
           request: this.maskWechatPayRequest(data),
         });
-        throw new BadRequestException(this.getWechatPayErrorMessage(result, `微信支付${apiName}接口失败`));
+        throw new BadRequestException(this.getWechatPayErrorMessage(result, `微信支付${apiName}接口失败`, apiName));
       }
       return result;
     } catch (error) {
@@ -1291,7 +1354,7 @@ export class OrderService {
         error: error?.message || error,
       });
       throw new BadRequestException(
-        this.getWechatPayErrorMessage(responseData, '') ||
+        this.getWechatPayErrorMessage(responseData, '', apiName) ||
         error?.message ||
         `微信支付${apiName}接口调用失败`,
       );
@@ -1308,9 +1371,10 @@ export class OrderService {
     return data;
   }
 
-  private getWechatPayErrorMessage(result: Record<string, any> | undefined, fallback: string) {
+  private getWechatPayErrorMessage(result: Record<string, any> | undefined, fallback: string, apiName?: string) {
     if (!result) return fallback;
-    return (
+    const code = String(result.err_code || result.errCode || result.code || '').trim();
+    const message = String(
       result.err_code_des ||
       result.errCodeDes ||
       result.return_msg ||
@@ -1319,8 +1383,18 @@ export class OrderService {
       result.errMsg ||
       result.message ||
       result.msg ||
-      fallback
+      fallback ||
+      '',
     );
+
+    if (code === 'NO_AUTH' || message.includes('特约子商户商户号未授权服务商的产品权限')) {
+      if (apiName === 'refund') {
+        return '微信支付退款权限未授权：请在微信云开发/云托管支付设置或微信支付商户平台授权退款 API 后重试';
+      }
+      return '微信支付商户权限未授权：请检查服务商与子商户的产品权限授权';
+    }
+
+    return message || fallback;
   }
 
   private maskWechatPayRequest(data: Record<string, any>) {
@@ -1452,6 +1526,7 @@ export class OrderService {
       const result = await this.waitForWechatPaySuccess(
         order.order_no,
         Number(this.configService.get<string>('WECHAT_PAY_QUERY_ATTEMPTS') || 5),
+        order,
       );
       const tradeState = result?.trade_state || result?.tradeState;
       if (tradeState !== 'SUCCESS') {
@@ -1495,17 +1570,19 @@ export class OrderService {
   }
 
   private async refundWechatPayOrder(order: Order, refundOrderId: string, remark: string) {
-    const config = this.getCloudPayConfig();
+    const config = this.getCloudPayConfigForOrder(order);
+    const transactionId = this.getWechatPayTransactionIdFromOrder(order);
     const refundFeeCents = Math.max(1, Math.round(Number(order.amount || 0) * 100));
-    return this.callWechatPayOpenApi('refund', {
+    const refundRequest = {
       sub_mch_id: config.subMchId,
-      out_trade_no: order.order_no,
       out_refund_no: refundOrderId,
       total_fee: refundFeeCents,
       refund_fee: refundFeeCents,
       refund_desc: String(remark || '售后退款').slice(0, 80),
       nonce_str: this.generateNonceStr(),
-    });
+      ...(transactionId ? { transaction_id: transactionId } : { out_trade_no: order.order_no }),
+    };
+    return this.callWechatPayOpenApi('refund', refundRequest);
   }
 
   private async revokeCourseAccess(userId: number, courseId: number) {
@@ -1654,6 +1731,7 @@ export class OrderService {
       const result = await this.waitForWechatPaySuccess(
         order.order_no,
         Number(this.configService.get<string>('WECHAT_PAY_QUERY_ATTEMPTS') || 5),
+        order,
       );
       const tradeState = result?.trade_state || result?.tradeState;
       if (tradeState !== 'SUCCESS') {
@@ -1870,8 +1948,8 @@ export class OrderService {
     await this.handlePaymentSuccess(order.id);
   }
 
-  private async queryWechatPayOrder(orderNo: string) {
-    const config = this.getCloudPayConfig();
+  private async queryWechatPayOrder(orderNo: string, order?: Pick<Order, 'pay_payload'>) {
+    const config = order ? this.getCloudPayConfigForOrder(order) : this.getCloudPayConfig();
     return this.callWechatPayOpenApi('queryorder', {
       sub_mch_id: config.subMchId,
       out_trade_no: orderNo,
@@ -1879,12 +1957,12 @@ export class OrderService {
     });
   }
 
-  private async waitForWechatPaySuccess(orderNo: string, attempts = 5) {
+  private async waitForWechatPaySuccess(orderNo: string, attempts = 5, order?: Pick<Order, 'pay_payload'>) {
     const maxAttempts = Math.max(1, attempts);
     let lastResult: Record<string, any> | null = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        lastResult = await this.queryWechatPayOrder(orderNo);
+        lastResult = await this.queryWechatPayOrder(orderNo, order);
         const tradeState = lastResult?.trade_state || lastResult?.tradeState;
         if (tradeState === 'SUCCESS') {
           return lastResult;
@@ -2132,12 +2210,20 @@ export class OrderService {
     const course = order.course_id
       ? await this.courseRepository.findOne({ where: { id: order.course_id } })
       : null;
-    if (order.pay_provider === 'wechat_pay') {
-      const cartCount = Array.isArray(order.pay_payload?.cart_items) ? order.pay_payload.cart_items.length : 0;
-      const goodsTitle = order.pay_payload?.is_cart
+    const payPayload = this.parseJsonColumn(order.pay_payload) || {};
+    const requiresShipping = await this.orderRequiresShipping(order);
+
+    if (requiresShipping && !order.shipping_address) {
+      throw new BadRequestException('纸质专业真题需要填写收货地址');
+    }
+
+    if (order.pay_provider === 'wechat_pay' || requiresShipping) {
+      const cartItems = Array.isArray(payPayload.cart_items) ? payPayload.cart_items : [];
+      const cartCount = cartItems.length;
+      const goodsTitle = payPayload.is_cart
         ? cartCount > 1
           ? `购物车(${cartCount}门课程)`
-          : order.pay_payload?.cart_items?.[0]?.name || course?.name || '纸质专业真题'
+          : cartItems[0]?.name || course?.name || '纸质专业真题'
         : course?.name || '纸质专业真题';
 
       return this.processWechatPayPayment({
@@ -2148,10 +2234,10 @@ export class OrderService {
         responseExtras: {
           course_id: order.course_id,
           order_type: order.order_type,
-          ...(order.pay_payload?.is_cart
+          ...(payPayload.is_cart
             ? {
-                course_ids: Array.isArray(order.pay_payload?.cart_items)
-                  ? order.pay_payload.cart_items
+                course_ids: Array.isArray(payPayload.cart_items)
+                  ? payPayload.cart_items
                       .map((item: Record<string, any>) => Number(item?.course_id))
                       .filter((id) => id > 0)
                   : [],
@@ -2173,7 +2259,7 @@ export class OrderService {
       };
     }
 
-    const existingPaymentParams = order.pay_payload?.payment_params;
+    const existingPaymentParams = payPayload.payment_params;
     if (existingPaymentParams) {
       return {
         order_no: order.order_no,
@@ -2206,7 +2292,7 @@ export class OrderService {
     }
 
     if (order.order_type === 'category') {
-      const categoryBundle = order.pay_payload?.category_bundle || {};
+      const categoryBundle = payPayload.category_bundle || {};
       return this.processCoinBasedPayment({
         user,
         userId,
@@ -2222,16 +2308,16 @@ export class OrderService {
       });
     }
 
-    if (!course && !order.pay_payload?.is_cart) {
+    if (!course && !payPayload.is_cart) {
       throw new NotFoundException('课程不存在');
     }
 
-    const activationPurchase = order.pay_payload?.activation_code_purchase;
-    const cartCount = Array.isArray(order.pay_payload?.cart_items) ? order.pay_payload.cart_items.length : 0;
-    const goodsTitle = order.pay_payload?.is_cart
+    const activationPurchase = payPayload.activation_code_purchase;
+    const cartCount = Array.isArray(payPayload.cart_items) ? payPayload.cart_items.length : 0;
+    const goodsTitle = payPayload.is_cart
       ? cartCount > 1
         ? `购物车(${cartCount}门课程)`
-        : order.pay_payload?.cart_items?.[0]?.name || course?.name || '课程'
+        : payPayload.cart_items?.[0]?.name || course?.name || '课程'
       : activationPurchase
         ? `${course?.name || '课程'}-激活码`
         : course?.name || '课程';
