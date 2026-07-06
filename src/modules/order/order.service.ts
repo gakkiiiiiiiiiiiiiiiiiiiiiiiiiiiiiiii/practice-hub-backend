@@ -1648,6 +1648,34 @@ export class OrderService {
       throw new NotFoundException('用户不存在');
     }
 
+    if (order.pay_provider === 'wechat_pay') {
+      const result = await this.waitForWechatPaySuccess(
+        order.order_no,
+        Number(this.configService.get<string>('WECHAT_PAY_QUERY_ATTEMPTS') || 5),
+      );
+      const tradeState = result?.trade_state || result?.tradeState;
+      if (tradeState !== 'SUCCESS') {
+        throw new BadRequestException('暂未查询到微信支付成功记录');
+      }
+
+      order.pay_payload = {
+        ...(order.pay_payload || {}),
+        wechat_pay_admin_sync: {
+          synced_at: new Date().toISOString(),
+          query_result: result,
+        },
+      };
+      await this.orderRepository.save(order);
+      await this.handlePaymentSuccess(order.id);
+
+      return {
+        message: '订单支付状态已同步',
+        order_no: order.order_no,
+        status: OrderStatus.PAID,
+        synced: true,
+      };
+    }
+
     const result = await this.tryFulfillVirtualPaymentOrder(order, user, undefined, {
       allowMissingSessionKey: true,
       rechargeQueryAttempts: 8,
@@ -1873,7 +1901,90 @@ export class OrderService {
   }
 
   /**
-   * 获取订单统计数量
+   * 小程序超管获取纸质订单发货列表
+   */
+  async getAppAdminShippingOrderList(appUserId: number, deliveryStatus?: string) {
+    await this.assertAppSuperAdmin(appUserId);
+
+    const normalizedDeliveryStatus = String(deliveryStatus || 'pending').trim();
+    if (
+      normalizedDeliveryStatus &&
+      normalizedDeliveryStatus !== 'all' &&
+      !Object.values(OrderDeliveryStatus).includes(normalizedDeliveryStatus as OrderDeliveryStatus)
+    ) {
+      throw new BadRequestException('发货状态参数错误');
+    }
+
+    const query = this.orderRepository
+      .createQueryBuilder('o')
+      .leftJoin(Course, 'course', 'course.id = o.course_id')
+      .leftJoin('package_section', 'packageSection', 'packageSection.id = o.package_section_id')
+      .leftJoin(AppUser, 'user', 'user.id = o.user_id')
+      .where('o.status = :status', { status: OrderStatus.PAID })
+      .andWhere(
+        `(
+          course.content_type = :paperType
+          OR JSON_SEARCH(o.pay_payload, 'one', :paperType, NULL, '$.cart_items[*].content_type') IS NOT NULL
+          OR JSON_SEARCH(o.pay_payload, 'one', :paperType, NULL, '$.cart_items[*].contentType') IS NOT NULL
+        )`,
+        { paperType: 'paper_exam' },
+      )
+      .select([
+        'o.id AS id',
+        'o.order_no AS orderNo',
+        'o.user_id AS userId',
+        'o.amount AS amount',
+        'o.original_amount AS originalAmount',
+        'o.discount_amount AS discountAmount',
+        'o.status AS status',
+        'o.order_type AS orderType',
+        'o.course_id AS courseId',
+        'o.package_section_id AS packageSectionId',
+        'o.package_plan_id AS packagePlanId',
+        'o.coupon_id AS couponId',
+        'o.pay_provider AS payProvider',
+        'o.pay_payload AS payPayload',
+        'o.shipping_address AS shippingAddress',
+        'o.delivery_status AS deliveryStatus',
+        'o.tracking_no AS trackingNo',
+        'o.shipper_code AS shipperCode',
+        'o.shipper_name AS shipperName',
+        'o.shipped_at AS shippedAt',
+        'o.ship_operator_type AS shipOperatorType',
+        'o.ship_operator_id AS shipOperatorId',
+        'o.shipment_remark AS shipmentRemark',
+        'o.logistics_snapshot AS logisticsSnapshot',
+        'o.create_time AS createTime',
+        'o.paid_time AS paidTime',
+        'course.name AS courseName',
+        'course.content_type AS contentType',
+        'packageSection.name AS packageSectionName',
+        'user.nickname AS userNickname',
+        'user.phone AS userPhone',
+        'user.avatar AS userAvatar',
+        'user.openid AS userOpenid',
+      ])
+      .orderBy('o.create_time', 'DESC')
+      .limit(200);
+
+    if (normalizedDeliveryStatus && normalizedDeliveryStatus !== 'all') {
+      if (normalizedDeliveryStatus === OrderDeliveryStatus.PENDING) {
+        query.andWhere('(o.delivery_status = :deliveryStatus OR o.delivery_status IS NULL)', {
+          deliveryStatus: normalizedDeliveryStatus,
+        });
+      } else {
+        query.andWhere('o.delivery_status = :deliveryStatus', { deliveryStatus: normalizedDeliveryStatus });
+      }
+    }
+
+    const rows = await query.getRawMany();
+    const orderIds = rows.map((row) => Number(row.id)).filter((id) => id > 0);
+    const afterSaleMap = await this.getLatestAfterSaleMap(orderIds);
+    return rows.map((row) => this.mapAdminOrderRow(row, afterSaleMap.get(Number(row.id))));
+  }
+
+  /**
+   * 获取订单列表
    */
   async getOrderList(userId: number, status?: string) {
     const query = this.orderRepository
@@ -2218,6 +2329,9 @@ export class OrderService {
   private async orderRequiresShipping(order: Pick<Order, 'course_id' | 'pay_payload' | 'shipping_address'>) {
     const cartItems = this.getCartItemsFromOrder(order);
     if (cartItems.some((item: Record<string, any>) => (item.content_type || item.contentType) === 'paper_exam')) {
+      return true;
+    }
+    if (order.shipping_address) {
       return true;
     }
 
@@ -2602,6 +2716,18 @@ export class OrderService {
 
     if (dto.order_type) {
       query.andWhere('o.order_type = :orderType', { orderType: dto.order_type });
+    }
+
+    if (dto.content_type) {
+      const contentTypeConditions = [
+        'course.content_type = :contentType',
+        "JSON_SEARCH(o.pay_payload, 'one', :contentType, NULL, '$.cart_items[*].content_type') IS NOT NULL",
+        "JSON_SEARCH(o.pay_payload, 'one', :contentType, NULL, '$.cart_items[*].contentType') IS NOT NULL",
+      ];
+      if (dto.content_type === 'paper_exam') {
+        contentTypeConditions.push('o.shipping_address IS NOT NULL');
+      }
+      query.andWhere(`(${contentTypeConditions.join(' OR ')})`, { contentType: dto.content_type });
     }
 
     const keyword = dto.keyword?.trim();

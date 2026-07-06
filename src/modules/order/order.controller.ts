@@ -55,6 +55,16 @@ export class OrderController {
     return CommonResponseDto.success(result);
   }
 
+  @Get('shipping-list')
+  @ApiOperation({ summary: '小程序超管获取纸质真题发货订单列表' })
+  async getShippingOrderList(
+    @CurrentUser() user: any,
+    @Query('delivery_status') deliveryStatus?: string,
+  ) {
+    const result = await this.orderService.getAppAdminShippingOrderList(user.userId, deliveryStatus);
+    return CommonResponseDto.success(result);
+  }
+
   @Post(':id/pay')
   @ApiOperation({ summary: '继续支付待支付订单' })
   async payPendingOrder(@CurrentUser() user: any, @Param('id', ParseIntPipe) id: number, @Req() req: Request) {

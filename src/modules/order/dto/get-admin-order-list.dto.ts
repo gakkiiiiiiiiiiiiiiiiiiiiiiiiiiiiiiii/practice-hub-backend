@@ -29,6 +29,11 @@ export class GetAdminOrderListDto {
 	@IsIn(['course', 'package', 'category'])
 	order_type?: 'course' | 'package' | 'category';
 
+	@ApiPropertyOptional({ description: '课程内容类型 normal/file/paper_exam' })
+	@IsOptional()
+	@IsIn(['normal', 'file', 'paper_exam'])
+	content_type?: 'normal' | 'file' | 'paper_exam';
+
 	@ApiPropertyOptional({ description: '关键词：订单号/用户昵称/手机号/用户ID' })
 	@IsOptional()
 	@IsString()
