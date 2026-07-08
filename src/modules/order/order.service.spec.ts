@@ -27,7 +27,7 @@ describe('OrderService WeChat Pay refund', () => {
 
   it('uses callback sub merchant and transaction id when refunding legacy paper orders', async () => {
     const service = createService();
-    const order = {
+    const order: any = {
       order_no: 'ORDER17832972611920965',
       amount: 75,
       pay_payload: {
@@ -75,7 +75,7 @@ describe('OrderService WeChat Pay refund', () => {
       paySign: 'sign',
     });
 
-    const order = {
+    const order: any = {
       order_no: 'ORDER1',
       amount: 80,
       order_type: 'course',
@@ -114,10 +114,96 @@ describe('OrderService WeChat Pay refund', () => {
       'refund',
     );
 
-    expect(message).toBe('微信支付退款权限未授权：请在微信云开发/云托管支付设置或微信支付商户平台授权退款 API 后重试');
+    expect(message).toBe('微信支付退款权限未授权：请在微信云开发/云托管支付设置中发起“退款 API”授权，并在微信支付商户平台同意授权后重试');
     expect(() => {
       throw new BadRequestException(message);
     }).toThrow(BadRequestException);
+  });
+
+  it('masks WeChat Pay identifiers in refund logs', () => {
+    const service = createService();
+
+    const masked = service.maskWechatPayRequest({
+      sub_mch_id: '1111726570',
+      transaction_id: '4500000274202607068293307737',
+      out_refund_no: 'ORDER17832972611920965_WX_RF',
+      nonce_str: '306695452f731b6ebcdc47ba8b060025',
+      refund_fee: 7500,
+    });
+
+    expect(masked.sub_mch_id).toBe('111172***6570');
+    expect(masked.transaction_id).toBe('450000***7737');
+    expect(masked.out_refund_no).toBe('ORDER1***X_RF');
+    expect(masked.nonce_str).toBe('306695***0025');
+    expect(masked.refund_fee).toBe(7500);
+  });
+
+  it('allows refunding paid orders directly from admin order list', async () => {
+    const service = createService();
+    const order = {
+      id: 88,
+      order_no: 'ORDER_PAID_REFUND',
+      user_id: 7,
+      course_id: 10,
+      amount: 80,
+      status: OrderStatus.PAID,
+      pay_provider: 'wechat_pay',
+      pay_payload: {},
+    };
+    service.orderRepository.findOne = jest.fn().mockResolvedValue(order);
+    service.appUserRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }),
+    };
+    service.coinService = {
+      yuanToCoinInt: jest.fn(() => 8000),
+    };
+    service.userCourseAuthRepository = {
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    service.afterSaleRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+    service.refundWechatPayOrder = jest.fn().mockResolvedValue({ return_code: 'SUCCESS' });
+
+    const result = await service.refundOrder(88, 1, { remark: '管理员直接退款' });
+
+    expect(service.refundWechatPayOrder).toHaveBeenCalledWith(
+      order,
+      'ORDER_PAID_REFUND_WX_RF',
+      '管理员直接退款',
+    );
+    expect(service.userCourseAuthRepository.delete).toHaveBeenCalledWith({
+      user_id: 7,
+      course_id: 10,
+      source: 'purchase',
+    });
+    expect(order.status).toBe(OrderStatus.CANCELLED);
+    expect((order.pay_payload as any).refund).toEqual(
+      expect.objectContaining({
+        admin_id: 1,
+        remark: '管理员直接退款',
+        wechat_pay_refund_order_id: 'ORDER_PAID_REFUND_WX_RF',
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        message: '退款成功',
+        order_no: 'ORDER_PAID_REFUND',
+        status: OrderStatus.CANCELLED,
+      }),
+    );
+  });
+
+  it('rejects refunding unpaid orders', async () => {
+    const service = createService();
+    service.orderRepository.findOne = jest.fn().mockResolvedValue({
+      id: 89,
+      order_no: 'ORDER_PENDING_REFUND',
+      status: OrderStatus.PENDING,
+      pay_payload: {},
+    });
+
+    await expect(service.refundOrder(89, 1)).rejects.toThrow('仅已支付或售后中的订单可退款');
   });
 });
 
@@ -300,5 +386,133 @@ describe('OrderService paper exam checkout', () => {
     );
     expect(service.tryFulfillVirtualPaymentOrder).not.toHaveBeenCalled();
     expect(service.processCoinBasedPayment).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrderService WeChat express logistics', () => {
+  const baseOrder: any = {
+    id: 30,
+    order_no: 'ORDER_WECHAT_EXPRESS',
+    user_id: 7,
+    course_id: 10,
+    tracking_no: 'SF123456789',
+    shipper_code: 'SF',
+    shipping_address: {
+      name: '张三',
+      phone: '13800138000',
+      province: '安徽省',
+      city: '合肥市',
+      district: '蜀山区',
+      detail: '测试路 1 号',
+    },
+    pay_payload: {
+      wechat_pay_callback: {
+        transactionId: '4200000000000000000',
+      },
+    },
+    logistics_snapshot: null,
+  };
+
+  const createLogisticsService = () => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.configService = {
+      get: jest.fn((key: string) => {
+        const values: Record<string, string> = {
+          WECHAT_EXPRESS_GOODS_IMAGE_URL: 'https://example.com/goods.png',
+          WECHAT_EXPRESS_ORDER_DETAIL_PATH: 'pages/sub-pages/order/index?status=paid&order_id={orderId}',
+        };
+        return values[key];
+      }),
+    };
+    service.appUserRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }),
+    };
+    service.courseRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 10, name: '安徽理工大学812电路', cover_img: '' }),
+    };
+    service.xpayService = {
+      getWechatAccessTokenForServerApi: jest.fn().mockResolvedValue('access-token'),
+    };
+    service.callWechatExpressApi = jest
+      .fn()
+      .mockResolvedValueOnce({ errcode: 0, waybill_token: 'trace-token' })
+      .mockResolvedValueOnce({ errcode: 0, waybill_token: 'follow-token' })
+      .mockResolvedValueOnce({
+        errcode: 0,
+        waybill_info: { status: 2, waybill_id: 'SF123456789' },
+        delivery_info: { delivery_name: '顺丰速运' },
+      });
+    return service;
+  };
+
+  it('attaches WeChat express waybill tokens for shipped paper orders', async () => {
+    const service = createLogisticsService();
+    const snapshot = await service.attachWechatExpressSnapshot(
+      { ...baseOrder },
+      {
+        provider: 'kdniao',
+        configured: false,
+        success: false,
+        trackingNo: 'SF123456789',
+        traces: [],
+        queriedAt: '2026-07-07T00:00:00.000Z',
+      },
+      { syncMessage: true },
+    );
+
+    expect(snapshot.wechat).toEqual(
+      expect.objectContaining({
+        configured: true,
+        success: true,
+        waybillToken: 'trace-token',
+        followWaybillToken: 'follow-token',
+        status: 2,
+        statusText: '运输中',
+        deliveryName: '顺丰速运',
+      }),
+    );
+    expect(service.callWechatExpressApi).toHaveBeenCalledWith(
+      '/cgi-bin/express/delivery/open_msg/trace_waybill',
+      expect.objectContaining({
+        openid: 'openid',
+        receiver_phone: '13800138000',
+        waybill_id: 'SF123456789',
+        trans_id: '4200000000000000000',
+        order_detail_path: 'pages/sub-pages/order/index?status=paid&order_id=30',
+      }),
+    );
+    expect(service.callWechatExpressApi.mock.calls[0][1].goods_info.detail_list[0]).toEqual(
+      expect.objectContaining({
+        goods_name: '安徽理工大学812电路',
+        goods_img_url: 'https://example.com/goods.png',
+      }),
+    );
+  });
+
+  it('keeps logistics query usable when WeChat express image is not configured', async () => {
+    const service = createLogisticsService();
+    service.configService.get = jest.fn(() => '');
+
+    const snapshot = await service.attachWechatExpressSnapshot(
+      { ...baseOrder },
+      {
+        provider: 'kdniao',
+        configured: false,
+        success: false,
+        trackingNo: 'SF123456789',
+        traces: [],
+        queriedAt: '2026-07-07T00:00:00.000Z',
+      },
+      { syncMessage: true },
+    );
+
+    expect(snapshot.wechat).toEqual(
+      expect.objectContaining({
+        configured: true,
+        success: false,
+        message: '微信物流商品图片未配置',
+      }),
+    );
+    expect(service.callWechatExpressApi).not.toHaveBeenCalled();
   });
 });

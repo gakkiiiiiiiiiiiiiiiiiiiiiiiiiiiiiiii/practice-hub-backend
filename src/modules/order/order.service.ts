@@ -53,6 +53,20 @@ type LogisticsSnapshot = {
     text: string;
     location?: string;
   }>;
+  wechat?: {
+    configured: boolean;
+    success: boolean;
+    message?: string;
+    reason?: string;
+    waybillToken?: string;
+    followWaybillToken?: string;
+    trackingNo?: string;
+    deliveryId?: string;
+    deliveryName?: string;
+    status?: number;
+    statusText?: string;
+    queriedAt: string;
+  };
   queriedAt: string;
 };
 
@@ -1389,7 +1403,7 @@ export class OrderService {
 
     if (code === 'NO_AUTH' || message.includes('特约子商户商户号未授权服务商的产品权限')) {
       if (apiName === 'refund') {
-        return '微信支付退款权限未授权：请在微信云开发/云托管支付设置或微信支付商户平台授权退款 API 后重试';
+        return '微信支付退款权限未授权：请在微信云开发/云托管支付设置中发起“退款 API”授权，并在微信支付商户平台同意授权后重试';
       }
       return '微信支付商户权限未授权：请检查服务商与子商户的产品权限授权';
     }
@@ -1398,10 +1412,23 @@ export class OrderService {
   }
 
   private maskWechatPayRequest(data: Record<string, any>) {
+    const maskPayId = (value: unknown) => {
+      const text = String(value || '').trim();
+      if (!text) return value;
+      if (text.length <= 8) return `${text.slice(0, 2)}***`;
+      return `${text.slice(0, 6)}***${text.slice(-4)}`;
+    };
+
     return {
       ...data,
       openid: data.openid ? `${String(data.openid).slice(0, 6)}***` : data.openid,
       sub_openid: data.sub_openid ? `${String(data.sub_openid).slice(0, 6)}***` : data.sub_openid,
+      mch_id: maskPayId(data.mch_id),
+      sub_mch_id: maskPayId(data.sub_mch_id),
+      out_trade_no: maskPayId(data.out_trade_no),
+      transaction_id: maskPayId(data.transaction_id),
+      out_refund_no: maskPayId(data.out_refund_no),
+      nonce_str: maskPayId(data.nonce_str),
     };
   }
 
@@ -1623,8 +1650,8 @@ export class OrderService {
     if (order.pay_payload?.refund?.refunded_at) {
       throw new BadRequestException('该订单已退款');
     }
-    if (order.status !== OrderStatus.AFTER_SALE) {
-      throw new BadRequestException('仅售后中的订单可退款');
+    if (![OrderStatus.PAID, OrderStatus.AFTER_SALE].includes(order.status)) {
+      throw new BadRequestException('仅已支付或售后中的订单可退款');
     }
 
     const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
@@ -1801,11 +1828,12 @@ export class OrderService {
     order.ship_operator_id = actor.operatorId || null;
     order.shipment_remark = this.normalizeOptionalText(dto.remark);
 
-    const logisticsSnapshot = await this.queryLogisticsSnapshot({
+    let logisticsSnapshot = await this.queryLogisticsSnapshot({
       trackingNo,
       shipperCode: order.shipper_code || undefined,
       shipperName: order.shipper_name || undefined,
     });
+    logisticsSnapshot = await this.attachWechatExpressSnapshot(order, logisticsSnapshot, { syncMessage: true });
     order.logistics_snapshot = logisticsSnapshot;
     if (logisticsSnapshot.shipperCode && !order.shipper_code) {
       order.shipper_code = logisticsSnapshot.shipperCode;
@@ -1857,11 +1885,12 @@ export class OrderService {
       throw new BadRequestException('订单尚未录入运单号');
     }
 
-    const logisticsSnapshot = await this.queryLogisticsSnapshot({
+    let logisticsSnapshot = await this.queryLogisticsSnapshot({
       trackingNo: order.tracking_no,
       shipperCode: order.shipper_code || undefined,
       shipperName: order.shipper_name || undefined,
     });
+    logisticsSnapshot = await this.attachWechatExpressSnapshot(order, logisticsSnapshot, { syncMessage: false });
     order.logistics_snapshot = logisticsSnapshot;
     if (logisticsSnapshot.shipperCode && !order.shipper_code) {
       order.shipper_code = logisticsSnapshot.shipperCode;
@@ -2448,6 +2477,309 @@ export class OrderService {
       throw new ForbiddenException('仅小程序超管可录入发货信息');
     }
     return user;
+  }
+
+  private getWechatExpressStatusText(status?: number) {
+    const map: Record<number, string> = {
+      0: '未揽收',
+      1: '已揽件',
+      2: '运输中',
+      3: '派件中',
+      4: '已签收',
+      5: '异常',
+      6: '代签收',
+    };
+    return typeof status === 'number' ? map[status] || String(status) : '';
+  }
+
+  private getWechatPublicApiUrls(pathname: string) {
+    const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
+    const useInternal = Boolean(this.configService.get<string>('WECHAT_PAY_CLOUDRUN_ENV_ID'));
+    return useInternal
+      ? [`http://api.weixin.qq.com${normalizedPath}`, `https://api.weixin.qq.com${normalizedPath}`]
+      : [`https://api.weixin.qq.com${normalizedPath}`];
+  }
+
+  private isWechatExpressEnabled() {
+    const value = String(this.configService.get<string>('WECHAT_EXPRESS_ENABLED') ?? 'true').toLowerCase();
+    return !['0', 'false', 'off', 'disabled'].includes(value);
+  }
+
+  private normalizeWechatExpressImageUrl(value?: string | null) {
+    const url = String(value || '').trim();
+    if (/^https?:\/\//i.test(url)) {
+      return url;
+    }
+    return '';
+  }
+
+  private buildWechatExpressOrderDetailPath(order: Pick<Order, 'id'>) {
+    const template = String(
+      this.configService.get<string>('WECHAT_EXPRESS_ORDER_DETAIL_PATH') ||
+      'pages/sub-pages/order/index?status=paid',
+    ).trim();
+    return template.replace(/\{orderId\}/g, String(order.id));
+  }
+
+  private getWechatExpressGoodsImage(course?: Course | null) {
+    return (
+      this.normalizeWechatExpressImageUrl(course?.cover_img) ||
+      this.normalizeWechatExpressImageUrl(this.configService.get<string>('WECHAT_EXPRESS_GOODS_IMAGE_URL')) ||
+      this.normalizeWechatExpressImageUrl(this.configService.get<string>('WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL'))
+    );
+  }
+
+  private getWechatExpressGoodsName(order: Pick<Order, 'pay_payload'>, course?: Course | null) {
+    const payPayload = this.parseJsonColumn(order.pay_payload) || {};
+    const cartItems = Array.isArray(payPayload.cart_items) ? payPayload.cart_items : [];
+    if (cartItems.length > 1) {
+      return `纸质真题合集(${cartItems.length}门)`;
+    }
+    return String(cartItems[0]?.name || course?.name || '纸质专业真题').trim().slice(0, 60);
+  }
+
+  private getWechatExpressDeliveryId(shipperCode?: string | null) {
+    const code = String(shipperCode || '').trim();
+    if (!code) return '';
+    const mapped = String(this.configService.get<string>(`WECHAT_EXPRESS_DELIVERY_ID_${code.toUpperCase()}`) || '').trim();
+    if (mapped) return mapped;
+
+    const useShipperCode = String(
+      this.configService.get<string>('WECHAT_EXPRESS_USE_SHIPPER_CODE_AS_DELIVERY_ID') || 'false',
+    ).toLowerCase();
+    return ['1', 'true', 'on', 'yes'].includes(useShipperCode) ? code : '';
+  }
+
+  private async buildWechatExpressPayload(order: Order) {
+    if (!this.isWechatExpressEnabled()) {
+      return {
+        ok: false,
+        message: '微信物流服务未启用',
+      };
+    }
+    if (!order.tracking_no) {
+      return {
+        ok: false,
+        message: '订单尚未录入运单号',
+      };
+    }
+    if (!order.shipping_address?.phone) {
+      return {
+        ok: false,
+        message: '订单缺少收货手机号',
+      };
+    }
+
+    const user = await this.appUserRepository.findOne({
+      where: { id: order.user_id },
+      select: ['id', 'openid'],
+    });
+    if (!user?.openid) {
+      return {
+        ok: false,
+        message: '用户缺少 openid',
+      };
+    }
+
+    const transId = this.getWechatPayTransactionIdFromOrder(order);
+    if (!transId) {
+      return {
+        ok: false,
+        message: '订单缺少微信支付交易单号',
+      };
+    }
+
+    const course = order.course_id
+      ? await this.courseRepository.findOne({ where: { id: order.course_id } })
+      : null;
+    const goodsImgUrl = this.getWechatExpressGoodsImage(course);
+    if (!goodsImgUrl) {
+      return {
+        ok: false,
+        message: '微信物流商品图片未配置',
+      };
+    }
+
+    const senderPhone = String(this.configService.get<string>('WECHAT_EXPRESS_SENDER_PHONE') || '').trim();
+    const deliveryId = this.getWechatExpressDeliveryId(order.shipper_code);
+    const payload: Record<string, any> = {
+      openid: user.openid,
+      receiver_phone: order.shipping_address.phone,
+      waybill_id: order.tracking_no,
+      goods_info: {
+        detail_list: [
+          {
+            goods_name: this.getWechatExpressGoodsName(order, course),
+            goods_img_url: goodsImgUrl,
+          },
+        ],
+      },
+      trans_id: transId,
+      order_detail_path: this.buildWechatExpressOrderDetailPath(order),
+    };
+
+    if (senderPhone) {
+      payload.sender_phone = senderPhone;
+    }
+    if (deliveryId) {
+      payload.delivery_id = deliveryId;
+    }
+
+    return {
+      ok: true,
+      payload,
+      deliveryId,
+    };
+  }
+
+  private async callWechatExpressApi(pathname: string, payload: Record<string, any>) {
+    let accessToken = await this.xpayService.getWechatAccessTokenForServerApi();
+    if (!accessToken) {
+      throw new Error('获取微信 access_token 失败');
+    }
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const urls = this.getWechatPublicApiUrls(pathname);
+      for (const url of urls) {
+        try {
+          const response = await axios.post(url, payload, {
+            params: { access_token: accessToken },
+            timeout: 10000,
+          });
+          const data = response.data || {};
+          if (Number(data.errcode || 0) === 0) {
+            return data;
+          }
+          if ([40001, 40014, 42001].includes(Number(data.errcode)) && attempt === 0) {
+            accessToken = await this.xpayService.getWechatAccessTokenForServerApi(true);
+            lastError = new Error(data.errmsg || `微信物流接口失败: ${data.errcode}`);
+            break;
+          }
+          throw new Error(data.errmsg || `微信物流接口失败: ${data.errcode}`);
+        } catch (error) {
+          lastError = error;
+          if (url !== urls[urls.length - 1]) {
+            continue;
+          }
+          if (attempt > 0 || ![40001, 40014, 42001].includes(Number((error as any)?.response?.data?.errcode))) {
+            throw error;
+          }
+          accessToken = await this.xpayService.getWechatAccessTokenForServerApi(true);
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  private async attachWechatExpressSnapshot(
+    order: Order,
+    snapshot: LogisticsSnapshot,
+    options: { syncMessage: boolean },
+  ): Promise<LogisticsSnapshot> {
+    const queriedAt = new Date().toISOString();
+    const previous = this.parseJsonColumn(order.logistics_snapshot) || {};
+    const previousWechat = previous.wechat || {};
+    const previousTrackingNo = String(previousWechat.trackingNo || '').trim();
+    const trackingNo = String(order.tracking_no || '').trim();
+
+    const baseWechat = {
+      configured: true,
+      success: Boolean(previousWechat.waybillToken || previousWechat.followWaybillToken),
+      ...previousWechat,
+      trackingNo,
+      queriedAt,
+    };
+
+    let payloadResult: any;
+    try {
+      payloadResult = await this.buildWechatExpressPayload(order);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return {
+        ...snapshot,
+        wechat: {
+          ...baseWechat,
+          configured: this.isWechatExpressEnabled(),
+          success: Boolean(previousWechat.waybillToken || previousWechat.followWaybillToken),
+          message: `微信物流同步失败：${reason}`,
+          reason,
+          queriedAt,
+        },
+      };
+    }
+
+    if (!payloadResult.ok) {
+      return {
+        ...snapshot,
+        wechat: {
+          ...baseWechat,
+          configured: this.isWechatExpressEnabled(),
+          success: Boolean(previousWechat.waybillToken || previousWechat.followWaybillToken),
+          message: payloadResult.message,
+          queriedAt,
+        },
+      };
+    }
+
+    const shouldCreateToken = previousTrackingNo !== trackingNo || !previousWechat.waybillToken;
+    const shouldCreateMessageToken = options.syncMessage && (previousTrackingNo !== trackingNo || !previousWechat.followWaybillToken);
+    const errors: string[] = [];
+    let waybillToken = previousTrackingNo === trackingNo ? previousWechat.waybillToken : '';
+    let followWaybillToken = previousTrackingNo === trackingNo ? previousWechat.followWaybillToken : '';
+    let deliveryName = previousTrackingNo === trackingNo ? previousWechat.deliveryName : '';
+    let status = previousTrackingNo === trackingNo ? previousWechat.status : undefined;
+
+    if (shouldCreateToken) {
+      try {
+        const result = await this.callWechatExpressApi('/cgi-bin/express/delivery/open_msg/trace_waybill', payloadResult.payload);
+        waybillToken = result.waybill_token || waybillToken || '';
+      } catch (error) {
+        errors.push(`查询组件传运单失败：${error?.message || error}`);
+      }
+    }
+
+    if (shouldCreateMessageToken) {
+      try {
+        const result = await this.callWechatExpressApi('/cgi-bin/express/delivery/open_msg/follow_waybill', payloadResult.payload);
+        followWaybillToken = result.waybill_token || followWaybillToken || '';
+      } catch (error) {
+        errors.push(`消息能力传运单失败：${error?.message || error}`);
+      }
+    }
+
+    if (waybillToken && (shouldCreateToken || previousTrackingNo === trackingNo)) {
+      try {
+        const result = await this.callWechatExpressApi('/cgi-bin/express/delivery/open_msg/query_trace', {
+          waybill_token: waybillToken,
+          openid: payloadResult.payload.openid,
+        });
+        const waybillInfo = result?.waybill_info || {};
+        const deliveryInfo = result?.delivery_info || {};
+        status = typeof waybillInfo.status === 'number' ? waybillInfo.status : status;
+        deliveryName = deliveryInfo.delivery_name || deliveryName || '';
+      } catch (error) {
+        errors.push(`查询微信物流状态失败：${error?.message || error}`);
+      }
+    }
+
+    return {
+      ...snapshot,
+      wechat: {
+        configured: true,
+        success: Boolean(waybillToken || followWaybillToken),
+        message: errors.length ? errors.join('；') : '微信物流已同步',
+        reason: errors.join('；'),
+        waybillToken,
+        followWaybillToken,
+        trackingNo,
+        deliveryId: payloadResult.deliveryId,
+        deliveryName,
+        status,
+        statusText: this.getWechatExpressStatusText(status),
+        queriedAt,
+      },
+    };
   }
 
   private getKdniaoConfig() {

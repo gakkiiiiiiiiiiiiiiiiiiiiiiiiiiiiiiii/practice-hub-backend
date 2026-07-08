@@ -37,10 +37,14 @@ test-files/
 
 # Environment
 .env
-.env.remote
+.env.*
+!.env.example
 .env.local
 .env.*.local
 .env.pay
+
+# Build metadata
+*.tsbuildinfo
 
 # Exports
 /exports
@@ -52,4 +56,3 @@ test-files/
 *.pdf
 **/process-pdf/fixtures/*.pdf
 **/process-pdf/output/*.json
-

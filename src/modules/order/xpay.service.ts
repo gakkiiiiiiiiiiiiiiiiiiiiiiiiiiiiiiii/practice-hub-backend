@@ -91,6 +91,10 @@ export class XpayService {
     return Number(errcode) === 268490004;
   }
 
+  async getWechatAccessTokenForServerApi(forceRefresh = false) {
+    return this.getWechatAccessTokenWithFallback(forceRefresh);
+  }
+
   private async getWechatAccessTokenWithFallback(forceRefresh = false) {
     try {
       return await this.getWechatAccessToken(forceRefresh);
