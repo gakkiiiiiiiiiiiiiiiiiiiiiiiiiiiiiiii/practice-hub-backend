@@ -112,17 +112,17 @@ export class SystemController {
 
   @Get('settings/course-intro-template')
   @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-  @ApiOperation({ summary: '获取课程介绍默认模板' })
+  @ApiOperation({ summary: '获取课程介绍模板配置' })
   async getCourseIntroTemplate() {
-    const result = await this.systemService.getCourseIntroTemplate();
-    return CommonResponseDto.success({ template: result });
+    const result = await this.systemService.getCourseIntroTemplateConfig();
+    return CommonResponseDto.success(result);
   }
 
   @Put('settings/course-intro-template')
   @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-  @ApiOperation({ summary: '设置课程介绍默认模板' })
-  async setCourseIntroTemplate(@Body() body: { template?: string }) {
-    const result = await this.systemService.setCourseIntroTemplate(body?.template || '');
+  @ApiOperation({ summary: '设置课程介绍模板配置' })
+  async setCourseIntroTemplate(@Body() body: any) {
+    const result = await this.systemService.setCourseIntroTemplate(body || {});
     return CommonResponseDto.success(result);
   }
 

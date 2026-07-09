@@ -10,6 +10,19 @@ import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
 import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
 import { ceilIntegerYuanPrice } from '../../common/utils/price.util';
 
+type CourseIntroTemplateItem = {
+  id: string;
+  name: string;
+  bindCategory: string[];
+  template: string;
+};
+
+type CourseIntroTemplateConfig = {
+  activeTemplateId: string;
+  templates: CourseIntroTemplateItem[];
+  template: string;
+};
+
 @Injectable()
 export class SystemService {
   constructor(
@@ -285,16 +298,80 @@ export class SystemService {
     ].join('');
   }
 
-  async getCourseIntroTemplate() {
-    return this.getJsonConfig('course_intro_template', this.getDefaultCourseIntroTemplate());
+  private normalizeCourseIntroTemplateItem(input: Record<string, any>, index: number): CourseIntroTemplateItem {
+    return {
+      id: String(input?.id || `intro_${index + 1}`).trim(),
+      name: String(input?.name || `课程介绍模板${index ? index + 1 : ''}`).trim() || `课程介绍模板${index + 1}`,
+      bindCategory: Array.isArray(input?.bindCategory)
+        ? input.bindCategory.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 2)
+        : [],
+      template: String(input?.template ?? input?.content ?? '').trim(),
+    };
   }
 
-  async setCourseIntroTemplate(template: string) {
-    const safeTemplate = String(template || '').trim();
-    await this.setJsonConfig('course_intro_template', '课程介绍默认模板', safeTemplate);
+  private normalizeCourseIntroTemplateConfig(input: unknown): CourseIntroTemplateConfig {
+    const source = input as Record<string, any>;
+    const legacyTemplate = typeof input === 'string' ? input : source?.template;
+    const rawTemplates = Array.isArray(source?.templates) ? source.templates : [];
+    const templates = rawTemplates
+      .map((template, index) => this.normalizeCourseIntroTemplateItem(template || {}, index))
+      .filter((template) => template.id && template.name);
+
+    if (!templates.length) {
+      templates.push({
+        id: 'default',
+        name: '默认课程介绍',
+        bindCategory: [],
+        template: String(legacyTemplate || this.getDefaultCourseIntroTemplate()).trim(),
+      });
+    }
+
+    const requestedActiveTemplateId = String(source?.activeTemplateId || '').trim();
+    const activeTemplateId = templates.some((template) => template.id === requestedActiveTemplateId)
+      ? requestedActiveTemplateId
+      : templates[0].id;
+    const active = templates.find((template) => template.id === activeTemplateId) || templates[0];
+
+    return {
+      activeTemplateId,
+      templates,
+      template: active?.template || this.getDefaultCourseIntroTemplate(),
+    };
+  }
+
+  async getCourseIntroTemplateConfig() {
+    const raw = await this.getJsonConfig('course_intro_template', {
+      template: this.getDefaultCourseIntroTemplate(),
+    });
+    return this.normalizeCourseIntroTemplateConfig(raw);
+  }
+
+  async getCourseIntroTemplate() {
+    return (await this.getCourseIntroTemplateConfig()).template;
+  }
+
+  async resolveCourseIntroTemplateByCategory(payload?: { category?: string; sub_category?: string }) {
+    const config = await this.getCourseIntroTemplateConfig();
+    const category = String(payload?.category || '').trim();
+    const subCategory = String(payload?.sub_category || '').trim();
+    const exactMatch = config.templates.find((template) => {
+      const bind = template.bindCategory || [];
+      return bind[0] === category && bind[1] === subCategory;
+    });
+    const primaryMatch = config.templates.find((template) => {
+      const bind = template.bindCategory || [];
+      return bind[0] === category && !bind[1];
+    });
+    const active = config.templates.find((template) => template.id === config.activeTemplateId) || config.templates[0];
+    return (exactMatch || primaryMatch || active)?.template || this.getDefaultCourseIntroTemplate();
+  }
+
+  async setCourseIntroTemplate(input: unknown) {
+    const config = this.normalizeCourseIntroTemplateConfig(input);
+    await this.setJsonConfig('course_intro_template', '课程介绍模板配置', config);
     return {
       success: true,
-      template: safeTemplate,
+      ...config,
     };
   }
 

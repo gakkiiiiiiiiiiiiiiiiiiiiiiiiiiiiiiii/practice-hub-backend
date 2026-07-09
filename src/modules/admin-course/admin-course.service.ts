@@ -80,13 +80,16 @@ export class AdminCourseService {
    * 新增/编辑课程
    */
   async saveCourse(dto: CreateCourseDto | UpdateCourseDto, id?: number, actorRole?: AdminRole | string) {
-    await this.applyDefaultIntroduction(dto, Boolean(id));
     this.validateCoursePriceFields(dto);
     if (id) {
       const course = await this.courseRepository.findOne({ where: { id } });
       if (!course) {
         throw new NotFoundException('课程不存在');
       }
+      await this.applyDefaultIntroduction(dto, true, {
+        category: dto.category ?? course.category,
+        sub_category: dto.sub_category ?? course.sub_category,
+      });
       if (dto.is_free === 0 && dto.validity_days === undefined && course.validity_days == null) {
         dto.validity_days = 365;
       }
@@ -101,6 +104,10 @@ export class AdminCourseService {
       return saved;
     } else {
       await this.applyCreateCourseDefaults(dto as CreateCourseDto);
+      await this.applyDefaultIntroduction(dto, false, {
+        category: dto.category,
+        sub_category: dto.sub_category,
+      });
       if (dto.sort === undefined || dto.sort === null) {
         dto.sort = await this.getNextSortValue();
       }
@@ -1156,7 +1163,11 @@ export class AdminCourseService {
     return files.some((file) => ['pdf', 'doc', 'docx'].includes((file.file_type || '').toLowerCase()));
   }
 
-  private async applyDefaultIntroduction(dto: CreateCourseDto | UpdateCourseDto, isUpdate: boolean) {
+  private async applyDefaultIntroduction(
+    dto: CreateCourseDto | UpdateCourseDto,
+    isUpdate: boolean,
+    payload?: { category?: string; sub_category?: string },
+  ) {
     const hasIntroductionField = Object.prototype.hasOwnProperty.call(dto, 'introduction');
     if (isUpdate && !hasIntroductionField) {
       return;
@@ -1164,7 +1175,7 @@ export class AdminCourseService {
     if (!this.isBlankRichText(dto.introduction)) {
       return;
     }
-    const template = await this.systemService.getCourseIntroTemplate();
+    const template = await this.systemService.resolveCourseIntroTemplateByCategory(payload);
     dto.introduction = template || '';
   }
 
