@@ -447,7 +447,11 @@ export class CourseService {
     const allowSourceFile = course.allow_source_file !== 0;
     const price = Number(course.price) || 0;
     const needPreviewUrl =
-      isFileCourse && !hasAuth && price > 0 && (fileType === 'pdf' || fileType === 'doc' || fileType === 'docx');
+      isFileCourse &&
+      !hasAuth &&
+      price > 0 &&
+      this.getTrialPreviewPageCount(course) > 0 &&
+      (fileType === 'pdf' || fileType === 'doc' || fileType === 'docx');
 
     const relatedPackageSections =
       !hasAuth && price > 0 && course.is_free !== 1
@@ -467,11 +471,12 @@ export class CourseService {
       hasAuth,
       expireTime,
       relatedPackageSections,
-      /** 付费未购买时，试读用：PDF 为前 3 页地址，Word 暂不提供试读 */
+      /** 付费未购买时，试读用：按课程配置返回指定页数，0 表示无试读 */
       file_preview_url:
         needPreviewUrl && fileType === 'pdf'
           ? `/api/app/courses/${courseId}/file-preview${primaryFile?.id ? `?fileId=${primaryFile.id}` : ''}`
           : undefined,
+      trial_preview_page_count: this.getTrialPreviewPageCount(course),
     };
   }
 
@@ -879,6 +884,12 @@ export class CourseService {
     return Buffer.from(pdfBytes);
   }
 
+  private getTrialPreviewPageCount(course: Pick<Course, 'trial_preview_page_count'> | null | undefined) {
+    const value = Number(course?.trial_preview_page_count);
+    if (!Number.isInteger(value)) return 3;
+    return Math.min(50, Math.max(0, value));
+  }
+
   /**
    * 获取课程文件预览页数（用于图片预览：已购/免费为全部，未购付费为 3）
    */
@@ -893,12 +904,15 @@ export class CourseService {
       throw new NotFoundException('课程无可预览文件');
     }
     const fullCount = await this.resolveFullFilePageCount(courseFile);
+    const trialPreviewPageCount = this.getTrialPreviewPageCount(course);
     const totalPages =
-      hasAuth || Number(course.price) === 0 || course.is_free === 1 ? fullCount : Math.min(3, fullCount);
+      hasAuth || Number(course.price) === 0 || course.is_free === 1
+        ? fullCount
+        : Math.min(trialPreviewPageCount, fullCount);
     const previewScope =
       hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
     return {
-      totalPages: Math.max(1, totalPages),
+      totalPages: Math.max(0, totalPages),
       cacheVersion: this.getPreviewCacheVersion(courseFile.file_url, previewScope),
       fileId: courseFile.id,
     };
@@ -923,7 +937,7 @@ export class CourseService {
     const maxPages =
       hasAuth || Number(course.price) === 0 || course.is_free === 1
         ? 999
-        : 3;
+        : this.getTrialPreviewPageCount(course);
     if (pageNum < 1 || pageNum > maxPages) {
       throw new NotFoundException('页码超出范围');
     }
@@ -955,7 +969,7 @@ export class CourseService {
     return renderTask;
   }
 
-  /** 管理后台：获取文件课程前三页预览图状态 */
+  /** 管理后台：获取文件课程试读预览图状态 */
   async getAdminCoursePreviewSamplePages(courseId: number, fileId?: number) {
     const course = await this.courseRepository.findOne({ where: { id: courseId } });
     if (!course) {
@@ -973,7 +987,7 @@ export class CourseService {
       };
     }
     const fullTotalPages = await this.resolveFullFilePageCount(courseFile);
-    const sampleCount = Math.min(3, Math.max(0, fullTotalPages));
+    const sampleCount = Math.min(this.getTrialPreviewPageCount(course), Math.max(0, fullTotalPages));
     const previewScope: 'full' = 'full';
     const cacheVersion = this.getPreviewCacheVersion(courseFile.file_url, previewScope);
     const samplePages: Array<{ pageNum: number; ready: boolean }> = [];
@@ -992,7 +1006,7 @@ export class CourseService {
     };
   }
 
-  /** 管理后台：获取文件课程前三页预览图（JPEG） */
+  /** 管理后台：获取文件课程指定试读页预览图（JPEG） */
   async getAdminCoursePreviewSamplePageImage(
     courseId: number,
     pageNum: number,
@@ -1006,8 +1020,9 @@ export class CourseService {
     if (!this.isPreviewImageSupportedFileRecord(courseFile)) {
       throw new NotFoundException('课程无可预览文件');
     }
-    if (pageNum < 1 || pageNum > 3) {
-      throw new NotFoundException('仅支持预览前 3 页');
+    const maxPages = this.getTrialPreviewPageCount(course);
+    if (pageNum < 1 || pageNum > maxPages) {
+      throw new NotFoundException(maxPages > 0 ? `仅支持预览前 ${maxPages} 页` : '该课程已关闭试读预览');
     }
     const previewScope: 'full' = 'full';
     const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
@@ -1510,7 +1525,11 @@ export class CourseService {
       if (hasAuth || Number(course.price) === 0 || course.is_free === 1) {
         pdfBuffer = await this.getCourseFileAsPdfBuffer(courseFile, 60000);
       } else {
-        pdfBuffer = await this.getCourseFilePreviewPdf(courseId, 3, courseFile.id);
+        const maxPages = this.getTrialPreviewPageCount(course);
+        if (maxPages < 1) {
+          throw new NotFoundException('该课程已关闭试读预览');
+        }
+        pdfBuffer = await this.getCourseFilePreviewPdf(courseId, maxPages, courseFile.id);
       }
       this.previewPdfBufferCache.set(cacheKey, {
         buffer: pdfBuffer,

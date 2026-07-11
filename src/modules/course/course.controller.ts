@@ -109,7 +109,7 @@ export class CourseController {
   @Get(':id/file-preview')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: '课程文件试读（付费未购买时返回前 3 页 PDF）' })
+  @ApiOperation({ summary: '课程文件试读（付费未购买时按课程配置返回指定页数 PDF）' })
   async getCourseFilePreview(
     @Param('id') id: string,
     @Query('maxPages') maxPagesStr: string | undefined,
@@ -137,13 +137,23 @@ export class CourseController {
     if (course.content_type !== 'file') {
       return res.status(404).send('课程无文件');
     }
-    const maxPages = Math.min(10, Math.max(1, parseInt(maxPagesStr || '3', 10) || 3));
+    const configuredPreviewPages = Math.min(
+      50,
+      Math.max(0, Number(course.trial_preview_page_count ?? 3) || 0),
+    );
+    const requestedMaxPages = maxPagesStr
+      ? Math.min(50, Math.max(1, parseInt(maxPagesStr, 10) || configuredPreviewPages || 1))
+      : configuredPreviewPages;
+    const maxPages = Math.min(configuredPreviewPages, requestedMaxPages);
     const allowSourceFile = course.allow_source_file !== 0;
     if (allowSourceFile && (hasAuth || Number(course.price) === 0 || course.is_free === 1)) {
       return res.redirect(302, courseFile.file_url);
     }
     if (!['pdf', 'doc', 'docx'].includes((courseFile.file_type || '').toLowerCase())) {
       return res.status(403).send('仅支持 PDF/Word 试读');
+    }
+    if (maxPages < 1) {
+      return res.status(403).send('该课程已关闭试读预览');
     }
     const buffer = await this.courseService.getCourseFilePreviewPdf(
       courseId,

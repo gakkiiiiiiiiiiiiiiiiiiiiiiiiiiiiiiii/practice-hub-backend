@@ -89,6 +89,10 @@ export class Course {
 	@Column({ type: 'tinyint', default: 0, comment: '是否允许查看源文件：0-否，1-是' })
 	allow_source_file: number;
 
+	/** 文件课程：未购买试读页数，0 表示关闭试读预览 */
+	@Column({ type: 'int', default: 3, comment: '未购买试读页数，0表示无预览' })
+	trial_preview_page_count: number;
+
 	@Column({ type: 'json', nullable: true, comment: '推荐课程ID列表（JSON数组）' })
 	recommended_course_ids: number[] | null; // 课程推荐列表
 

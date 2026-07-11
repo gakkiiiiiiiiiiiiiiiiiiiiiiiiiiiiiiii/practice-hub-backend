@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsNumber, IsOptional, IsIn, Min, ValidateIf, IsInt } from 'class-validator';
+import { IsNotEmpty, IsString, IsNumber, IsOptional, IsIn, Min, Max, ValidateIf, IsInt } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsIntegerYuanPrice } from '../../../common/validators/is-integer-yuan-price.validator';
 
@@ -126,6 +126,14 @@ export class CreateCourseDto {
 	@Type(() => Number)
 	@IsNumber()
 	allow_source_file?: number;
+
+	@ApiProperty({ description: '文件课程：未购买试读页数，0=无预览', example: 3, required: false })
+	@IsOptional()
+	@Type(() => Number)
+	@IsInt({ message: '试读页数必须为整数' })
+	@Min(0, { message: '试读页数不能小于 0' })
+	@Max(50, { message: '试读页数不能超过 50' })
+	trial_preview_page_count?: number;
 
 	@ApiProperty({ description: '状态：0-禁用，1-启用', example: 1, required: false })
 	@IsOptional()

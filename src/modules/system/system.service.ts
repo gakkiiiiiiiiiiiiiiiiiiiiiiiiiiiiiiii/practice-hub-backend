@@ -387,6 +387,7 @@ export class SystemService {
       is_free: 0,
       validity_days: 365,
       allow_source_file: 0,
+      trial_preview_page_count: 3,
       content_type: 'normal',
       status: 0,
     };
@@ -411,6 +412,10 @@ export class SystemService {
       validity_days:
         isFree === 1 ? null : Math.max(1, Number(source.validity_days ?? fallback.validity_days) || 365),
       allow_source_file: Number(source.allow_source_file ?? fallback.allow_source_file) === 1 ? 1 : 0,
+      trial_preview_page_count: Math.min(
+        50,
+        Math.max(0, Math.trunc(Number(source.trial_preview_page_count ?? fallback.trial_preview_page_count) || 0)),
+      ),
       content_type: contentType,
       status: Number(source.status ?? fallback.status) === 1 ? 1 : 0,
     };

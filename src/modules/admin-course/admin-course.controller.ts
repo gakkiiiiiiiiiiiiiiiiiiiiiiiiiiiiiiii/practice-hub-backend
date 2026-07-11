@@ -387,7 +387,7 @@ export class AdminCourseController {
 
 	@Get(':id/preview-sample-pages')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '获取课程文件前三页预览图状态（管理后台）' })
+	@ApiOperation({ summary: '获取课程文件试读预览图状态（管理后台）' })
 	async getPreviewSamplePages(
 		@Param('id') id: number,
 		@Query('fileId') fileIdStr?: string,
@@ -402,7 +402,7 @@ export class AdminCourseController {
 
 	@Get(':id/preview-sample-page/:pageNum')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
-	@ApiOperation({ summary: '获取课程文件指定预览页图片（管理后台，仅前 3 页）' })
+	@ApiOperation({ summary: '获取课程文件指定试读预览页图片（管理后台）' })
 	async getPreviewSamplePageImage(
 		@Param('id') id: number,
 		@Param('pageNum') pageNumStr: string,
@@ -410,8 +410,8 @@ export class AdminCourseController {
 		@Query('fileId') fileIdStr?: string,
 	) {
 		const pageNum = parseInt(pageNumStr, 10);
-		if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > 3) {
-			return res.status(400).send('仅支持预览第 1-3 页');
+		if (!Number.isInteger(pageNum) || pageNum < 1) {
+			return res.status(400).send('页码无效');
 		}
 		const fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
 		const { buffer, contentType } = await this.adminCourseService.getPreviewSamplePageImage(

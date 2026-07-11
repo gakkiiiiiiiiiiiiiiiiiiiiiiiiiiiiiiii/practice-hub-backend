@@ -96,6 +96,7 @@ export class AdminCourseService {
       if (dto.is_free === 1) {
         dto.validity_days = null;
       }
+      this.normalizeTrialPreviewPageCount(dto);
       await this.protectCourseFileFromNonAdminDelete(dto, course, actorRole);
       Object.assign(course, dto);
       const saved = await this.courseRepository.save(course);
@@ -114,6 +115,7 @@ export class AdminCourseService {
       if (dto.is_free === 1) {
         dto.validity_days = null;
       }
+      this.normalizeTrialPreviewPageCount(dto);
       const course = this.courseRepository.create(dto);
       const saved = await this.courseRepository.save(course);
       await this.ensureCourseFilesFromLegacyFields(saved);
@@ -178,9 +180,24 @@ export class AdminCourseService {
     if (dto.allow_source_file === undefined || dto.allow_source_file === null) {
       dto.allow_source_file = defaults.allow_source_file;
     }
+    if (dto.trial_preview_page_count === undefined || dto.trial_preview_page_count === null) {
+      dto.trial_preview_page_count = defaults.trial_preview_page_count ?? 3;
+    }
     if (dto.status === undefined || dto.status === null) {
       dto.status = defaults.status ?? 0;
     }
+  }
+
+  private normalizeTrialPreviewPageCount(dto: CreateCourseDto | UpdateCourseDto) {
+    if (dto.content_type !== undefined && dto.content_type !== 'file') {
+      dto.trial_preview_page_count = 0;
+      return;
+    }
+    if (dto.trial_preview_page_count === undefined || dto.trial_preview_page_count === null) {
+      return;
+    }
+    const value = Number(dto.trial_preview_page_count);
+    dto.trial_preview_page_count = Number.isInteger(value) ? Math.min(50, Math.max(0, value)) : 3;
   }
 
   async listCourseFiles(courseId: number) {
@@ -1309,6 +1326,7 @@ export class AdminCourseService {
       'course.file_size',
       'course.file_page_count',
       'course.allow_source_file',
+      'course.trial_preview_page_count',
       'course.recommended_course_ids',
       'course.create_time',
       'course.update_time',
