@@ -21,6 +21,14 @@ export class AdminCourseCategoryService {
 		private readonly dataSource: DataSource,
 	) {}
 
+	private normalizeBookNames(input: unknown): string[] | null {
+		if (!Array.isArray(input)) return null;
+		const names = input
+			.map((item) => String(item || '').trim())
+			.filter(Boolean);
+		return Array.from(new Set(names)).slice(0, 50);
+	}
+
 	async getCategoryTree(status?: number) {
 		const where = status !== undefined ? { status } : {};
 		const categories = await this.courseCategoryRepository.find({
@@ -69,6 +77,7 @@ export class AdminCourseCategoryService {
 			cover_img: dto.cover_img ?? null,
 			bundle_price: dto.bundle_price ?? 30,
 			bundle_enabled: dto.bundle_enabled ?? 1,
+			book_names: dto.parent_id ? this.normalizeBookNames(dto.book_names) : null,
 			sort: dto.sort ?? 0,
 			status: dto.status ?? 1,
 		});
@@ -138,6 +147,7 @@ export class AdminCourseCategoryService {
 				...dto,
 				parent_id: newParentId,
 				name: nextName,
+				book_names: newParentId ? this.normalizeBookNames(dto.book_names ?? category.book_names) : null,
 			});
 			const savedCategory = await categoryRepo.save(category);
 

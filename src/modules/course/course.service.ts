@@ -169,12 +169,14 @@ export class CourseService {
     sortBy?: string,
     userId?: number,
     courseTypeId?: number,
+    bookName?: string,
   ) {
     const queryBuilder = this.courseRepository.createQueryBuilder('course');
     const normalizedKeyword = String(keyword || '').trim();
     const normalizedCategory = String(category || '').trim();
     const normalizedSubCategory = String(subCategory || '').trim();
     const normalizedCourseTypeId = Number(courseTypeId) || 0;
+    const normalizedBookName = String(bookName || '').trim();
     let hasWhere = false;
 
     const appendWhere = (condition: string, parameters?: Record<string, unknown>) => {
@@ -205,6 +207,10 @@ export class CourseService {
     // 二级分类筛选
     if (normalizedSubCategory) {
       appendWhere('course.sub_category = :subCategory', { subCategory: normalizedSubCategory });
+    }
+
+    if (normalizedBookName) {
+      appendWhere('course.name LIKE :bookName', { bookName: `%${normalizedBookName}%` });
     }
 
     let activeTypes: CourseType[] = [];

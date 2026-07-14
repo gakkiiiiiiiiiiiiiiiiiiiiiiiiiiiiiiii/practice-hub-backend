@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsString, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsArray, IsIn, IsNotEmpty, IsString, IsOptional, IsNumber, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateCourseCategoryDto {
@@ -32,6 +32,11 @@ export class CreateCourseCategoryDto {
 	@IsNumber()
 	@IsIn([0, 1])
 	bundle_enabled?: number;
+
+	@ApiProperty({ description: '二级分类所属书本列表，用于小程序课程列表筛选', example: ['基础护理学'], required: false })
+	@IsOptional()
+	@IsArray()
+	book_names?: string[];
 
 	@ApiProperty({ description: '排序', example: 0, required: false })
 	@IsOptional()

@@ -26,6 +26,9 @@ export class CourseCategory {
 	@Column({ type: 'tinyint', default: 1 })
 	bundle_enabled: number; // 是否在小程序分类列表展示整类购买入口
 
+	@Column({ type: 'json', nullable: true })
+	book_names: string[] | null; // 二级分类所属书本筛选项
+
 	@Column({ type: 'int', default: 0 })
 	sort: number; // 排序
 

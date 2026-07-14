@@ -33,6 +33,7 @@ export class CourseController {
     @Query('subCategory') subCategory?: string,
     @Query('sortBy') sortBy?: string,
     @Query('courseTypeId') courseTypeId?: string,
+    @Query('bookName') bookName?: string,
     @CurrentUser() user?: any,
   ) {
     const result = await this.courseService.getAllCourses(
@@ -42,6 +43,7 @@ export class CourseController {
       sortBy,
       user?.userId,
       courseTypeId ? Number(courseTypeId) : undefined,
+      bookName,
     );
     return CommonResponseDto.success(result);
   }
