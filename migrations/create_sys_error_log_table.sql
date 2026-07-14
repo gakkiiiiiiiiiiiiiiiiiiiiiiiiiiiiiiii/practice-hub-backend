@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS `sys_error_log` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `method` varchar(10) DEFAULT NULL,
+  `url` varchar(1000) DEFAULT NULL,
+  `status` int NOT NULL DEFAULT 500,
+  `code` int NOT NULL DEFAULT 500,
+  `message` varchar(1000) NOT NULL,
+  `error_name` varchar(100) DEFAULT NULL,
+  `stack` mediumtext DEFAULT NULL,
+  `query_text` text DEFAULT NULL,
+  `sql_message` varchar(1000) DEFAULT NULL,
+  `request_id` varchar(100) DEFAULT NULL,
+  `ip` varchar(100) DEFAULT NULL,
+  `user_id` int DEFAULT NULL,
+  `user_agent` varchar(500) DEFAULT NULL,
+  `params` json DEFAULT NULL,
+  `query` json DEFAULT NULL,
+  `body` json DEFAULT NULL,
+  `create_time` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  KEY `IDX_sys_error_log_status` (`status`),
+  KEY `IDX_sys_error_log_create_time` (`create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

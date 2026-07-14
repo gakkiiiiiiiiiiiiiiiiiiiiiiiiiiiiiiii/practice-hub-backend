@@ -3,10 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, Between } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { SysOperationLog } from '../../database/entities/sys-operation-log.entity';
+import { SysErrorLog } from '../../database/entities/sys-error-log.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { SetCountdownDto } from './dto/set-countdown.dto';
 import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
 import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
+import { GetErrorLogsDto } from './dto/get-error-logs.dto';
 import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
 import { ceilIntegerYuanPrice } from '../../common/utils/price.util';
 
@@ -28,6 +30,8 @@ export class SystemService {
   constructor(
     @InjectRepository(SysOperationLog)
     private operationLogRepository: Repository<SysOperationLog>,
+    @InjectRepository(SysErrorLog)
+    private errorLogRepository: Repository<SysErrorLog>,
     @InjectRepository(SystemConfig)
     private systemConfigRepository: Repository<SystemConfig>,
     private configService: ConfigService,
@@ -596,6 +600,78 @@ export class SystemService {
 
     return {
       list,
+      total,
+      page,
+      pageSize,
+    };
+  }
+
+  /**
+   * 获取错误日志列表（支持搜索和筛选）
+   */
+  async getErrorLogs(dto: GetErrorLogsDto) {
+    const {
+      page = 1,
+      pageSize = 20,
+      keyword,
+      status,
+      method,
+      startTime,
+      endTime,
+    } = dto;
+
+    const queryBuilder = this.errorLogRepository
+      .createQueryBuilder('log')
+      .orderBy('log.create_time', 'DESC');
+
+    if (keyword) {
+      queryBuilder.andWhere(
+        '(log.url LIKE :keyword OR log.message LIKE :keyword OR log.sql_message LIKE :keyword OR log.query_text LIKE :keyword)',
+        { keyword: `%${keyword}%` },
+      );
+    }
+
+    if (status) {
+      queryBuilder.andWhere('log.status = :status', { status });
+    }
+
+    if (method) {
+      queryBuilder.andWhere('log.method = :method', { method: method.toUpperCase() });
+    }
+
+    if (startTime) {
+      queryBuilder.andWhere('log.create_time >= :startTime', { startTime });
+    }
+    if (endTime) {
+      queryBuilder.andWhere('log.create_time <= :endTime', { endTime });
+    }
+
+    const skip = (page - 1) * pageSize;
+    queryBuilder.skip(skip).take(pageSize);
+
+    const [logs, total] = await queryBuilder.getManyAndCount();
+
+    return {
+      list: logs.map((log) => ({
+        id: log.id,
+        method: log.method,
+        url: log.url,
+        status: log.status,
+        code: log.code,
+        message: log.message,
+        errorName: log.errorName,
+        stack: log.stack,
+        queryText: log.queryText,
+        sqlMessage: log.sqlMessage,
+        requestId: log.requestId,
+        ip: log.ip,
+        userId: log.userId,
+        userAgent: log.userAgent,
+        params: log.params,
+        query: log.query,
+        body: log.body,
+        createTime: log.create_time,
+      })),
       total,
       page,
       pageSize,

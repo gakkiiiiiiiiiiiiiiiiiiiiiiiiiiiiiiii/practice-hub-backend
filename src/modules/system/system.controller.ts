@@ -9,6 +9,7 @@ import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { SetCountdownDto } from './dto/set-countdown.dto';
 import { SetDailyQuotesDto } from './dto/set-daily-quotes.dto';
 import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
+import { GetErrorLogsDto } from './dto/get-error-logs.dto';
 import { SetCheckinMinutesDto } from './dto/set-checkin-minutes.dto';
 import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
@@ -43,6 +44,14 @@ export class SystemController {
   @ApiOperation({ summary: '获取操作日志列表' })
   async getOperationLogs(@Query() dto: GetOperationLogsDto) {
     const result = await this.systemService.getOperationLogs(dto);
+    return CommonResponseDto.success(result);
+  }
+
+  @Get('error-logs')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取错误日志列表' })
+  async getErrorLogs(@Query() dto: GetErrorLogsDto) {
+    const result = await this.systemService.getErrorLogs(dto);
     return CommonResponseDto.success(result);
   }
 

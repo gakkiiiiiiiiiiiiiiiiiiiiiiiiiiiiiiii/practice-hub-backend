@@ -6,11 +6,19 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Response, Request } from 'express';
+import { Repository } from 'typeorm';
+import { SysErrorLog } from '../../database/entities/sys-error-log.entity';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
+
+  constructor(
+    @InjectRepository(SysErrorLog)
+    private readonly errorLogRepository: Repository<SysErrorLog>,
+  ) {}
 
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
@@ -102,10 +110,99 @@ export class HttpExceptionFilter implements ExceptionFilter {
     });
     this.logger.error('=== 异常处理完成 ===');
 
+    void this.saveErrorLog(exception, request, status, code, message);
+
     response.status(status).json({
       code,
       msg: message,
       data: null,
     });
+  }
+
+  private async saveErrorLog(
+    exception: unknown,
+    request: Request,
+    status: number,
+    code: number,
+    message: string,
+  ) {
+    try {
+      const error = exception as Error & {
+        code?: string;
+        errno?: number;
+        sqlMessage?: string;
+        query?: string;
+      };
+      const user = (request as any).user || {};
+
+      await this.errorLogRepository.save(
+        this.errorLogRepository.create({
+          method: request.method,
+          url: request.originalUrl || request.url,
+          status,
+          code,
+          message: this.truncate(message, 1000) || '服务器内部错误',
+          errorName: this.truncate(error?.name, 100),
+          stack: error?.stack || null,
+          queryText: this.truncate(error?.query, 60000),
+          sqlMessage: this.truncate(error?.sqlMessage, 1000),
+          requestId: this.truncate(String(request.headers['x-request-id'] || ''), 100),
+          ip: this.truncate(this.getClientIp(request), 100),
+          userId: user.userId || user.id || null,
+          userAgent: this.truncate(request.headers['user-agent'], 500),
+          params: this.sanitizeRecord(request.params),
+          query: this.sanitizeRecord(request.query),
+          body: this.sanitizeRecord(request.body),
+        }),
+      );
+    } catch (logError) {
+      this.logger.error('保存错误日志失败:', logError);
+    }
+  }
+
+  private getClientIp(request: Request) {
+    const forwardedFor = request.headers['x-forwarded-for'];
+    if (Array.isArray(forwardedFor)) {
+      return forwardedFor[0];
+    }
+    return forwardedFor || request.ip || request.socket?.remoteAddress || '';
+  }
+
+  private sanitizeRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+    const sanitized = this.sanitizeValue(value) as Record<string, unknown>;
+    const json = JSON.stringify(sanitized);
+    if (json.length <= 20000) {
+      return sanitized;
+    }
+    return { _truncated: true, preview: json.slice(0, 20000) };
+  }
+
+  private sanitizeValue(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.sanitizeValue(item));
+    }
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+
+    const sensitiveKeys = ['password', 'token', 'authorization', 'secret', 'cookie', 'openid', 'session'];
+    return Object.entries(value as Record<string, unknown>).reduce<Record<string, unknown>>((result, [key, val]) => {
+      const lowerKey = key.toLowerCase();
+      result[key] = sensitiveKeys.some((sensitiveKey) => lowerKey.includes(sensitiveKey))
+        ? '***'
+        : this.sanitizeValue(val);
+      return result;
+    }, {});
+  }
+
+  private truncate(value: unknown, maxLength: number) {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const text = String(value);
+    return text.length > maxLength ? text.slice(0, maxLength) : text;
   }
 }
