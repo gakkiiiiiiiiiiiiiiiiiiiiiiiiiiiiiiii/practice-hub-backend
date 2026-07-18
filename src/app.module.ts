@@ -2,7 +2,7 @@ import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -42,6 +42,7 @@ import { MarketingModule } from './modules/marketing/marketing.module';
 import { PackageModule } from './modules/package/package.module';
 import { AdminPackageModule } from './modules/admin-package/admin-package.module';
 import { CourseTypeModule } from './modules/course-type/course-type.module';
+import { OperationLogInterceptor } from './common/interceptors/operation-log.interceptor';
 
 @Module({
 	imports: [
@@ -151,6 +152,10 @@ import { CourseTypeModule } from './modules/course-type/course-type.module';
 		{
 			provide: APP_FILTER,
 			useClass: HttpExceptionFilter,
+		},
+		{
+			provide: APP_INTERCEPTOR,
+			useClass: OperationLogInterceptor,
 		},
 	],
 })
