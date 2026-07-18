@@ -1,43 +1,37 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as COS from 'cos-nodejs-sdk-v5';
-import axios from 'axios';
-import * as https from 'https';
+import OSS = require('ali-oss');
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-interface TempAuth {
-	TmpSecretId: string;
-	TmpSecretKey: string;
-	Token: string;
-	ExpiredTime: number;
-}
-
-interface MetaDataResponse {
-	errcode: number;
-	errmsg: string;
-	respdata: {
-		x_cos_meta_field_strs: string[];
-	};
-}
-
 @Injectable()
 export class UploadService {
 	private readonly logger = new Logger(UploadService.name);
-	private cos: COS;
+	private oss: OSS | null = null;
 	private bucket: string;
 	private region: string;
-	private tempAuth: TempAuth | null = null;
-	private authExpireTime: number = 0;
+	private endpoint: string;
+	private publicBaseUrl: string;
+	private legacyCosBucket: string;
 	private uploadDir: string;
 	private baseUrl: string;
-	private uploadCredentialInternalSkipUntil = 0;
-	private wechatTlsCompatWarned = false;
 
 	constructor(private configService: ConfigService) {
-		this.bucket = this.configService.get<string>('COS_BUCKET', '7072-prod-6g7tpqs40c5a758b-1392943725');
-		this.region = this.configService.get<string>('COS_REGION', 'ap-shanghai');
+		this.bucket = this.configService.get<string>('OSS_BUCKET', '');
+		this.region = this.configService.get<string>('OSS_REGION', 'oss-cn-shanghai');
+		this.endpoint = this.configService.get<string>('OSS_ENDPOINT', '');
+		this.legacyCosBucket = this.configService.get<string>(
+			'OSS_LEGACY_COS_BUCKET',
+			'7072-prod-6g7tpqs40c5a758b-1392943725',
+		);
+		const endpointHost = this.endpoint.replace(/^https?:\/\//, '').replace(/\/$/, '');
+		this.publicBaseUrl = (
+			this.configService.get<string>('OSS_PUBLIC_BASE_URL') ||
+			(endpointHost
+				? `https://${this.bucket}.${endpointHost}`
+				: `https://${this.bucket}.${this.region}.aliyuncs.com`)
+		).replace(/\/$/, '');
 
 		// 本地存储配置（可通过 UPLOAD_DIR 覆盖；容器内默认 uploads）
 		this.uploadDir = this.configService.get<string>('UPLOAD_DIR') || path.join(process.cwd(), 'uploads');
@@ -49,68 +43,21 @@ export class UploadService {
 		// 确保上传目录存在
 		this.ensureUploadDir();
 
-		// 初始化 COS 客户端，使用 getAuthorization 方式
-		this.cos = new COS({
-			getAuthorization: async (options, callback) => {
-				try {
-					const auth = await this.getTempAuth();
-					const now = Math.floor(Date.now() / 1000);
-					callback({
-						TmpSecretId: auth.TmpSecretId,
-						TmpSecretKey: auth.TmpSecretKey,
-						SecurityToken: auth.Token,
-						ExpiredTime: auth.ExpiredTime,
-						StartTime: now, // 临时密钥开始时间
-					});
-				} catch (error: any) {
-					const now = Math.floor(Date.now() / 1000);
-					callback({
-						TmpSecretId: '',
-						TmpSecretKey: '',
-						SecurityToken: '',
-						ExpiredTime: 0,
-						StartTime: now,
-					});
-					console.error('[COS授权] 获取临时密钥失败:', error.message);
-				}
-			},
-		});
-	}
-
-	/**
-	 * 获取临时密钥（参考微信云托管文档）
-	 * https://developers.weixin.qq.com/miniprogram/dev/wxcloudservice/wxcloudrun/src/development/storage/service/cos-sdk.html
-	 */
-	private async getTempAuth(): Promise<TempAuth> {
-		// 如果临时密钥未过期，直接返回
-		const now = Math.floor(Date.now() / 1000);
-		if (this.tempAuth && this.authExpireTime > now + 60) {
-			// 提前60秒刷新，避免过期
-			return this.tempAuth;
-		}
-
-		try {
-			// 微信云托管内部 API 使用 http（参考 demo）
-			const response = await axios.get('http://api.weixin.qq.com/_/cos/getauth');
-			const authData = response.data;
-
-			if (!authData.TmpSecretId || !authData.TmpSecretKey) {
-				throw new Error('获取临时密钥失败：返回数据不完整');
-			}
-
-			this.tempAuth = {
-				TmpSecretId: authData.TmpSecretId,
-				TmpSecretKey: authData.TmpSecretKey,
-				Token: authData.Token,
-				ExpiredTime: authData.ExpiredTime,
-			};
-			this.authExpireTime = authData.ExpiredTime;
-
-			console.log('[COS授权] 临时密钥获取成功');
-			return this.tempAuth;
-		} catch (error: any) {
-			console.error('[COS授权] 获取临时密钥失败:', error.message);
-			throw new Error(`获取临时密钥失败: ${error.message}`);
+		const accessKeyId = this.configService.get<string>('OSS_ACCESS_KEY_ID');
+		const accessKeySecret = this.configService.get<string>('OSS_ACCESS_KEY_SECRET');
+		if (this.bucket && accessKeyId && accessKeySecret) {
+			this.oss = new OSS({
+				region: this.region,
+				bucket: this.bucket,
+				accessKeyId,
+				accessKeySecret,
+				...(this.endpoint ? { endpoint: this.endpoint } : {}),
+				secure: true,
+				timeout: 10 * 60 * 1000,
+			});
+			this.logger.log(`阿里云 OSS 已启用: bucket=${this.bucket}, region=${this.region}`);
+		} else {
+			this.logger.warn('OSS 配置不完整，上传文件将保存到本地');
 		}
 	}
 
@@ -135,20 +82,15 @@ export class UploadService {
 		}
 	}
 
-	/**
-	 * 检查是否在微信云托管环境
-	 */
-	private isWeChatCloudBase(): boolean {
-		// 检查环境变量或请求头，判断是否在微信云托管环境
-		// 微信云托管会设置特定的环境变量或请求头
-		return !!(
-			process.env.WX_CLOUD_ENV ||
-			process.env.WX_CLOUDBASE_ENV ||
-			process.env.TCB_ENV ||
-			process.env.COS_BUCKET ||
-			// 检查是否能访问微信云托管内部 API
-			process.env.WX_CLOUD_RUN_ENV === 'true'
-		);
+	private isObjectStorageEnabled(): boolean {
+		return this.oss !== null;
+	}
+
+	private requireOss(): OSS {
+		if (!this.oss) {
+			throw new BadRequestException('阿里云 OSS 配置不完整');
+		}
+		return this.oss;
 	}
 
 	/**
@@ -242,58 +184,9 @@ export class UploadService {
 	}
 
 	/**
-	 * 获取文件元数据（必须，否则小程序端无法访问）
-	 * @param cloudPath 云上文件路径
-	 * @param openid 用户openid，管理端传空字符串
-	 */
-	private async getFileMetaData(cloudPath: string, openid: string = ''): Promise<string | null> {
-		// 如果不在微信云托管环境，返回 null，跳过元数据设置
-		if (!this.isWeChatCloudBase()) {
-			console.warn('[COS元数据] 非微信云托管环境，跳过元数据获取');
-			return null;
-		}
-
-		try {
-			// 微信云托管内部 API 使用 http（参考 demo）
-			const response = await axios.post(
-				'http://api.weixin.qq.com/_/cos/metaid/encode',
-				{
-					openid: openid, // 管理端上传时传空字符串
-					bucket: this.bucket,
-					paths: [cloudPath],
-				},
-				{
-					timeout: 5000, // 5秒超时
-				}
-			);
-
-			const result: MetaDataResponse = response.data;
-
-			if (result.errcode !== 0) {
-				throw new Error(`获取文件元数据失败: ${result.errmsg}`);
-			}
-
-			if (!result.respdata?.x_cos_meta_field_strs?.[0]) {
-				throw new Error('获取文件元数据失败：返回数据不完整');
-			}
-
-			return result.respdata.x_cos_meta_field_strs[0];
-		} catch (error: any) {
-			// 如果是 404 错误，说明不在微信云托管环境，返回 null
-			if (error.response?.status === 404 || error.code === 'ECONNREFUSED') {
-				console.warn('[COS元数据] 微信云托管 API 不可用，跳过元数据获取');
-				return null;
-			}
-			console.error('[COS元数据] 获取失败:', error.message);
-			throw new Error(`获取文件元数据失败: ${error.message}`);
-		}
-	}
-
-	/**
 	 * 上传图片（根据环境选择存储方式）
 	 * @param file 文件对象
 	 * @param folder 存储文件夹（可选，默认为 images）
-	 * @param openid 用户openid（可选，管理端上传时可不传）
 	 * @returns 图片 URL
 	 */
 	async uploadImage(file: Express.Multer.File, folder: string = 'images', openid: string = ''): Promise<string> {
@@ -308,8 +201,8 @@ export class UploadService {
 		}
 
 		// 根据环境选择存储方式
-		if (this.isWeChatCloudBase()) {
-			return this.uploadToCOS(file, folder, openid);
+		if (this.isObjectStorageEnabled()) {
+			return this.uploadToOss(file, folder);
 		} else {
 			return this.uploadToLocal(file, folder);
 		}
@@ -334,16 +227,15 @@ export class UploadService {
 	}
 
 	/**
-	 * 上传图片到 COS
+	 * 上传图片到阿里云 OSS
 	 * @param file 文件对象
 	 * @param folder 存储文件夹（可选，默认为 images）
 	 * @param openid 用户openid（可选，管理端上传时可不传）
 	 * @returns 图片 URL
 	 */
-	private async uploadToCOS(
+	private async uploadToOss(
 		file: Express.Multer.File,
 		folder: string = 'images',
-		openid: string = ''
 	): Promise<string> {
 		// 验证文件名和文件夹名
 		if (!this.isValidFilename(file.originalname)) {
@@ -366,64 +258,29 @@ export class UploadService {
 		}
 
 		const fileName = `${folder}/${timestamp}-${randomStr}${normalizedExt}`;
-		const cloudPath = `/${fileName}`;
-
 		try {
-			// 1. 获取文件元数据（微信云托管环境必须，否则小程序端无法访问）
-			const metaFileId = await this.getFileMetaData(cloudPath, openid);
-
-			// 2. 上传到 COS，如果获取到元数据则添加 x-cos-meta-fileid（参考 demo）
-			const uploadOptions: any = {
-				Bucket: this.bucket,
-				Region: this.region,
-				Key: fileName,
-				Body: file.buffer,
-				ContentType: file.mimetype,
-				ContentLength: file.size, // 添加 ContentLength（参考 demo）
-				StorageClass: 'STANDARD',
-			};
-
-			// 只有在微信云托管环境且有元数据时才添加 x-cos-meta-fileid
-			if (metaFileId) {
-				uploadOptions.Headers = {
-					'x-cos-meta-fileid': metaFileId,
-				};
-			}
-
-			const result = await this.cos.putObject(uploadOptions);
-			console.log('[COS上传] 上传结果:', { statusCode: result.statusCode, Location: result.Location });
-
-			if (result.statusCode !== 200 && result.statusCode !== 204) {
-				throw new Error(`上传失败，状态码: ${result.statusCode}`);
-			}
-
-			// 3. 获取可访问的图片 URL
-			// 优先使用返回的 Location，否则使用默认格式
-			let imageUrl = '';
-			// if (result.Location) {
-			// 	imageUrl = result.Location.startsWith('http') ? result.Location : `https://${result.Location}`;
-			// } else {
-			// 	// 微信云托管环境使用 tcb 域名
-			// 	imageUrl = `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
-			// }
-			imageUrl = `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
-
-			console.log(`[COS上传] 成功: ${imageUrl}, 元数据: ${metaFileId || '未设置'}`);
+			await this.requireOss().put(fileName, file.buffer, {
+				headers: {
+					'Content-Type': file.mimetype,
+				},
+			});
+			const imageUrl = this.getObjectUrl(fileName);
+			console.log(`[OSS上传] 图片成功: ${imageUrl}`);
 			return imageUrl;
 		} catch (error: any) {
-			console.error('[COS上传] 失败:', error);
+			console.error('[OSS上传] 失败:', error);
 			throw new BadRequestException(`图片上传失败: ${error.message || '未知错误'}`);
 		}
 	}
 
 	/**
-	 * 根据 URL 删除文件（本地或 COS），供图片、PDF 等统一使用
+	 * 根据 URL 删除文件（本地或 OSS），供图片、PDF 等统一使用
 	 * @param fileUrl 文件 URL
 	 */
 	async deleteByUrl(fileUrl: string): Promise<void> {
 		if (!fileUrl || typeof fileUrl !== 'string') return;
 		try {
-			// 判断是本地文件还是 COS 文件
+			// 判断是本地文件还是 OSS 文件
 			if (fileUrl.includes('/uploads/')) {
 				// 本地文件
 				const relativePath = fileUrl.split('/uploads/')[1];
@@ -433,19 +290,14 @@ export class UploadService {
 					console.log(`[本地存储] 删除成功: ${filePath}`);
 				}
 			} else {
-				// COS 文件
+				// OSS 文件
 				const key = this.extractKeyFromUrl(fileUrl);
 				if (!key) {
 					throw new BadRequestException('无效的文件 URL');
 				}
 
-				await this.cos.deleteObject({
-					Bucket: this.bucket,
-					Region: this.region,
-					Key: key,
-				});
-
-				console.log(`[COS删除] 成功: ${key}`);
+				await this.requireOss().delete(key);
+				console.log(`[OSS删除] 成功: ${key}`);
 			}
 		} catch (error: any) {
 			console.error('[删除文件] 失败:', error);
@@ -459,192 +311,41 @@ export class UploadService {
 	}
 
 	/**
-	 * 获取课程文件直传 COS 的上传凭证（用于前端直传，绕过云托管 413 限制）
-	 * 参考：https://developers.weixin.qq.com/miniprogram/dev/wxcloudservice/wxcloudrun/src/development/storage/service/upload.html
+	 * 获取 OSS 直传签名 URL（用于前端直传，绕过云托管 413 限制）
 	 * @param path 云端路径，不要以 / 开头，如 course-files/xxx.pdf
 	 */
-	async getCourseFileUploadUrl(cloudPath: string): Promise<{
+	async getDirectUploadUrl(
+		cloudPath: string,
+		contentType = 'application/octet-stream',
+	): Promise<{
 		url: string;
-		token: string;
-		authorization: string;
-		cos_file_id: string;
-		file_id: string;
+		method: 'PUT';
+		contentType: string;
+		headers: Record<string, string>;
 		path: string;
 		finalFileUrl: string;
 	}> {
-		const envId = this.configService.get<string>('CBR_ENV_ID') || this.configService.get<string>('TCB_ENV_ID') || this.getEnvIdFromBucket();
-		if (!envId) {
-			throw new BadRequestException('未配置 CBR_ENV_ID 或 TCB_ENV_ID，无法获取直传凭证');
-		}
-		const pathNorm = cloudPath.replace(/^\//, '');
-		const inCloudRun = process.env.WX_CLOUD_RUN_ENV === 'true' || this.isWeChatCloudBase();
-		const uploadMode = String(this.configService.get<string>('WECHAT_TCB_UPLOAD_MODE') || 'auto').toLowerCase();
-		const forcePublicUploadApi = uploadMode === 'public';
-		const shouldSkipInternalApi = forcePublicUploadApi || Date.now() < this.uploadCredentialInternalSkipUntil;
-		const buildUploadCredential = (data: any) => {
-			if (!data.url || !data.authorization || !data.token || !data.cos_file_id) {
-				throw new Error('获取上传链接返回数据不完整');
-			}
-			const finalFileUrl = `https://${this.bucket}.tcb.qcloud.la/${pathNorm}`;
-			return {
-				url: data.url,
-				token: data.token,
-				authorization: data.authorization,
-				cos_file_id: data.cos_file_id,
-				file_id: data.file_id || '',
-				path: pathNorm,
-				finalFileUrl,
-			};
+		const safeKey = this.normalizeObjectKey(cloudPath);
+		const headers: Record<string, string> = { 'Content-Type': contentType };
+		const signatureOptions: any = {
+			expires: 15 * 60,
+			method: 'PUT',
+			'Content-Type': contentType,
 		};
-		const requestPublicUploadCredential = async (successLog: string) => {
-			try {
-				const token = await this.getWeChatAccessToken();
-				const publicRes = await this.requestWechatPublicApi(
-					`https://api.weixin.qq.com/tcb/uploadfile?access_token=${token}`,
-					{ env: envId, path: pathNorm },
-				);
-				const data = publicRes.data;
-				if (data.errcode && data.errcode !== 0) {
-					throw new Error(data.errmsg || `公网接口失败: ${data.errcode}`);
-				}
-				const credential = buildUploadCredential(data);
-				console.log(successLog);
-				return credential;
-			} catch (fallbackErr: any) {
-				const fbMsg = fallbackErr?.response?.data?.errmsg || fallbackErr.message;
-				console.error('[直传凭证] 公网接口失败:', fbMsg);
-				const configHint = fbMsg?.includes('未配置') ? '请确认已配置 WECHAT_APPID、WECHAT_SECRET：' : '公网接口错误：';
-				throw new BadRequestException('获取上传凭证失败。' + configHint + (fbMsg || ''));
-			}
+		const url = this.requireOss().signatureUrl(safeKey, signatureOptions);
+		return {
+			url,
+			method: 'PUT',
+			contentType,
+			headers,
+			path: safeKey,
+			finalFileUrl: this.getObjectUrl(safeKey),
 		};
-
-		if (shouldSkipInternalApi) {
-			return requestPublicUploadCredential(
-				forcePublicUploadApi
-					? '[直传凭证] 已按 WECHAT_TCB_UPLOAD_MODE=public 使用公网 tcb/uploadfile 获取成功'
-					: '[直传凭证] 已跳过临时不可用的内网接口，通过公网 tcb/uploadfile 获取成功',
-			);
-		}
-
-		// 先尝试云托管内网 _/tcb/uploadfile（无需 access_token）；若返回 85107 再走公网 + access_token
-		try {
-			const apiUrl = inCloudRun
-				? 'http://api.weixin.qq.com/_/tcb/uploadfile'
-				: `https://api.weixin.qq.com/tcb/uploadfile`;
-			const res = await axios.post(
-				apiUrl,
-				{ env: envId, path: pathNorm },
-				{ timeout: 10000 },
-			);
-			const data = res.data;
-			if (data.errcode && data.errcode !== 0) {
-				throw new Error(data.errmsg || `获取上传链接失败: ${data.errcode}`);
-			}
-			return buildUploadCredential(data);
-		} catch (error: any) {
-			const body = error?.response?.data;
-			const code = body?.error_code ?? body?.errcode;
-			const status = error?.response?.status;
-			const msg = body?.error_message ?? body?.errmsg ?? error.message;
-			const isWhitelistError = this.isWechatSafeLinkWhitelistError(body) || code === '85107' || code === 85107;
-			if (isWhitelistError) {
-				this.uploadCredentialInternalSkipUntil = Date.now() + 30 * 60 * 1000;
-				console.warn(
-					'[直传凭证] 内网云调用未配置微信令牌白名单，30分钟内直接使用公网接口兜底。建议在环境变量设置 WECHAT_TCB_UPLOAD_MODE=public，或到云托管控制台配置 /_/tcb/uploadfile 白名单。',
-				);
-			} else {
-				console.error('[直传凭证] 获取失败:', status || '', body || error.message);
-			}
-
-			// 云托管内：内网 404/85107 等失败时，统一尝试公网 tcb/uploadfile + access_token
-			if (inCloudRun) {
-				return requestPublicUploadCredential('[直传凭证] 已通过公网 tcb/uploadfile + access_token 获取成功');
-			}
-
-			if (code === '85107' || code === 85107) {
-				throw new BadRequestException(
-					'URL 未加入白名单。请前往「微信云托管控制台 → 服务管理 → 云调用 → 微信令牌」在权限配置中添加：/tcb/uploadfile 或 /_/tcb/uploadfile',
-				);
-			}
-			throw new BadRequestException(msg || '获取上传凭证失败');
-		}
-	}
-
-	/** 使用小程序 appid/secret 获取 access_token，用于公网 tcb/uploadfile 等接口 */
-	private async getWeChatAccessToken(): Promise<string> {
-		const appid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
-		const secret =
-			this.configService.get<string>('WECHAT_SECRET') ||
-			this.configService.get<string>('WECHAT_APPSECRET') ||
-			this.configService.get<string>('AppSecret');
-		if (!appid || !secret) {
-			throw new Error('未配置 WECHAT_APPID 或 WECHAT_SECRET，无法使用公网 tcb/uploadfile');
-		}
-		const res = await this.requestWechatPublicApi('https://api.weixin.qq.com/cgi-bin/token', null, {
-			grant_type: 'client_credential',
-			appid,
-			secret,
-		});
-		if (res.data.errcode) {
-			throw new Error(res.data.errmsg || `获取 access_token 失败: ${res.data.errcode}`);
-		}
-		return res.data.access_token;
-	}
-
-	private async requestWechatPublicApi(url: string, data?: Record<string, any> | null, params?: Record<string, any>) {
-		try {
-			if (data) {
-				return await axios.post(url, data, { params, timeout: 10000 });
-			}
-			return await axios.get(url, { params, timeout: 10000 });
-		} catch (error: any) {
-			if (!this.isTlsCertificateError(error)) {
-				throw error;
-			}
-
-			if (!this.wechatTlsCompatWarned) {
-				this.wechatTlsCompatWarned = true;
-				console.warn('[微信公网接口] TLS 证书校验失败，使用兼容模式重试:', error.message);
-			}
-			const requestConfig = {
-				params,
-				timeout: 10000,
-				httpsAgent: new https.Agent({ rejectUnauthorized: false }),
-			};
-			if (data) {
-				return axios.post(url, data, requestConfig);
-			}
-			return axios.get(url, requestConfig);
-		}
-	}
-
-	private isTlsCertificateError(error: any): boolean {
-		const code = error?.code || error?.cause?.code;
-		const message = String(error?.message || error?.cause?.message || '').toLowerCase();
-		return (
-			code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
-			code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
-			code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
-			message.includes('self-signed certificate') ||
-			message.includes('unable to verify the first certificate')
-		);
-	}
-
-	private isWechatSafeLinkWhitelistError(body: any): boolean {
-		const errorType = String(body?.error_type || '');
-		const message = String(body?.error_message || body?.errmsg || '');
-		return errorType === 'SafeLinkError' || message.includes('URL不在白名单内') || message.includes('URL 未加入白名单');
-	}
-
-	private getEnvIdFromBucket(): string {
-		// 从 bucket 名 7072-prod-6g7tpqs40c5a758b-1392943725 推断 env 多为中间段
-		const m = this.bucket.match(/^[^-]+-(.+)-[^-]+$/);
-		return m ? m[1] : '';
 	}
 
 	/**
 	 * 上传课程文件（PDF/Word），用于「文件类型」课程内容
-	 * 支持：.pdf, .doc, .docx（直传方案可绕过 413，建议管理端使用 getCourseFileUploadUrl + 前端直传）
+	 * 支持：.pdf, .doc, .docx（直传方案可绕过 413，建议管理端使用 getDirectUploadUrl + 前端直传）
 	 */
 	async uploadCourseFile(file: Express.Multer.File, openid: string = ''): Promise<string> {
 		if (!file) {
@@ -664,8 +365,8 @@ export class UploadService {
 			throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
 		}
 		const folder = 'course-files';
-		if (this.isWeChatCloudBase()) {
-			return this.uploadCourseFileToCOS(file, folder, openid);
+		if (this.isObjectStorageEnabled()) {
+			return this.uploadCourseFileToOss(file, folder);
 		}
 		return this.uploadCourseFileToLocal(file, folder);
 	}
@@ -718,10 +419,9 @@ export class UploadService {
 		throw new BadRequestException('无法读取文件内容');
 	}
 
-	private async uploadCourseFileToCOS(
+	private async uploadCourseFileToOss(
 		file: Express.Multer.File,
 		folder: string,
-		openid: string,
 	): Promise<string> {
 		const allowedExts = ['.pdf', '.doc', '.docx'];
 		const ext = this.getFileExtension(file.originalname).toLowerCase();
@@ -731,34 +431,22 @@ export class UploadService {
 		const timestamp = Date.now();
 		const randomStr = Math.random().toString(36).substring(2, 15);
 		const fileName = `${folder}/${timestamp}-${randomStr}${ext}`;
-		const cloudPath = `/${fileName}`;
-		const metaFileId = await this.getFileMetaData(cloudPath, openid);
 		const buffer = (file as any).buffer;
 		const filePath = file.path && fs.existsSync(file.path) ? file.path : '';
 		if (!buffer && !filePath) {
 			throw new BadRequestException('无法读取文件内容');
 		}
-		const uploadOptions: any = {
-			Bucket: this.bucket,
-			Region: this.region,
-			Key: fileName,
-			Body: buffer || fs.createReadStream(filePath),
-			ContentType: file.mimetype,
-			ContentLength: buffer ? buffer.length : (await fs.promises.stat(filePath)).size,
-			StorageClass: 'STANDARD',
-		};
-		if (metaFileId) {
-			uploadOptions.Headers = { 'x-cos-meta-fileid': metaFileId };
-		}
-		await this.cos.putObject(uploadOptions);
-		const fileUrl = `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
-		console.log(`[COS上传] 课程文件成功: ${fileUrl}`);
+		await this.requireOss().put(fileName, buffer || fs.createReadStream(filePath), {
+			headers: { 'Content-Type': file.mimetype },
+		});
+		const fileUrl = this.getObjectUrl(fileName);
+		console.log(`[OSS上传] 课程文件成功: ${fileUrl}`);
 		return fileUrl;
 	}
 
 	/**
 	 * 上传 PDF 到对象存储（用于「先上传再解析」流程）
-	 * 本地环境存到 uploads/pdf/，微信云托管存到 COS pdf/
+	 * 本地环境存到 uploads/pdf/，线上存到 OSS pdf/
 	 */
 	async uploadPdf(file: Express.Multer.File): Promise<string> {
 		if (!file) {
@@ -769,8 +457,8 @@ export class UploadService {
 			throw new BadRequestException('仅支持 PDF 文件');
 		}
 		const buffer = await this.getPdfBuffer(file);
-		if (this.isWeChatCloudBase()) {
-			return this.uploadPdfToCOS(buffer, file.size);
+		if (this.isObjectStorageEnabled()) {
+			return this.uploadPdfToOss(buffer);
 		}
 		return this.uploadPdfToLocal(buffer);
 	}
@@ -799,79 +487,48 @@ export class UploadService {
 		return `${this.baseUrl}/uploads/${fileName}`;
 	}
 
-	private async uploadPdfToCOS(buffer: Buffer, size: number): Promise<string> {
+	private async uploadPdfToOss(buffer: Buffer): Promise<string> {
 		const timestamp = Date.now();
 		const randomStr = Math.random().toString(36).substring(2, 15);
 		const fileName = `pdf/${timestamp}-${randomStr}.pdf`;
-		const cloudPath = `/${fileName}`;
-		const metaFileId = await this.getFileMetaData(cloudPath, '');
-		const uploadOptions: any = {
-			Bucket: this.bucket,
-			Region: this.region,
-			Key: fileName,
-			Body: buffer,
-			ContentType: 'application/pdf',
-			ContentLength: size,
-			StorageClass: 'STANDARD',
-		};
-		if (metaFileId) {
-			uploadOptions.Headers = { 'x-cos-meta-fileid': metaFileId };
-		}
-		await this.cos.putObject(uploadOptions);
-		return `https://${this.bucket}.tcb.qcloud.la/${fileName}`;
+		await this.requireOss().put(fileName, buffer, {
+			headers: { 'Content-Type': 'application/pdf' },
+		});
+		return this.getObjectUrl(fileName);
 	}
 
 	/**
 	 * 上传 Buffer 到当前对象存储桶，供服务端生成的缓存文件复用。
 	 */
-	async uploadBufferToCOS(
+	async uploadBufferToOss(
 		key: string,
 		buffer: Buffer,
 		contentType = 'application/octet-stream',
-		openid = '',
 	): Promise<string> {
-		const safeKey = this.normalizeCosKey(key);
-		const cloudPath = `/${safeKey}`;
-		const metaFileId = await this.getFileMetaData(cloudPath, openid);
-		const uploadOptions: any = {
-			Bucket: this.bucket,
-			Region: this.region,
-			Key: safeKey,
-			Body: buffer,
-			ContentType: contentType,
-			ContentLength: buffer.length,
-			StorageClass: 'STANDARD',
-		};
-		if (metaFileId) {
-			uploadOptions.Headers = { 'x-cos-meta-fileid': metaFileId };
-		}
-		await this.cos.putObject(uploadOptions);
-		return this.getCosPublicUrl(safeKey);
+		const safeKey = this.normalizeObjectKey(key);
+		await this.requireOss().put(safeKey, buffer, {
+			headers: {
+				'Content-Type': contentType,
+			},
+		});
+		return this.getObjectUrl(safeKey);
 	}
 
-	async cosObjectExists(key: string): Promise<boolean> {
-		const safeKey = this.normalizeCosKey(key);
+	async objectExists(key: string): Promise<boolean> {
+		const safeKey = this.normalizeObjectKey(key);
 		try {
-			await this.cos.headObject({
-				Bucket: this.bucket,
-				Region: this.region,
-				Key: safeKey,
-			});
+			await this.requireOss().head(safeKey);
 			return true;
 		} catch {
 			return false;
 		}
 	}
 
-	async readCosObjectBuffer(key: string): Promise<Buffer | null> {
-		const safeKey = this.normalizeCosKey(key);
+	async readObjectBuffer(key: string): Promise<Buffer | null> {
+		const safeKey = this.normalizeObjectKey(key);
 		try {
-			const result = await this.cos.getObject({
-				Bucket: this.bucket,
-				Region: this.region,
-				Key: safeKey,
-			});
-			const body = (result as any)?.Body;
+			const result = await this.requireOss().get(safeKey);
+			const body = (result as any)?.content;
 			if (Buffer.isBuffer(body)) return body;
 			if (body instanceof Uint8Array) return Buffer.from(body);
 			if (typeof body === 'string') return Buffer.from(body);
@@ -881,7 +538,7 @@ export class UploadService {
 		}
 	}
 
-	async readCosUrlBuffer(url: string): Promise<Buffer | null> {
+	async readObjectUrlBuffer(url: string): Promise<Buffer | null> {
 		if (!this.isAllowedProxyUrl(url)) {
 			return null;
 		}
@@ -889,14 +546,14 @@ export class UploadService {
 		if (!key) {
 			return null;
 		}
-		return this.readCosObjectBuffer(key);
+		return this.readObjectBuffer(key);
 	}
 
-	getCosPublicUrl(key: string): string {
-		return `https://${this.bucket}.tcb.qcloud.la/${this.normalizeCosKey(key)}`;
+	getObjectUrl(key: string): string {
+		return `${this.publicBaseUrl}/${this.normalizeObjectKey(key).split('/').map(encodeURIComponent).join('/')}`;
 	}
 
-	private normalizeCosKey(key: string): string {
+	private normalizeObjectKey(key: string): string {
 		const safeKey = String(key || '').replace(/^\/+/, '');
 		if (!safeKey || safeKey.includes('..') || safeKey.includes('\\')) {
 			throw new BadRequestException('对象存储路径不安全');
@@ -942,7 +599,7 @@ export class UploadService {
 	}
 
 	/**
-	 * 合并课程文件分片并保存（本地或 COS），返回最终 fileUrl
+	 * 合并课程文件分片并保存（本地或 OSS），返回最终 fileUrl
 	 */
 	async mergeCourseFileChunks(
 		uploadId: string,
@@ -1014,53 +671,60 @@ export class UploadService {
 	}
 
 	/**
-	 * 从 URL 中提取 COS Key
+	 * 从 URL 中提取对象存储 Key
 	 */
 	private extractKeyFromUrl(url: string): string | null {
 		try {
-			// URL 格式：https://{bucket}.cos.{region}.myqcloud.com/{key}
-			// 或：https://{bucket}.tcb.qcloud.la/{key}
-			const match = url.match(/(?:\.myqcloud\.com|\.tcb\.qcloud\.la)\/(.+)$/);
-			return match ? match[1] : null;
+			const parsed = new URL(url);
+			if (!this.isAllowedProxyUrl(url)) return null;
+			return decodeURIComponent(parsed.pathname.replace(/^\/+/, '')) || null;
 		} catch {
 			return null;
 		}
 	}
 
 	/**
-	 * 判断 URL 是否为本项目 TCB 域名（仅允许代理自家存储，防止滥用）
+	 * 判断 URL 是否为本项目对象存储域名（仅允许代理自家存储，防止滥用）
 	 */
 	isAllowedProxyUrl(url: string): boolean {
 		if (!url || typeof url !== 'string') return false;
 		const normalized = url.trim();
 		if (!normalized.startsWith('https://')) return false;
-		// 只允许当前配置的 bucket 对应的 tcb 域名
-		const allowedHost = `${this.bucket}.tcb.qcloud.la`;
 		try {
 			const u = new URL(normalized);
-			return u.hostname === allowedHost;
+			const publicHost = new URL(this.publicBaseUrl).hostname;
+			const allowedHosts = new Set([
+				publicHost,
+				`${this.bucket}.${this.region}.aliyuncs.com`,
+				`${this.bucket}.oss-accelerate.aliyuncs.com`,
+			]);
+			if (this.legacyCosBucket) {
+				allowedHosts.add(`${this.legacyCosBucket}.tcb.qcloud.la`);
+				allowedHosts.add(`${this.legacyCosBucket}.cos.ap-shanghai.myqcloud.com`);
+			}
+			return allowedHosts.has(u.hostname);
 		} catch {
 			return false;
 		}
 	}
 
 	/**
-	 * 代理拉取 TCB 图片并返回 buffer 与 contentType（用于解决管理端跨域无法直接显示 TCB 图片）
+	 * 从 OSS 拉取图片并返回 buffer 与 contentType（用于私有 Bucket 和管理端跨域场景）
 	 */
 	async proxyImage(url: string): Promise<{ data: Buffer; contentType: string }> {
 		if (!this.isAllowedProxyUrl(url)) {
-			throw new BadRequestException('仅允许代理本项目的 TCB 图片地址');
+			throw new BadRequestException('仅允许代理本项目的 OSS 图片地址');
 		}
-		const res = await axios.get(url, {
-			responseType: 'arraybuffer',
-			timeout: 15000,
-			validateStatus: () => true,
-		});
-		if (res.status !== 200) {
-			throw new BadRequestException(`拉取图片失败: ${res.status}`);
+		const key = this.extractKeyFromUrl(url);
+		if (!key) throw new BadRequestException('OSS 图片地址无效');
+		try {
+			const result = await this.requireOss().get(key);
+			const data = Buffer.isBuffer(result.content) ? result.content : Buffer.from(result.content as any);
+			const contentType = (result.res?.headers?.['content-type'] as string) || this.sniffImageMime(data) || 'image/png';
+			return { data, contentType };
+		} catch (error: any) {
+			throw new BadRequestException(`拉取 OSS 图片失败: ${error?.message || '未知错误'}`);
 		}
-		const contentType = res.headers['content-type'] || 'image/png';
-		return { data: Buffer.from(res.data), contentType };
 	}
 
 	private isImageContentType(contentType: string): boolean {

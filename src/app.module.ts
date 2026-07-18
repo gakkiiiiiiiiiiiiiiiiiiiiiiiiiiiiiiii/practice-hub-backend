@@ -47,7 +47,7 @@ import { CourseTypeModule } from './modules/course-type/course-type.module';
 	imports: [
 		ConfigModule.forRoot({
 			isGlobal: true,
-			envFilePath: ['.env.local', '.env.pay', '.env'],
+			envFilePath: ['.env.local', '.env.remote', '.env.pay', '.env'],
 		}),
 		TypeOrmModule.forRootAsync({
 			imports: [ConfigModule],

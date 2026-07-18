@@ -464,7 +464,7 @@ export class DistributorService {
 			throw new BadRequestException('微信生成二维码失败：未返回有效图片数据');
 		}
 
-		// 将二维码图片上传到 COS 或保存到本地
+		// 将二维码图片上传到 OSS 或保存到本地
 		try {
 			// 创建一个模拟的 Multer File 对象用于上传
 			const ext = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : 'png';

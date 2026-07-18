@@ -1,4 +1,6 @@
-# 微信云托管对象存储（COS）配置指南
+# 腾讯云 COS 配置指南（已废弃）
+
+> 当前项目已迁移到阿里云 OSS。本文件仅保留用于排查历史数据，新的部署请阅读 [OSS_STORAGE_CONFIG.md](./OSS_STORAGE_CONFIG.md)，不要再配置 COS 密钥或上传接口。
 
 ## 概述
 
@@ -201,4 +203,3 @@ A: 修改上传接口调用时的 `folder` 参数，或修改 `upload.service.ts
 
 - [腾讯云 COS 文档](https://cloud.tencent.com/document/product/436)
 - [微信云托管文档](https://developers.weixin.qq.com/miniprogram/dev/wxcloud/basis/getting-started.html)
-

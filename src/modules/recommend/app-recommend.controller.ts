@@ -1,7 +1,6 @@
 import { BadRequestException, Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Response } from 'express';
-import axios from 'axios';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, DataSource, Repository, In } from 'typeorm';
@@ -12,6 +11,7 @@ import { HomeRecommendItem } from '../../database/entities/home-recommend-item.e
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { UploadService } from '../upload/upload.service';
 
 type ProfessionalScope = {
   category: string;
@@ -39,6 +39,7 @@ export class AppRecommendController {
     @InjectRepository(UserCourseAuth)
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     private dataSource: DataSource,
+    private uploadService: UploadService,
   ) {}
 
   @Get('categories')
@@ -235,23 +236,7 @@ export class AppRecommendController {
       throw new BadRequestException('图片地址无效');
     }
 
-    const target = new URL(url);
-    const allowedHosts = ['tcb.qcloud.la', 'qcloud.la', 'myqcloud.com', 'myqcloud.la'];
-    const allowed = allowedHosts.some((host) => target.hostname === host || target.hostname.endsWith(`.${host}`));
-    if (!allowed) {
-      throw new BadRequestException('图片域名不允许代理');
-    }
-
-    const imageRes = await axios.get(url, {
-      responseType: 'arraybuffer',
-      timeout: 8000,
-      headers: {
-        'Cache-Control': 'no-cache',
-        Pragma: 'no-cache',
-      },
-      validateStatus: (status) => status >= 200 && status < 400,
-    });
-    const contentType = imageRes.headers['content-type'] || 'image/png';
+    const { data, contentType } = await this.uploadService.proxyImage(url);
     if (!String(contentType).startsWith('image/')) {
       throw new BadRequestException('目标地址不是图片');
     }
@@ -260,7 +245,7 @@ export class AppRecommendController {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    return res.send(Buffer.from(imageRes.data));
+    return res.send(data);
   }
 
   private normalizeColumns(columns?: number | null) {

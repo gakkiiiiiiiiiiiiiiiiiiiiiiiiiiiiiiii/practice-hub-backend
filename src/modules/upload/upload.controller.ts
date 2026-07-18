@@ -39,7 +39,7 @@ export class UploadController {
   constructor(private readonly uploadService: UploadService) {}
 
   @Post('image')
-  @ApiOperation({ summary: '上传图片（使用微信云托管对象存储）' })
+  @ApiOperation({ summary: '上传图片（使用阿里云 OSS）' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -75,7 +75,7 @@ export class UploadController {
   }
 
   @Post('course-file-upload-url')
-  @ApiOperation({ summary: '获取课程文件直传 COS 凭证（前端直传，绕过 413）' })
+  @ApiOperation({ summary: '获取课程文件直传 OSS 签名 URL（前端直传，绕过 413）' })
   @ApiBody({
     schema: {
       type: 'object',
@@ -85,7 +85,7 @@ export class UploadController {
       },
     },
   })
-  async getCourseFileUploadUrl(@Body() body: { fileName: string }) {
+  async getCourseFileDirectUploadUrl(@Body() body: { fileName: string }) {
     const fileName = body?.fileName?.trim();
     if (!fileName) {
       throw new BadRequestException('请传入 fileName');
@@ -95,7 +95,12 @@ export class UploadController {
       throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
     }
     const path = `course-files/${Date.now()}-${Math.random().toString(36).slice(2, 12)}${ext}`;
-    const credentials = await this.uploadService.getCourseFileUploadUrl(path);
+    const contentTypes: Record<string, string> = {
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    };
+    const credentials = await this.uploadService.getDirectUploadUrl(path, contentTypes[ext]);
     return CommonResponseDto.success({
       ...credentials,
       fileName,
@@ -255,7 +260,7 @@ export class AppUploadController {
   }
 
   @Post('course-file-cloud-path')
-  @ApiOperation({ summary: '小程序管理员获取课程文件云存储路径（配合 wx.cloud.uploadFile）' })
+  @ApiOperation({ summary: '小程序管理员获取课程文件 OSS 直传签名 URL' })
   @ApiBody({
     schema: {
       type: 'object',
@@ -278,9 +283,16 @@ export class AppUploadController {
     }
     const userId = Number(user?.userId || user?.id) || 0;
     const cloudPath = `course-files/app-${userId || 'admin'}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}${ext}`;
+    const contentTypes: Record<string, string> = {
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    };
+    const credentials = await this.uploadService.getDirectUploadUrl(cloudPath, contentTypes[ext]);
     return CommonResponseDto.success({
+      ...credentials,
       cloudPath,
-      fileUrl: this.uploadService.getCosPublicUrl(cloudPath),
+      fileUrl: credentials.finalFileUrl,
       fileName: safeFileName,
       fileType: ext.slice(1),
     });
@@ -303,7 +315,14 @@ export class AppUploadController {
     const folder = (body?.folder || 'avatars').replace(/[^a-zA-Z0-9_-]/g, '') || 'avatars';
     const userId = Number(user?.userId) || 0;
     const path = `${folder}/${userId || 'user'}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}${ext}`;
-    const credentials = await this.uploadService.getCourseFileUploadUrl(path);
+    const mimeTypes: Record<string, string> = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+    };
+    const credentials = await this.uploadService.getDirectUploadUrl(path, mimeTypes[ext]);
     return CommonResponseDto.success({
       ...credentials,
       fileName: originalName,
@@ -414,7 +433,7 @@ export class AppUploadController {
 }
 
 /**
- * 图片代理：解决管理端跨域无法直接显示 TCB 图片的问题（无需登录）
+ * 图片代理：解决管理端跨域或私有 OSS 图片访问问题（无需登录）
  */
 @ApiTags('文件上传')
 @Controller('admin/upload')
@@ -422,7 +441,7 @@ export class ProxyImageController {
   constructor(private readonly uploadService: UploadService) {}
 
   @Get('proxy-image')
-  @ApiOperation({ summary: '代理 TCB 图片（避免 CORS）' })
+  @ApiOperation({ summary: '代理 OSS 图片（避免 CORS）' })
   @Header('Access-Control-Allow-Origin', '*')
   async proxyImage(@Query('url') url: string, @Req() req: Request, @Res() res: Response) {
     if (!url) {

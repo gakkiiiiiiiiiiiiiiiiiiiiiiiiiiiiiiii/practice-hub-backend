@@ -841,9 +841,9 @@ export class CourseService {
   }
 
   private async downloadCourseFileBuffer(fileUrl: string, timeout = 30000): Promise<Buffer> {
-    const cosBuffer = await this.uploadService.readCosUrlBuffer(fileUrl);
-    if (cosBuffer && cosBuffer.length > 0) {
-      return cosBuffer;
+    const objectBuffer = await this.uploadService.readObjectUrlBuffer(fileUrl);
+    if (objectBuffer && objectBuffer.length > 0) {
+      return objectBuffer;
     }
 
     const res = await axios.get(fileUrl, {
@@ -950,7 +950,7 @@ export class CourseService {
     const previewScope =
       hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
     const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
-    const cached = await this.uploadService.readCosObjectBuffer(cacheKey);
+    const cached = await this.uploadService.readObjectBuffer(cacheKey);
     if (cached && this.isJpegBuffer(cached)) {
       return { buffer: cached, contentType: 'image/jpeg' };
     }
@@ -999,7 +999,7 @@ export class CourseService {
     const samplePages: Array<{ pageNum: number; ready: boolean }> = [];
     for (let pageNum = 1; pageNum <= sampleCount; pageNum += 1) {
       const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
-      const ready = await this.uploadService.cosObjectExists(cacheKey);
+      const ready = await this.uploadService.objectExists(cacheKey);
       samplePages.push({ pageNum, ready });
     }
     return {
@@ -1032,7 +1032,7 @@ export class CourseService {
     }
     const previewScope: 'full' = 'full';
     const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
-    const cached = await this.uploadService.readCosObjectBuffer(cacheKey);
+    const cached = await this.uploadService.readObjectBuffer(cacheKey);
     if (cached && this.isJpegBuffer(cached)) {
       return { buffer: cached, contentType: 'image/jpeg' };
     }
@@ -1257,7 +1257,7 @@ export class CourseService {
           courseFile.file_url,
           previewScope,
         );
-        const page1Exists = await this.uploadService.cosObjectExists(page1Key);
+        const page1Exists = await this.uploadService.objectExists(page1Key);
         if (!page1Exists) {
           issues.push({
             courseId: course.id,
@@ -1280,7 +1280,7 @@ export class CourseService {
             courseFile.file_url,
             previewScope,
           );
-          const lastPageExists = await this.uploadService.cosObjectExists(lastPageKey);
+          const lastPageExists = await this.uploadService.objectExists(lastPageKey);
           if (!lastPageExists) {
             issues.push({
               courseId: course.id,
@@ -1327,10 +1327,10 @@ export class CourseService {
         courseFile.file_url,
         previewScope,
       );
-      if (!(await this.uploadService.cosObjectExists(cacheKey))) {
+      if (!(await this.uploadService.objectExists(cacheKey))) {
         continue;
       }
-      const buffer = await this.uploadService.readCosObjectBuffer(cacheKey);
+      const buffer = await this.uploadService.readObjectBuffer(cacheKey);
       if (!buffer || !this.isJpegBuffer(buffer)) {
         continue;
       }
@@ -1381,7 +1381,7 @@ export class CourseService {
       });
       await this.notifyPreviewWarmupProgress(courseId, onProgress);
       const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
-      if (!force && (await this.uploadService.cosObjectExists(cacheKey))) {
+      if (!force && (await this.uploadService.objectExists(cacheKey))) {
         result.skipped += 1;
         this.updatePreviewWarmupProgress(courseId, { skipped: result.skipped });
         await this.notifyPreviewWarmupProgress(courseId, onProgress);
@@ -1489,7 +1489,7 @@ export class CourseService {
           );
         }
       }
-      await this.uploadService.uploadBufferToCOS(cacheKey, buffer, 'image/jpeg');
+      await this.uploadService.uploadBufferToOss(cacheKey, buffer, 'image/jpeg');
       this.logger.log(
         `PDF预览页生成并上传成功 course=${courseId} page=${pageNum} key=${cacheKey} size=${buffer.length} bytes`,
       );
@@ -1893,7 +1893,7 @@ export class CourseService {
     return buffer.length > 8 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
   }
 
-  /** 拒绝几乎全白的 JPEG，避免将无效预览图写入 COS */
+  /** 拒绝几乎全白的 JPEG，避免将无效预览图写入 OSS */
   private async isPreviewJpegBlank(buffer: Buffer, tmpDir?: string): Promise<boolean> {
     if (!this.isJpegBuffer(buffer)) {
       return false;
