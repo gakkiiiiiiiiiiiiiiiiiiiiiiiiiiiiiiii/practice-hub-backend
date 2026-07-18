@@ -22,6 +22,7 @@ import { CourseType } from '../../database/entities/course-type.entity';
 import { UserFileCourseProgress } from '../../database/entities/user-file-course-progress.entity';
 import { UploadService } from '../upload/upload.service';
 import { PackageService } from '../package/package.service';
+import { CourseListPageDto } from './dto/course-list-page.dto';
 
 const execFileAsync = promisify(execFile);
 const PREVIEW_IMAGE_WIDTH = 1440;
@@ -170,6 +171,8 @@ export class CourseService {
     userId?: number,
     courseTypeId?: number,
     bookName?: string,
+    page = 1,
+    pageSize = 50,
   ) {
     const queryBuilder = this.courseRepository.createQueryBuilder('course');
     const normalizedKeyword = String(keyword || '').trim();
@@ -243,8 +246,37 @@ export class CourseService {
       // 默认按排序字段排序（综合排序）
       queryBuilder.orderBy('course.sort', 'ASC');
     }
+    queryBuilder.addOrderBy('course.id', 'ASC');
 
-    const courses = await queryBuilder.getMany();
+    const safePage = Math.max(1, Number(page) || 1);
+    const safePageSize = Math.min(500, Math.max(1, Number(pageSize) || 50));
+    queryBuilder
+      .select([
+        'course.id',
+        'course.name',
+        'course.subject',
+        'course.category',
+        'course.sub_category',
+        'course.school',
+        'course.major',
+        'course.exam_year',
+        'course.answer_year',
+        'course.cover_img',
+        'course.price',
+        'course.agent_price',
+        'course.is_free',
+        'course.validity_days',
+        'course.student_count',
+        'course.sort',
+        'course.status',
+        'course.content_type',
+        'course.create_time',
+        'course.update_time',
+      ])
+      .skip((safePage - 1) * safePageSize)
+      .take(safePageSize);
+
+    const [courses, total] = await queryBuilder.getManyAndCount();
     activeTypes = await this.listActiveCourseTypes();
     const attachCourseType = (course: Course) => {
       const matchedType =
@@ -263,10 +295,11 @@ export class CourseService {
       };
     };
     if (!userId || courses.length === 0) {
-      return courses.map((course) => ({
+      const list = courses.map((course) => ({
         ...attachCourseType(course),
         hasAuth: Number(course.price) === 0 || course.is_free === 1,
       }));
+      return new CourseListPageDto(list, total, safePage, safePageSize);
     }
 
     const courseIds = courses.map((course) => course.id);
@@ -284,7 +317,7 @@ export class CourseService {
     );
     const packageAccessMap = await this.packageService.batchUserHasCourseAccessViaPackage(userId, courses);
 
-    return courses.map((course) => ({
+    const list = courses.map((course) => ({
       ...attachCourseType(course),
       hasAuth:
         Number(course.price) === 0 ||
@@ -293,6 +326,7 @@ export class CourseService {
         packageAccessMap.get(course.id)?.hasAccess === true,
       expireTime: authMap.get(course.id)?.expire_time || packageAccessMap.get(course.id)?.expireTime || null,
     }));
+    return new CourseListPageDto(list, total, safePage, safePageSize);
   }
 
   async getCategoryBundleInfo(category?: string, subCategory?: string, userId?: number) {

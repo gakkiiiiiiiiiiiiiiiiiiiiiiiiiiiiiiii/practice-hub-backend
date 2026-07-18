@@ -10,7 +10,7 @@ import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CourseCategory } from '../../database/entities/course-category.entity';
-import { Course } from '../../database/entities/course.entity';
+import { GetCourseListDto } from './dto/get-course-list.dto';
 
 @ApiTags('课程')
 @Controller('app/courses')
@@ -19,8 +19,6 @@ export class CourseController {
     private readonly courseService: CourseService,
     @InjectRepository(CourseCategory)
     private courseCategoryRepository: Repository<CourseCategory>,
-    @InjectRepository(Course)
-    private courseRepository: Repository<Course>,
   ) {}
 
   @Get()
@@ -28,22 +26,19 @@ export class CourseController {
   @ApiBearerAuth()
   @ApiOperation({ summary: '所有课程列表' })
   async getAllCourses(
-    @Query('keyword') keyword?: string,
-    @Query('category') category?: string,
-    @Query('subCategory') subCategory?: string,
-    @Query('sortBy') sortBy?: string,
-    @Query('courseTypeId') courseTypeId?: string,
-    @Query('bookName') bookName?: string,
+    @Query() query: GetCourseListDto,
     @CurrentUser() user?: any,
   ) {
     const result = await this.courseService.getAllCourses(
-      keyword,
-      category,
-      subCategory,
-      sortBy,
+      query.keyword,
+      query.category,
+      query.subCategory,
+      query.sortBy,
       user?.userId,
-      courseTypeId ? Number(courseTypeId) : undefined,
-      bookName,
+      query.courseTypeId,
+      query.bookName,
+      query.page,
+      query.pageSize,
     );
     return CommonResponseDto.success(result);
   }
@@ -305,7 +300,7 @@ export class CourseController {
   }
 
   @Get('categories')
-  @ApiOperation({ summary: '获取课程分类树（包含课程列表）' })
+  @ApiOperation({ summary: '获取轻量课程分类树' })
   async getCourseCategories() {
     try {
       // 查询所有启用的分类
@@ -336,36 +331,7 @@ export class CourseController {
         }
       });
 
-      // 为每个二级分类获取课程列表
-      const result = await Promise.all(
-        tree.map(async (primaryCategory) => {
-          const childrenWithCourses = await Promise.all(
-            primaryCategory.children.map(async (subCategory) => {
-              // 查询该二级分类下的所有课程
-              const courses = await this.courseRepository.find({
-                where: {
-                  category: primaryCategory.name,
-                  sub_category: subCategory.name,
-                  status: 1,
-                },
-                order: { sort: 'ASC', id: 'ASC' },
-              });
-
-              return {
-                ...subCategory,
-                courses: courses || [],
-              };
-            })
-          );
-
-          return {
-            ...primaryCategory,
-            children: childrenWithCourses,
-          };
-        })
-      );
-
-      return CommonResponseDto.success(result);
+      return CommonResponseDto.success(tree);
     } catch (error) {
       console.error('获取课程分类失败:', error);
       throw error;
