@@ -171,8 +171,8 @@ export class CourseService {
     userId?: number,
     courseTypeId?: number,
     bookName?: string,
-    page = 1,
-    pageSize = 50,
+    page?: number,
+    pageSize?: number,
   ) {
     const queryBuilder = this.courseRepository.createQueryBuilder('course');
     const normalizedKeyword = String(keyword || '').trim();
@@ -248,6 +248,7 @@ export class CourseService {
     }
     queryBuilder.addOrderBy('course.id', 'ASC');
 
+    const paginated = page !== undefined || pageSize !== undefined;
     const safePage = Math.max(1, Number(page) || 1);
     const safePageSize = Math.min(500, Math.max(1, Number(pageSize) || 50));
     queryBuilder
@@ -272,9 +273,10 @@ export class CourseService {
         'course.content_type',
         'course.create_time',
         'course.update_time',
-      ])
-      .skip((safePage - 1) * safePageSize)
-      .take(safePageSize);
+      ]);
+    if (paginated) {
+      queryBuilder.skip((safePage - 1) * safePageSize).take(safePageSize);
+    }
 
     const [courses, total] = await queryBuilder.getManyAndCount();
     activeTypes = await this.listActiveCourseTypes();
@@ -294,12 +296,29 @@ export class CourseService {
           : null,
       };
     };
+    const toLegacyResponse = (list: Array<Record<string, any>>) => {
+      return list.map((course) => ({
+        id: course.id,
+        name: course.name,
+        category: course.category,
+        sub_category: course.sub_category,
+        cover_img: course.cover_img,
+        price: course.price,
+        agent_price: course.agent_price,
+        is_free: course.is_free,
+        validity_days: course.validity_days,
+        content_type: course.content_type,
+        hasAuth: course.hasAuth,
+      }));
+    };
     if (!userId || courses.length === 0) {
       const list = courses.map((course) => ({
         ...attachCourseType(course),
         hasAuth: Number(course.price) === 0 || course.is_free === 1,
       }));
-      return new CourseListPageDto(list, total, safePage, safePageSize);
+      return paginated
+        ? new CourseListPageDto(list, total, safePage, safePageSize)
+        : toLegacyResponse(list);
     }
 
     const courseIds = courses.map((course) => course.id);
@@ -326,7 +345,9 @@ export class CourseService {
         packageAccessMap.get(course.id)?.hasAccess === true,
       expireTime: authMap.get(course.id)?.expire_time || packageAccessMap.get(course.id)?.expireTime || null,
     }));
-    return new CourseListPageDto(list, total, safePage, safePageSize);
+    return paginated
+      ? new CourseListPageDto(list, total, safePage, safePageSize)
+      : toLegacyResponse(list);
   }
 
   async getCategoryBundleInfo(category?: string, subCategory?: string, userId?: number) {
