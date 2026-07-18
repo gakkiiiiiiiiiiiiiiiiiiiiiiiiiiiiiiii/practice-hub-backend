@@ -44,7 +44,7 @@ export class GetCourseListDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  page?: number = 1;
+  page?: number;
 
   @ApiPropertyOptional({ description: '每页条数', default: 50, maximum: 500 })
   @IsOptional()
@@ -52,5 +52,5 @@ export class GetCourseListDto {
   @IsInt()
   @Min(1)
   @Max(500)
-  pageSize?: number = 50;
+  pageSize?: number;
 }
