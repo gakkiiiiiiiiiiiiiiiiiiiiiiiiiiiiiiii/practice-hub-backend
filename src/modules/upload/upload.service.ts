@@ -4,6 +4,7 @@ import OSS = require('ali-oss');
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHmac } from 'crypto';
 
 @Injectable()
 export class UploadService {
@@ -12,6 +13,7 @@ export class UploadService {
 	private bucket: string;
 	private region: string;
 	private endpoint: string;
+	private originBaseUrl: string;
 	private publicBaseUrl: string;
 	private legacyCosBucket: string;
 	private uploadDir: string;
@@ -26,11 +28,12 @@ export class UploadService {
 			'7072-prod-6g7tpqs40c5a758b-1392943725',
 		);
 		const endpointHost = this.endpoint.replace(/^https?:\/\//, '').replace(/\/$/, '');
+		this.originBaseUrl = endpointHost
+			? `https://${this.bucket}.${endpointHost}`
+			: `https://${this.bucket}.${this.region}.aliyuncs.com`;
 		this.publicBaseUrl = (
 			this.configService.get<string>('OSS_PUBLIC_BASE_URL') ||
-			(endpointHost
-				? `https://${this.bucket}.${endpointHost}`
-				: `https://${this.bucket}.${this.region}.aliyuncs.com`)
+			this.originBaseUrl
 		).replace(/\/$/, '');
 
 		// 本地存储配置（可通过 UPLOAD_DIR 覆盖；容器内默认 uploads）
@@ -338,6 +341,54 @@ export class UploadService {
 			method: 'PUT',
 			contentType,
 			headers,
+			path: safeKey,
+			finalFileUrl: this.getObjectUrl(safeKey),
+		};
+	}
+
+	/**
+	 * 获取 OSS 表单直传凭证。微信小程序的 uploadFile 仅支持 multipart 表单，使用此接口直传 OSS。
+	 */
+	getPostUploadCredentials(
+		cloudPath: string,
+		contentType = 'application/octet-stream',
+		maxBytes = 300 * 1024 * 1024,
+	): {
+		url: string;
+		method: 'POST';
+		fields: Record<string, string>;
+		path: string;
+		finalFileUrl: string;
+	} {
+		this.requireOss();
+		const safeKey = this.normalizeObjectKey(cloudPath);
+		const accessKeyId = this.configService.get<string>('OSS_ACCESS_KEY_ID');
+		const accessKeySecret = this.configService.get<string>('OSS_ACCESS_KEY_SECRET');
+		if (!accessKeyId || !accessKeySecret) {
+			throw new BadRequestException('阿里云 OSS 配置不完整');
+		}
+		const policy = Buffer.from(
+			JSON.stringify({
+				expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+				conditions: [
+					['eq', '$key', safeKey],
+					['eq', '$Content-Type', contentType],
+					['content-length-range', 1, maxBytes],
+				],
+			}),
+		).toString('base64');
+		const signature = createHmac('sha1', accessKeySecret).update(policy).digest('base64');
+		return {
+			url: this.originBaseUrl,
+			method: 'POST',
+			fields: {
+				key: safeKey,
+				policy,
+				OSSAccessKeyId: accessKeyId,
+				Signature: signature,
+				'Content-Type': contentType,
+				success_action_status: '200',
+			},
 			path: safeKey,
 			finalFileUrl: this.getObjectUrl(safeKey),
 		};
