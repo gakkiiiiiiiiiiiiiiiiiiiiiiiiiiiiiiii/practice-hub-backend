@@ -35,7 +35,6 @@
 		"storage:migrate:oss": "node scripts/migrate-cos-to-oss.js",
 		"storage:verify:oss": "node scripts/migrate-cos-to-oss.js --verify",
 		"storage:rewrite-urls": "node scripts/rewrite-storage-urls.js",
-		"storage:rewrite-urls:apply": "node scripts/rewrite-storage-urls.js --apply",
 		"check:remote": "node scripts/check-remote-db.js",
 		"check:wechat": "node scripts/check-wechat-config.js",
 		"test:wechat": "node scripts/test-wechat-login.js",

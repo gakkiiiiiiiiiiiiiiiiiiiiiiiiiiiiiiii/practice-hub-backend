@@ -27,9 +27,9 @@ function assertIdentifier(value, label) {
 
 async function main() {
 	const env = loadEnvironment();
-	const apply = process.argv.includes('--apply');
-	const sourceBucket = env.OSS_LEGACY_COS_BUCKET || '7072-prod-6g7tpqs40c5a758b-1392943725';
+	const sourceBucket = env.OSS_LEGACY_COS_BUCKET || '7072-prod-d1gguk4ie589126ba-1424780330';
 	const sourceRegion = env.OSS_LEGACY_COS_REGION || 'ap-shanghai';
+	const sourceEnvId = env.OSS_LEGACY_COS_ENV_ID || 'prod-d1gguk4ie589126ba';
 	const targetBucket = required(env, 'OSS_BUCKET');
 	const targetRegion = env.OSS_REGION || 'oss-cn-shanghai';
 	const targetBase = String(
@@ -38,6 +38,7 @@ async function main() {
 	const replacements = [
 		[`https://${sourceBucket}.tcb.qcloud.la`, targetBase],
 		[`https://${sourceBucket}.cos.${sourceRegion}.myqcloud.com`, targetBase],
+		[`cloud://${sourceEnvId}.${sourceBucket}`, targetBase],
 	];
 
 	const connection = await mysql.createConnection({
@@ -78,28 +79,7 @@ async function main() {
 		}
 
 		console.table(matches.map(({ table, field, count }) => ({ table, field, rows: count })));
-		if (!apply) {
-			console.log('当前为预览模式；确认文件迁移完成后执行 npm run storage:rewrite-urls:apply');
-			return;
-		}
-
-		await connection.beginTransaction();
-		try {
-			let affectedRows = 0;
-			for (const { table, field, source } of matches) {
-				const target = replacements.find(([candidate]) => candidate === source)[1];
-				const [result] = await connection.query(
-					`UPDATE \`${table}\` SET \`${field}\` = REPLACE(\`${field}\`, ?, ?) WHERE CAST(\`${field}\` AS CHAR) LIKE ?`,
-					[source, target, `%${source}%`],
-				);
-				affectedRows += Number(result.affectedRows || 0);
-			}
-			await connection.commit();
-			console.log(`对象存储 URL 改写完成，更新 ${affectedRows} 行`);
-		} catch (error) {
-			await connection.rollback();
-			throw error;
-		}
+		console.log(`仅审计历史地址，不会修改数据库；运行时会按对象 Key 映射到 ${targetBase}`);
 	} finally {
 		await connection.end();
 	}

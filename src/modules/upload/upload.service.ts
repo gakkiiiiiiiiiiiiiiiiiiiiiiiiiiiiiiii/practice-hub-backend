@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { createHmac } from 'crypto';
+import axios from 'axios';
 
 @Injectable()
 export class UploadService {
@@ -16,6 +17,7 @@ export class UploadService {
 	private originBaseUrl: string;
 	private publicBaseUrl: string;
 	private legacyCosBucket: string;
+	private legacyCosEnvId: string;
 	private uploadDir: string;
 	private baseUrl: string;
 
@@ -25,7 +27,11 @@ export class UploadService {
 		this.endpoint = this.configService.get<string>('OSS_ENDPOINT', '');
 		this.legacyCosBucket = this.configService.get<string>(
 			'OSS_LEGACY_COS_BUCKET',
-			'7072-prod-6g7tpqs40c5a758b-1392943725',
+			'7072-prod-d1gguk4ie589126ba-1424780330',
+		);
+		this.legacyCosEnvId = this.configService.get<string>(
+			'OSS_LEGACY_COS_ENV_ID',
+			'prod-d1gguk4ie589126ba',
 		);
 		const endpointHost = this.endpoint.replace(/^https?:\/\//, '').replace(/\/$/, '');
 		this.originBaseUrl = endpointHost
@@ -726,6 +732,12 @@ export class UploadService {
 	 */
 	private extractKeyFromUrl(url: string): string | null {
 		try {
+			const normalized = String(url || '').trim();
+			const cloudPrefix = this.getLegacyCloudPrefix();
+			if (cloudPrefix && normalized.startsWith(cloudPrefix)) {
+				const rawKey = normalized.slice(cloudPrefix.length).split(/[?#]/, 1)[0];
+				return decodeURIComponent(rawKey.replace(/^\/+/, '')) || null;
+			}
 			const parsed = new URL(url);
 			if (!this.isAllowedProxyUrl(url)) return null;
 			return decodeURIComponent(parsed.pathname.replace(/^\/+/, '')) || null;
@@ -740,6 +752,10 @@ export class UploadService {
 	isAllowedProxyUrl(url: string): boolean {
 		if (!url || typeof url !== 'string') return false;
 		const normalized = url.trim();
+		const cloudPrefix = this.getLegacyCloudPrefix();
+		if (cloudPrefix && normalized.startsWith(cloudPrefix)) {
+			return Boolean(this.extractLegacyCloudKey(normalized));
+		}
 		if (!normalized.startsWith('https://')) return false;
 		try {
 			const u = new URL(normalized);
@@ -759,6 +775,22 @@ export class UploadService {
 		}
 	}
 
+	private getLegacyCloudPrefix(): string {
+		if (!this.legacyCosEnvId || !this.legacyCosBucket) return '';
+		return `cloud://${this.legacyCosEnvId}.${this.legacyCosBucket}/`;
+	}
+
+	private extractLegacyCloudKey(url: string): string | null {
+		const prefix = this.getLegacyCloudPrefix();
+		if (!prefix || !url.startsWith(prefix)) return null;
+		try {
+			const key = decodeURIComponent(url.slice(prefix.length).split(/[?#]/, 1)[0]).replace(/^\/+/, '');
+			return key && !key.includes('..') && !key.includes('\\') ? key : null;
+		} catch {
+			return null;
+		}
+	}
+
 	/**
 	 * 从 OSS 拉取图片并返回 buffer 与 contentType（用于私有 Bucket 和管理端跨域场景）
 	 */
@@ -774,7 +806,47 @@ export class UploadService {
 			const contentType = (result.res?.headers?.['content-type'] as string) || this.sniffImageMime(data) || 'image/png';
 			return { data, contentType };
 		} catch (error: any) {
+			const fallbackUrl = this.getLegacyCosFallbackUrl(url, key);
+			if (fallbackUrl) {
+				try {
+					const response = await axios.get<ArrayBuffer>(fallbackUrl, {
+						responseType: 'arraybuffer',
+						timeout: 15_000,
+						maxContentLength: 20 * 1024 * 1024,
+					});
+					const data = Buffer.from(response.data);
+					const contentType =
+						String(response.headers['content-type'] || '').split(';')[0] ||
+						this.sniffImageMime(data) ||
+						'image/png';
+					this.logger.warn(`OSS 对象读取失败，已回源腾讯云: ${key}`);
+					return { data, contentType };
+				} catch (legacyError: any) {
+					throw new BadRequestException(
+						`OSS 与腾讯云均无法读取图片: ${legacyError?.message || error?.message || '未知错误'}`,
+					);
+				}
+			}
 			throw new BadRequestException(`拉取 OSS 图片失败: ${error?.message || '未知错误'}`);
+		}
+	}
+
+	private getLegacyCosFallbackUrl(url: string, key: string): string | null {
+		if (this.isLegacyCosHttpsUrl(url)) return url;
+		if (!this.extractLegacyCloudKey(url)) return null;
+		const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+		return `https://${this.legacyCosBucket}.tcb.qcloud.la/${encodedKey}`;
+	}
+
+	private isLegacyCosHttpsUrl(url: string): boolean {
+		try {
+			const host = new URL(url).hostname;
+			return (
+				host === `${this.legacyCosBucket}.tcb.qcloud.la` ||
+				host === `${this.legacyCosBucket}.cos.ap-shanghai.myqcloud.com`
+			);
+		} catch {
+			return false;
 		}
 	}
 
