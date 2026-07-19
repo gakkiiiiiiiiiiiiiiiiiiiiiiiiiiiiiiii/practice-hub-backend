@@ -1,17 +1,37 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Feedback, FeedbackType, FeedbackStatus } from '../../database/entities/feedback.entity';
 import { CreateFeedbackDto } from './dto/create-feedback.dto';
 import { UpdateFeedbackDto } from './dto/update-feedback.dto';
 import { GetFeedbackListDto } from './dto/get-feedback-list.dto';
+import { UploadService } from '../upload/upload.service';
 
 @Injectable()
 export class FeedbackService {
 	constructor(
 		@InjectRepository(Feedback)
-		private feedbackRepository: Repository<Feedback>
+		private feedbackRepository: Repository<Feedback>,
+		private readonly uploadService: UploadService,
 	) {}
+
+	private normalizeImages(feedback: Feedback): Feedback {
+		let images: unknown = feedback.images;
+		if (typeof images === 'string') {
+			try {
+				images = JSON.parse(images);
+			} catch {
+				images = [];
+			}
+		}
+
+		feedback.images = Array.isArray(images)
+			? images
+				.filter((image): image is string => typeof image === 'string' && image.trim().length > 0)
+				.map((image) => this.uploadService.getPublicImageUrl(image))
+			: [];
+		return feedback;
+	}
 
 	/**
 	 * 创建反馈（小程序端）
@@ -26,7 +46,7 @@ export class FeedbackService {
 			status: FeedbackStatus.PENDING,
 		});
 
-		return await this.feedbackRepository.save(feedback);
+		return this.normalizeImages(await this.feedbackRepository.save(feedback));
 	}
 
 	/**
@@ -44,7 +64,7 @@ export class FeedbackService {
 			handler_id: adminId, // 记录提交反馈的管理员ID
 		});
 
-		return await this.feedbackRepository.save(feedback);
+		return this.normalizeImages(await this.feedbackRepository.save(feedback));
 	}
 
 	/**
@@ -75,19 +95,7 @@ export class FeedbackService {
 
 		// 处理管理员提交的反馈（user_id = 0）和 images 字段
 		const processedList = list.map((feedback) => {
-			// 确保 images 字段是数组格式
-			if (feedback.images && !Array.isArray(feedback.images)) {
-				try {
-					feedback.images = typeof feedback.images === 'string' 
-						? JSON.parse(feedback.images) 
-						: [];
-				} catch (e) {
-					feedback.images = [];
-				}
-			} else if (!feedback.images) {
-				feedback.images = [];
-			}
-
+			this.normalizeImages(feedback);
 			// 处理管理员提交的反馈（user_id = 0）
 			if (feedback.user_id === 0 && !feedback.user) {
 				feedback.user = {
@@ -119,6 +127,7 @@ export class FeedbackService {
 			skip,
 			take: pageSize,
 		});
+		list.forEach((feedback) => this.normalizeImages(feedback));
 
 		return {
 			list,
@@ -141,18 +150,7 @@ export class FeedbackService {
 			throw new NotFoundException('反馈不存在');
 		}
 
-		// 确保 images 字段是数组格式（TypeORM 会自动解析 JSON，但需要确保格式正确）
-		if (feedback.images && !Array.isArray(feedback.images)) {
-			try {
-				feedback.images = typeof feedback.images === 'string' 
-					? JSON.parse(feedback.images) 
-					: [];
-			} catch (e) {
-				feedback.images = [];
-			}
-		} else if (!feedback.images) {
-			feedback.images = [];
-		}
+		this.normalizeImages(feedback);
 
 		// 处理管理员提交的反馈（user_id = 0）
 		if (feedback.user_id === 0 && !feedback.user) {
@@ -188,7 +186,7 @@ export class FeedbackService {
 			feedback.handler_id = handlerId;
 		}
 
-		return await this.feedbackRepository.save(feedback);
+		return this.normalizeImages(await this.feedbackRepository.save(feedback));
 	}
 
 	/**
@@ -201,4 +199,3 @@ export class FeedbackService {
 		}
 	}
 }
-

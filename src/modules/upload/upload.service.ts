@@ -896,6 +896,29 @@ export class UploadService {
 		return `https://${this.bucket}.tcb.qcloud.la/${this.normalizeCosKey(key)}`;
 	}
 
+	/**
+	 * 将微信云文件 ID 转为管理端可访问的 TCB HTTPS 地址。
+	 * 示例：cloud://{env}.{bucket}/feedback/a.jpg -> https://{bucket}.tcb.qcloud.la/feedback/a.jpg
+	 */
+	getPublicImageUrl(url: string): string {
+		if (!url || typeof url !== 'string') return url;
+		const normalized = url.trim();
+		const match = normalized.match(/^cloud:\/\/([^/]+)\/(.+)$/i);
+		if (!match) return normalized;
+
+		const authority = match[1];
+		const separatorIndex = authority.indexOf('.');
+		if (separatorIndex < 1) return normalized;
+
+		const bucket = authority.slice(separatorIndex + 1);
+		if (bucket !== this.bucket) {
+			this.logger.warn(`忽略非当前 bucket 的微信云文件 ID: ${bucket}`);
+			return normalized;
+		}
+
+		return `https://${bucket}.tcb.qcloud.la/${match[2].replace(/^\/+/, '')}`;
+	}
+
 	private normalizeCosKey(key: string): string {
 		const safeKey = String(key || '').replace(/^\/+/, '');
 		if (!safeKey || safeKey.includes('..') || safeKey.includes('\\')) {
@@ -1048,10 +1071,11 @@ export class UploadService {
 	 * 代理拉取 TCB 图片并返回 buffer 与 contentType（用于解决管理端跨域无法直接显示 TCB 图片）
 	 */
 	async proxyImage(url: string): Promise<{ data: Buffer; contentType: string }> {
-		if (!this.isAllowedProxyUrl(url)) {
+		const publicUrl = this.getPublicImageUrl(url);
+		if (!this.isAllowedProxyUrl(publicUrl)) {
 			throw new BadRequestException('仅允许代理本项目的 TCB 图片地址');
 		}
-		const res = await axios.get(url, {
+		const res = await axios.get(publicUrl, {
 			responseType: 'arraybuffer',
 			timeout: 15000,
 			validateStatus: () => true,
