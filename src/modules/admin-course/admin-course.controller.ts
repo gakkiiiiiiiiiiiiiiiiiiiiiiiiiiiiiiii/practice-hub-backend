@@ -34,6 +34,7 @@ import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.d
 import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 import { BatchAdjustCoursePriceDto } from './dto/batch-adjust-price.dto';
+import { BatchUpdateCourseContentDto } from './dto/batch-update-course-content.dto';
 import { CreateCourseFileDto, UpdateCourseFileDto } from './dto/course-file.dto';
 import { SetCourseDefaultParamsDto } from '../system/dto/set-course-default-params.dto';
 import { SetCourseSimilarityConfigDto } from './dto/set-course-similarity-config.dto';
@@ -296,6 +297,14 @@ export class AdminCourseController {
 	@ApiOperation({ summary: '批量调整课程价格' })
 	async batchAdjustPrice(@Body() dto: BatchAdjustCoursePriceDto) {
 		const result = await this.adminCourseService.batchAdjustPrice(dto);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('batch-update-content')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '批量更新课程介绍与试读预览页数' })
+	async batchUpdateContent(@Body() dto: BatchUpdateCourseContentDto) {
+		const result = await this.adminCourseService.batchUpdateContent(dto);
 		return CommonResponseDto.success(result);
 	}
 

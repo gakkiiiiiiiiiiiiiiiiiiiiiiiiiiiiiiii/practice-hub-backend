@@ -17,6 +17,7 @@ import { UpdateRecommendationsDto } from '../course/dto/update-recommendations.d
 import { BatchDeleteCoursesDto } from './dto/batch-delete-courses.dto';
 import { BatchUpdateStatusDto } from './dto/batch-update-status.dto';
 import { BatchAdjustCoursePriceDto } from './dto/batch-adjust-price.dto';
+import { BatchUpdateCourseContentDto } from './dto/batch-update-course-content.dto';
 import { SystemService } from '../system/system.service';
 import { CourseService } from '../course/course.service';
 import { CourseFileService, CourseFileInput } from '../course/course-file.service';
@@ -1664,6 +1665,61 @@ export class AdminCourseService {
       selectAll: dto.selectAll === true,
     };
   }
+
+	async batchUpdateContent(dto: BatchUpdateCourseContentDto) {
+		const updateIntroduction = Object.prototype.hasOwnProperty.call(dto, 'introduction');
+		const updatePreviewPages = Object.prototype.hasOwnProperty.call(dto, 'trial_preview_page_count');
+		if (!updateIntroduction && !updatePreviewPages) {
+			throw new BadRequestException('请至少选择一项要更新的内容');
+		}
+
+		const query = this.courseRepository
+			.createQueryBuilder('course')
+			.select(['course.id', 'course.content_type']);
+		if (dto.scope === 'selected') {
+			const ids = Array.from(new Set((dto.ids || []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+			if (!ids.length) throw new BadRequestException('请至少选择一门课程');
+			query.andWhere('course.id IN (:...ids)', { ids });
+		} else {
+			const category = String(dto.category || '').trim();
+			if (!category) throw new BadRequestException('请选择一级分类');
+			query.andWhere('course.category = :category', { category });
+			const subCategory = String(dto.subCategory || '').trim();
+			if (subCategory) query.andWhere('course.sub_category = :subCategory', { subCategory });
+		}
+
+		const courses = await query.getMany();
+		if (!courses.length) throw new NotFoundException('所选范围内没有课程');
+		const allIds = courses.map((course) => course.id);
+		let introductionCount = 0;
+		let previewPageCount = 0;
+
+		if (updateIntroduction) {
+			const result = await this.courseRepository.update(
+				{ id: In(allIds) },
+				{ introduction: String(dto.introduction || '') },
+			);
+			introductionCount = result.affected || 0;
+		}
+		if (updatePreviewPages) {
+			const fileCourseIds = courses.filter((course) => course.content_type === 'file').map((course) => course.id);
+			if (fileCourseIds.length) {
+				const result = await this.courseRepository.update(
+					{ id: In(fileCourseIds) },
+					{ trial_preview_page_count: dto.trial_preview_page_count },
+				);
+				previewPageCount = result.affected || 0;
+			}
+		}
+
+		return {
+			success: true,
+			targetCount: courses.length,
+			introductionCount,
+			previewPageCount,
+			skippedNonFileCount: updatePreviewPages ? courses.length - previewPageCount : 0,
+		};
+	}
 
   private validateCoursePriceFields(dto: CreateCourseDto | UpdateCourseDto) {
     const isFree = Number(dto.is_free) === 1;
