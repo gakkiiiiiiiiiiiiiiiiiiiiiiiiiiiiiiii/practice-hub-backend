@@ -94,7 +94,7 @@ export class UploadController {
     if (!['.pdf', '.doc', '.docx'].includes(ext)) {
       throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
     }
-    const path = `course-files/${Date.now()}-${Math.random().toString(36).slice(2, 12)}${ext}`;
+    const path = `course-files/staging/${Date.now()}-${Math.random().toString(36).slice(2, 12)}${ext}`;
     const contentTypes: Record<string, string> = {
       '.pdf': 'application/pdf',
       '.doc': 'application/msword',
@@ -282,7 +282,7 @@ export class AppUploadController {
       throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
     }
     const userId = Number(user?.userId || user?.id) || 0;
-    const cloudPath = `course-files/app-${userId || 'admin'}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}${ext}`;
+    const cloudPath = `course-files/staging/app-${userId || 'admin'}-${Date.now()}-${Math.random().toString(36).slice(2, 12)}${ext}`;
     const contentTypes: Record<string, string> = {
       '.pdf': 'application/pdf',
       '.doc': 'application/msword',

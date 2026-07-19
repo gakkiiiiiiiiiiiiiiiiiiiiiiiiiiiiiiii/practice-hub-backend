@@ -8,6 +8,7 @@ import { AppPdfViewerController } from './app-pdf-viewer.controller';
 import { DatabaseModule } from '../../database/database.module';
 import { UploadModule } from '../upload/upload.module';
 import { PackageModule } from '../package/package.module';
+import { StorageCleanupModule } from '../storage-cleanup/storage-cleanup.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { PackageModule } from '../package/package.module';
     UploadModule,
     ConfigModule,
     PackageModule,
+    StorageCleanupModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({

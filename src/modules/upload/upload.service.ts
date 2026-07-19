@@ -29,18 +29,15 @@ export class UploadService {
 			'OSS_LEGACY_COS_BUCKET',
 			'7072-prod-d1gguk4ie589126ba-1424780330',
 		);
-		this.legacyCosEnvId = this.configService.get<string>(
-			'OSS_LEGACY_COS_ENV_ID',
-			'prod-d1gguk4ie589126ba',
-		);
+		this.legacyCosEnvId = this.configService.get<string>('OSS_LEGACY_COS_ENV_ID', 'prod-d1gguk4ie589126ba');
 		const endpointHost = this.endpoint.replace(/^https?:\/\//, '').replace(/\/$/, '');
 		this.originBaseUrl = endpointHost
 			? `https://${this.bucket}.${endpointHost}`
 			: `https://${this.bucket}.${this.region}.aliyuncs.com`;
-		this.publicBaseUrl = (
-			this.configService.get<string>('OSS_PUBLIC_BASE_URL') ||
-			this.originBaseUrl
-		).replace(/\/$/, '');
+		this.publicBaseUrl = (this.configService.get<string>('OSS_PUBLIC_BASE_URL') || this.originBaseUrl).replace(
+			/\/$/,
+			'',
+		);
 
 		// 本地存储配置（可通过 UPLOAD_DIR 覆盖；容器内默认 uploads）
 		this.uploadDir = this.configService.get<string>('UPLOAD_DIR') || path.join(process.cwd(), 'uploads');
@@ -81,9 +78,7 @@ export class UploadService {
 			}
 		} catch (error: any) {
 			const fallbackDir = path.join(os.tmpdir(), 'practice-hub-uploads');
-			this.logger.warn(
-				`无法创建上传目录 ${this.uploadDir}（${error?.message || error}），改用 ${fallbackDir}`,
-			);
+			this.logger.warn(`无法创建上传目录 ${this.uploadDir}（${error?.message || error}），改用 ${fallbackDir}`);
 			this.uploadDir = fallbackDir;
 			if (!fs.existsSync(this.uploadDir)) {
 				fs.mkdirSync(this.uploadDir, { recursive: true });
@@ -121,6 +116,13 @@ export class UploadService {
 			return false;
 		}
 		return true;
+	}
+
+	private isValidFolder(folder: string): boolean {
+		const parts = String(folder || '')
+			.split('/')
+			.filter(Boolean);
+		return parts.length > 0 && parts.every((part) => this.isValidFilename(part));
 	}
 
 	/**
@@ -242,10 +244,7 @@ export class UploadService {
 	 * @param openid 用户openid（可选，管理端上传时可不传）
 	 * @returns 图片 URL
 	 */
-	private async uploadToOss(
-		file: Express.Multer.File,
-		folder: string = 'images',
-	): Promise<string> {
+	private async uploadToOss(file: Express.Multer.File, folder: string = 'images'): Promise<string> {
 		// 验证文件名和文件夹名
 		if (!this.isValidFilename(file.originalname)) {
 			throw new BadRequestException('文件名包含不安全字符');
@@ -286,32 +285,117 @@ export class UploadService {
 	 * 根据 URL 删除文件（本地或 OSS），供图片、PDF 等统一使用
 	 * @param fileUrl 文件 URL
 	 */
-	async deleteByUrl(fileUrl: string): Promise<void> {
+	async deleteByUrlOrThrow(fileUrl: string, allowedPrefixes?: string[]): Promise<void> {
 		if (!fileUrl || typeof fileUrl !== 'string') return;
-		try {
-			// 判断是本地文件还是 OSS 文件
-			if (fileUrl.includes('/uploads/')) {
-				// 本地文件
-				const relativePath = fileUrl.split('/uploads/')[1];
-				const filePath = path.join(this.uploadDir, relativePath);
-				if (fs.existsSync(filePath)) {
-					fs.unlinkSync(filePath);
-					console.log(`[本地存储] 删除成功: ${filePath}`);
-				}
-			} else {
-				// OSS 文件
-				const key = this.extractKeyFromUrl(fileUrl);
-				if (!key) {
-					throw new BadRequestException('无效的文件 URL');
-				}
-
-				await this.requireOss().delete(key);
-				console.log(`[OSS删除] 成功: ${key}`);
+		const normalizedPrefixes = (allowedPrefixes || []).map((prefix) => this.normalizeObjectKey(prefix));
+		const assertAllowedKey = (key: string) => {
+			if (normalizedPrefixes.length && !normalizedPrefixes.some((prefix) => key.startsWith(prefix))) {
+				throw new BadRequestException('拒绝删除不属于允许目录的文件');
 			}
-		} catch (error: any) {
-			console.error('[删除文件] 失败:', error);
-			// 删除失败不抛出异常，避免影响主流程
+		};
+
+		if (fileUrl.includes('/uploads/')) {
+			const relativePath = decodeURIComponent(fileUrl.split('/uploads/')[1].split(/[?#]/, 1)[0]).replace(/^\/+/, '');
+			assertAllowedKey(relativePath);
+			const filePath = path.resolve(this.uploadDir, relativePath);
+			const resolvedUploadDir = path.resolve(this.uploadDir);
+			if (!filePath.startsWith(`${resolvedUploadDir}${path.sep}`)) {
+				throw new BadRequestException('本地文件路径不安全');
+			}
+			if (fs.existsSync(filePath)) {
+				await fs.promises.unlink(filePath);
+				this.logger.log(`[本地存储] 删除成功: ${relativePath}`);
+			}
+			return;
 		}
+
+		const key = this.extractKeyFromUrl(fileUrl);
+		if (!key) {
+			throw new BadRequestException('无效或非本项目的文件 URL');
+		}
+		assertAllowedKey(key);
+		await this.requireOss().delete(key);
+		this.logger.log(`[OSS删除] 成功: ${key}`);
+	}
+
+	async deleteByUrl(fileUrl: string): Promise<void> {
+		try {
+			await this.deleteByUrlOrThrow(fileUrl);
+		} catch (error: any) {
+			this.logger.error(`[删除文件] 失败: ${error?.message || error}`);
+		}
+	}
+
+	async promoteCourseFileUrl(fileUrl: string): Promise<{ url: string; promoted: boolean }> {
+		const stagingPrefix = 'course-files/staging/';
+		const permanentPrefix = 'course-files/';
+		if (fileUrl.includes('/uploads/')) {
+			const relativePath = decodeURIComponent(fileUrl.split('/uploads/')[1].split(/[?#]/, 1)[0]).replace(/^\/+/, '');
+			if (!relativePath.startsWith(stagingPrefix)) return { url: fileUrl, promoted: false };
+			const nextRelativePath = `${permanentPrefix}${relativePath.slice(stagingPrefix.length)}`;
+			const sourcePath = path.resolve(this.uploadDir, relativePath);
+			const destinationPath = path.resolve(this.uploadDir, nextRelativePath);
+			const resolvedUploadDir = path.resolve(this.uploadDir);
+			if (
+				!sourcePath.startsWith(`${resolvedUploadDir}${path.sep}`) ||
+				!destinationPath.startsWith(`${resolvedUploadDir}${path.sep}`)
+			) {
+				throw new BadRequestException('课程文件路径不安全');
+			}
+			if (!fs.existsSync(sourcePath)) throw new BadRequestException('待绑定的课程文件不存在');
+			await fs.promises.mkdir(path.dirname(destinationPath), {
+				recursive: true,
+			});
+			await fs.promises.rename(sourcePath, destinationPath);
+			return {
+				url: `${this.baseUrl}/uploads/${nextRelativePath}`,
+				promoted: true,
+			};
+		}
+
+		const sourceKey = this.extractKeyFromUrl(fileUrl);
+		if (!sourceKey || !sourceKey.startsWith(stagingPrefix)) return { url: fileUrl, promoted: false };
+		const destinationKey = `${permanentPrefix}${sourceKey.slice(stagingPrefix.length)}`;
+		await this.requireOss().copy(destinationKey, sourceKey);
+		try {
+			await this.requireOss().delete(sourceKey);
+		} catch (error: any) {
+			this.logger.warn(
+				`课程文件提升成功，但临时对象删除失败，将由生命周期清理: ${sourceKey}; ${error?.message || error}`,
+			);
+		}
+		return { url: this.getObjectUrl(destinationKey), promoted: true };
+	}
+
+	async deleteCoursePreviewPrefix(prefix: string): Promise<number> {
+		const safePrefix = this.normalizeObjectKey(prefix);
+		if (!safePrefix.startsWith('course-preview-cache/')) {
+			throw new BadRequestException('拒绝删除不属于课程预览缓存的目录');
+		}
+		if (!this.isObjectStorageEnabled()) {
+			const targetPath = path.resolve(this.uploadDir, safePrefix);
+			const resolvedUploadDir = path.resolve(this.uploadDir);
+			if (!targetPath.startsWith(`${resolvedUploadDir}${path.sep}`)) {
+				throw new BadRequestException('预览缓存路径不安全');
+			}
+			if (!fs.existsSync(targetPath)) return 0;
+			await fs.promises.rm(targetPath, { recursive: true, force: true });
+			return 1;
+		}
+
+		let marker: string | undefined;
+		let deletedCount = 0;
+		do {
+			const result: any = await this.requireOss().list({ prefix: safePrefix, marker, 'max-keys': 1000 }, {});
+			const keys = (result.objects || []).map((object: any) => object.name).filter(Boolean);
+			if (keys.length) {
+				await this.requireOss().deleteMulti(keys, { quiet: true });
+				deletedCount += keys.length;
+			}
+			marker = result.isTruncated ? result.nextMarker : undefined;
+		} while (marker);
+		this.logger.log(`[OSS删除] 课程预览缓存清理完成: prefix=${safePrefix}, count=${deletedCount}`);
+		return deletedCount;
 	}
 
 	/** @deprecated 请使用 deleteByUrl，保留兼容 */
@@ -421,7 +505,7 @@ export class UploadService {
 		if (!allowedExts.includes(ext)) {
 			throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
 		}
-		const folder = 'course-files';
+		const folder = 'course-files/staging';
 		if (this.isObjectStorageEnabled()) {
 			return this.uploadCourseFileToOss(file, folder);
 		}
@@ -444,7 +528,7 @@ export class UploadService {
 		if (!this.isValidFilename(file.originalname)) {
 			throw new BadRequestException('文件名包含不安全字符');
 		}
-		if (!this.isValidFilename(folder)) {
+		if (!this.isValidFolder(folder)) {
 			throw new BadRequestException('文件夹名称包含不安全字符');
 		}
 		const timestamp = Date.now();
@@ -476,10 +560,7 @@ export class UploadService {
 		throw new BadRequestException('无法读取文件内容');
 	}
 
-	private async uploadCourseFileToOss(
-		file: Express.Multer.File,
-		folder: string,
-	): Promise<string> {
+	private async uploadCourseFileToOss(file: Express.Multer.File, folder: string): Promise<string> {
 		const allowedExts = ['.pdf', '.doc', '.docx'];
 		const ext = this.getFileExtension(file.originalname).toLowerCase();
 		if (!allowedExts.includes(ext)) {
@@ -557,11 +638,7 @@ export class UploadService {
 	/**
 	 * 上传 Buffer 到当前对象存储桶，供服务端生成的缓存文件复用。
 	 */
-	async uploadBufferToOss(
-		key: string,
-		buffer: Buffer,
-		contentType = 'application/octet-stream',
-	): Promise<string> {
+	async uploadBufferToOss(key: string, buffer: Buffer, contentType = 'application/octet-stream'): Promise<string> {
 		const safeKey = this.normalizeObjectKey(key);
 		await this.requireOss().put(safeKey, buffer, {
 			headers: {
@@ -630,12 +707,7 @@ export class UploadService {
 	/**
 	 * 保存课程文件的一个分片（大文件分片上传）
 	 */
-	async saveCourseFileChunk(
-		uploadId: string,
-		chunkIndex: number,
-		totalChunks: number,
-		buffer: Buffer,
-	): Promise<void> {
+	async saveCourseFileChunk(uploadId: string, chunkIndex: number, totalChunks: number, buffer: Buffer): Promise<void> {
 		if (totalChunks < 1 || totalChunks > 500) {
 			throw new BadRequestException('totalChunks 需在 1～500 之间');
 		}
@@ -658,11 +730,7 @@ export class UploadService {
 	/**
 	 * 合并课程文件分片并保存（本地或 OSS），返回最终 fileUrl
 	 */
-	async mergeCourseFileChunks(
-		uploadId: string,
-		totalChunks: number,
-		fileName: string,
-	): Promise<string> {
+	async mergeCourseFileChunks(uploadId: string, totalChunks: number, fileName: string): Promise<string> {
 		const ext = this.getFileExtension(fileName || '').toLowerCase();
 		if (!['.pdf', '.doc', '.docx'].includes(ext)) {
 			throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
@@ -816,9 +884,7 @@ export class UploadService {
 					});
 					const data = Buffer.from(response.data);
 					const contentType =
-						String(response.headers['content-type'] || '').split(';')[0] ||
-						this.sniffImageMime(data) ||
-						'image/png';
+						String(response.headers['content-type'] || '').split(';')[0] || this.sniffImageMime(data) || 'image/png';
 					this.logger.warn(`OSS 对象读取失败，已回源腾讯云: ${key}`);
 					return { data, contentType };
 				} catch (legacyError: any) {
@@ -851,7 +917,11 @@ export class UploadService {
 	}
 
 	private isImageContentType(contentType: string): boolean {
-		return /^image\/(jpeg|jpg|png|gif|webp)/i.test(String(contentType || '').split(';')[0].trim());
+		return /^image\/(jpeg|jpg|png|gif|webp)/i.test(
+			String(contentType || '')
+				.split(';')[0]
+				.trim(),
+		);
 	}
 
 	private sniffImageMime(buf: Buffer): string | null {

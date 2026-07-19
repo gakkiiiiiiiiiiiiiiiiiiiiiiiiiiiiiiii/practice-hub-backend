@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull, Equal } from 'typeorm';
+import { DataSource, Repository, In, IsNull, Equal } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { Question } from '../../database/entities/question.entity';
@@ -74,6 +74,7 @@ export class AdminCourseService {
     private systemService: SystemService,
     private courseService: CourseService,
     private courseFileService: CourseFileService,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -1411,77 +1412,44 @@ export class AdminCourseService {
    * 删除课程（级联删除关联数据）
    */
   async deleteCourse(id: number) {
-    const course = await this.courseRepository.findOne({ where: { id } });
-    if (!course) {
-      throw new NotFoundException('课程不存在');
-    }
+    return this.dataSource.transaction(async (manager) => {
+      const courseRepository = manager.getRepository(Course);
+      const chapterRepository = manager.getRepository(Chapter);
+      const questionRepository = manager.getRepository(Question);
+      const userCollectionRepository = manager.getRepository(UserCollection);
+      const userWrongBookRepository = manager.getRepository(UserWrongBook);
+      const userAnswerLogRepository = manager.getRepository(UserAnswerLog);
+      const examConfigRepository = manager.getRepository(ExamConfig);
+      const examRecordRepository = manager.getRepository(ExamRecord);
+      const course = await courseRepository.findOne({ where: { id } });
+      if (!course) throw new NotFoundException('课程不存在');
 
-    // 1. 查找该课程下的所有章节
-    const chapters = await this.chapterRepository.find({
-      where: { course_id: id },
+      const chapters = await chapterRepository.find({ where: { course_id: id } });
+      const chapterIds = chapters.map((chapter) => chapter.id);
+      const questions = chapterIds.length
+        ? await questionRepository.find({ where: { chapter_id: In(chapterIds) } })
+        : [];
+      const questionIds = questions.map((question) => question.id);
+
+      if (questionIds.length) await userCollectionRepository.delete({ question_id: In(questionIds) });
+      await userWrongBookRepository.delete({ course_id: id });
+      if (chapterIds.length) {
+        await userAnswerLogRepository.delete({ chapter_id: In(chapterIds) });
+        await questionRepository.delete({ chapter_id: In(chapterIds) });
+        await chapterRepository.delete({ course_id: id });
+      }
+
+      const examConfigs = await examConfigRepository.find({ where: { course_id: id } });
+      const examConfigIds = examConfigs.map((config) => config.id);
+      if (examConfigIds.length) {
+        await examRecordRepository.delete({ exam_config_id: In(examConfigIds) });
+      }
+      await examConfigRepository.delete({ course_id: id });
+
+      await this.courseFileService.removeAllForCourse(id, manager, course.file_url);
+      await courseRepository.remove(course);
+      return { success: true };
     });
-    const chapterIds = chapters.map((ch) => ch.id);
-
-    // 2. 查找该课程下所有章节的题目
-    const questions = chapterIds.length > 0
-      ? await this.questionRepository.find({
-          where: { chapter_id: In(chapterIds) },
-        })
-      : [];
-    const questionIds = questions.map((q) => q.id);
-
-    // 3. 删除用户收藏（基于题目ID）
-    if (questionIds.length > 0) {
-      await this.userCollectionRepository.delete({
-        question_id: In(questionIds),
-      });
-    }
-
-    // 4. 删除用户错题本（基于课程ID）
-    await this.userWrongBookRepository.delete({
-      course_id: id,
-    });
-
-    // 5. 删除用户答题记录（基于章节ID）
-    if (chapterIds.length > 0) {
-      await this.userAnswerLogRepository.delete({
-        chapter_id: In(chapterIds),
-      });
-    }
-
-    // 6. 删除题目
-    if (questionIds.length > 0) {
-      await this.questionRepository.delete({
-        chapter_id: In(chapterIds),
-      });
-    }
-
-    // 7. 删除章节
-    if (chapterIds.length > 0) {
-      await this.chapterRepository.delete({
-        course_id: id,
-      });
-    }
-
-    // 8. 删除该课程的考试记录
-    const examConfigs = await this.examConfigRepository.find({
-      where: { course_id: id },
-    });
-    const examConfigIds = examConfigs.map((config) => config.id);
-    if (examConfigIds.length > 0) {
-      await this.examRecordRepository.delete({
-        exam_config_id: In(examConfigIds),
-      });
-    }
-
-    // 9. 删除该课程的考试配置
-    await this.examConfigRepository.delete({
-      course_id: id,
-    });
-
-    // 10. 最后删除课程
-    await this.courseRepository.remove(course);
-    return { success: true };
   }
 
   /**
