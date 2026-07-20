@@ -1,16 +1,30 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OSS = require('ali-oss');
+import * as COS from 'cos-nodejs-sdk-v5';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { createHmac } from 'crypto';
 import axios from 'axios';
+import { StorageProvider } from '../../common/constants/storage-provider';
+import { StorageProviderService } from './storage-provider.service';
+
+interface CosTempAuth {
+	TmpSecretId: string;
+	TmpSecretKey: string;
+	Token: string;
+	ExpiredTime: number;
+}
 
 @Injectable()
 export class UploadService {
 	private readonly logger = new Logger(UploadService.name);
 	private oss: OSS | null = null;
+	private cos: COS;
+	private cosRegion: string;
+	private cosTempAuth: CosTempAuth | null = null;
+	private cosAuthExpireTime = 0;
 	private bucket: string;
 	private region: string;
 	private endpoint: string;
@@ -21,7 +35,10 @@ export class UploadService {
 	private uploadDir: string;
 	private baseUrl: string;
 
-	constructor(private configService: ConfigService) {
+	constructor(
+		private readonly configService: ConfigService,
+		private readonly storageProviderService: StorageProviderService,
+	) {
 		this.bucket = this.configService.get<string>('OSS_BUCKET', '');
 		this.region = this.configService.get<string>('OSS_REGION', 'oss-cn-shanghai');
 		this.endpoint = this.configService.get<string>('OSS_ENDPOINT', '');
@@ -30,6 +47,7 @@ export class UploadService {
 			'7072-prod-d1gguk4ie589126ba-1424780330',
 		);
 		this.legacyCosEnvId = this.configService.get<string>('OSS_LEGACY_COS_ENV_ID', 'prod-d1gguk4ie589126ba');
+		this.cosRegion = this.configService.get<string>('COS_REGION', 'ap-shanghai');
 		const endpointHost = this.endpoint.replace(/^https?:\/\//, '').replace(/\/$/, '');
 		this.originBaseUrl = endpointHost
 			? `https://${this.bucket}.${endpointHost}`
@@ -64,6 +82,86 @@ export class UploadService {
 			this.logger.log(`阿里云 OSS 已启用: bucket=${this.bucket}, region=${this.region}`);
 		} else {
 			this.logger.warn('OSS 配置不完整，上传文件将保存到本地');
+		}
+
+		this.cos = new COS({
+			getAuthorization: async (_options, callback) => {
+				try {
+					const auth = await this.getCosTempAuth();
+					callback({
+						TmpSecretId: auth.TmpSecretId,
+						TmpSecretKey: auth.TmpSecretKey,
+						SecurityToken: auth.Token,
+						ExpiredTime: auth.ExpiredTime,
+						StartTime: Math.floor(Date.now() / 1000),
+					});
+				} catch (error: any) {
+					this.logger.error(`获取腾讯云 COS 临时密钥失败: ${error?.message || error}`);
+					callback({
+						TmpSecretId: '',
+						TmpSecretKey: '',
+						SecurityToken: '',
+						ExpiredTime: 0,
+						StartTime: Math.floor(Date.now() / 1000),
+					});
+				}
+			},
+		});
+	}
+
+	private async getStorageProvider(): Promise<StorageProvider> {
+		return this.storageProviderService.getProvider();
+	}
+
+	private isWeChatCloudBase(): boolean {
+		return Boolean(
+			process.env.WX_CLOUD_ENV ||
+				process.env.WX_CLOUDBASE_ENV ||
+				process.env.TCB_ENV ||
+				process.env.COS_BUCKET ||
+				process.env.WX_CLOUD_RUN_ENV === 'true',
+		);
+	}
+
+	private async getCosTempAuth(): Promise<CosTempAuth> {
+		const now = Math.floor(Date.now() / 1000);
+		if (this.cosTempAuth && this.cosAuthExpireTime > now + 60) {
+			return this.cosTempAuth;
+		}
+		const response = await axios.get('http://api.weixin.qq.com/_/cos/getauth', {
+			timeout: 10_000,
+		});
+		const data = response.data || {};
+		if (!data.TmpSecretId || !data.TmpSecretKey || !data.Token) {
+			throw new Error('腾讯云临时密钥返回数据不完整');
+		}
+		this.cosTempAuth = {
+			TmpSecretId: data.TmpSecretId,
+			TmpSecretKey: data.TmpSecretKey,
+			Token: data.Token,
+			ExpiredTime: Number(data.ExpiredTime),
+		};
+		this.cosAuthExpireTime = Number(data.ExpiredTime);
+		return this.cosTempAuth;
+	}
+
+	private async getCosFileMetaData(cloudPath: string, openid = ''): Promise<string | null> {
+		if (!this.isWeChatCloudBase()) return null;
+		try {
+			const response = await axios.post(
+				'http://api.weixin.qq.com/_/cos/metaid/encode',
+				{
+					openid,
+					bucket: this.legacyCosBucket,
+					paths: [cloudPath],
+				},
+				{ timeout: 10_000 },
+			);
+			const data = response.data || {};
+			return data.errcode === 0 ? data.respdata?.x_cos_meta_field_strs?.[0] || null : null;
+		} catch (error: any) {
+			this.logger.warn(`获取 COS 文件元数据失败，将继续上传: ${error?.message || error}`);
+			return null;
 		}
 	}
 
@@ -211,12 +309,14 @@ export class UploadService {
 			throw new BadRequestException('不支持的文件类型，仅支持 jpg、png、gif、webp');
 		}
 
-		// 根据环境选择存储方式
-		if (this.isObjectStorageEnabled()) {
+		const provider = await this.getStorageProvider();
+		if (provider === StorageProvider.OSS) {
 			return this.uploadToOss(file, folder);
-		} else {
-			return this.uploadToLocal(file, folder);
 		}
+		if (this.isWeChatCloudBase()) {
+			return this.uploadToCos(file, folder, openid);
+		}
+		return this.uploadToLocal(file, folder);
 	}
 
 	/**
@@ -281,6 +381,53 @@ export class UploadService {
 		}
 	}
 
+	private async uploadToCos(
+		file: Express.Multer.File,
+		folder = 'images',
+		openid = '',
+	): Promise<string> {
+		if (!this.isValidFilename(file.originalname) || !this.isValidFolder(folder)) {
+			throw new BadRequestException('文件名或存储目录不安全');
+		}
+		const ext = this.getFileExtension(file.originalname).toLowerCase();
+		if (!['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext)) {
+			throw new BadRequestException('不支持的文件扩展名');
+		}
+		const key = `${folder}/${Date.now()}-${Math.random().toString(36).substring(2, 15)}${ext}`;
+		await this.putObjectToCos(key, file.buffer, file.mimetype, file.size, openid);
+		return this.getCosObjectUrl(key);
+	}
+
+	private async putObjectToCos(
+		key: string,
+		body: Buffer | fs.ReadStream,
+		contentType: string,
+		contentLength: number,
+		openid = '',
+	): Promise<void> {
+		const safeKey = this.normalizeObjectKey(key);
+		const metaFileId = await this.getCosFileMetaData(`/${safeKey}`, openid);
+		const options: any = {
+			Bucket: this.legacyCosBucket,
+			Region: this.cosRegion,
+			Key: safeKey,
+			Body: body,
+			ContentType: contentType,
+			ContentLength: contentLength,
+			StorageClass: 'STANDARD',
+		};
+		if (metaFileId) options.Headers = { 'x-cos-meta-fileid': metaFileId };
+		await this.cos.putObject(options);
+	}
+
+	private getCosObjectUrl(key: string): string {
+		const safeKey = this.normalizeObjectKey(key)
+			.split('/')
+			.map(encodeURIComponent)
+			.join('/');
+		return `https://${this.legacyCosBucket}.tcb.qcloud.la/${safeKey}`;
+	}
+
 	/**
 	 * 根据 URL 删除文件（本地或 OSS），供图片、PDF 等统一使用
 	 * @param fileUrl 文件 URL
@@ -314,6 +461,15 @@ export class UploadService {
 			throw new BadRequestException('无效或非本项目的文件 URL');
 		}
 		assertAllowedKey(key);
+		if (this.isTencentStorageUrl(fileUrl)) {
+			await this.cos.deleteObject({
+				Bucket: this.legacyCosBucket,
+				Region: this.cosRegion,
+				Key: key,
+			});
+			this.logger.log(`[COS删除] 成功: ${key}`);
+			return;
+		}
 		await this.requireOss().delete(key);
 		this.logger.log(`[OSS删除] 成功: ${key}`);
 	}
@@ -356,6 +512,20 @@ export class UploadService {
 		const sourceKey = this.extractKeyFromUrl(fileUrl);
 		if (!sourceKey || !sourceKey.startsWith(stagingPrefix)) return { url: fileUrl, promoted: false };
 		const destinationKey = `${permanentPrefix}${sourceKey.slice(stagingPrefix.length)}`;
+		if (this.isTencentStorageUrl(fileUrl)) {
+			await this.cos.putObjectCopy({
+				Bucket: this.legacyCosBucket,
+				Region: this.cosRegion,
+				Key: destinationKey,
+				CopySource: `${this.legacyCosBucket}.cos.${this.cosRegion}.myqcloud.com/${sourceKey}`,
+			});
+			await this.cos.deleteObject({
+				Bucket: this.legacyCosBucket,
+				Region: this.cosRegion,
+				Key: sourceKey,
+			});
+			return { url: this.getCosObjectUrl(destinationKey), promoted: true };
+		}
 		await this.requireOss().copy(destinationKey, sourceKey);
 		try {
 			await this.requireOss().delete(sourceKey);
@@ -372,7 +542,7 @@ export class UploadService {
 		if (!safePrefix.startsWith('course-preview-cache/')) {
 			throw new BadRequestException('拒绝删除不属于课程预览缓存的目录');
 		}
-		if (!this.isObjectStorageEnabled()) {
+		if (!this.isObjectStorageEnabled() && !this.isWeChatCloudBase()) {
 			const targetPath = path.resolve(this.uploadDir, safePrefix);
 			const resolvedUploadDir = path.resolve(this.uploadDir);
 			if (!targetPath.startsWith(`${resolvedUploadDir}${path.sep}`)) {
@@ -383,17 +553,42 @@ export class UploadService {
 			return 1;
 		}
 
-		let marker: string | undefined;
 		let deletedCount = 0;
-		do {
-			const result: any = await this.requireOss().list({ prefix: safePrefix, marker, 'max-keys': 1000 }, {});
-			const keys = (result.objects || []).map((object: any) => object.name).filter(Boolean);
-			if (keys.length) {
-				await this.requireOss().deleteMulti(keys, { quiet: true });
-				deletedCount += keys.length;
-			}
-			marker = result.isTruncated ? result.nextMarker : undefined;
-		} while (marker);
+		if (this.oss) {
+			let marker: string | undefined;
+			do {
+				const result: any = await this.oss.list({ prefix: safePrefix, marker, 'max-keys': 1000 }, {});
+				const keys = (result.objects || []).map((object: any) => object.name).filter(Boolean);
+				if (keys.length) {
+					await this.oss.deleteMulti(keys, { quiet: true });
+					deletedCount += keys.length;
+				}
+				marker = result.isTruncated ? result.nextMarker : undefined;
+			} while (marker);
+		}
+		if (this.isWeChatCloudBase()) {
+			let marker: string | undefined;
+			do {
+				const result: any = await this.cos.getBucket({
+					Bucket: this.legacyCosBucket,
+					Region: this.cosRegion,
+					Prefix: safePrefix,
+					Marker: marker,
+					MaxKeys: 1000,
+				});
+				const keys = (result.Contents || []).map((object: any) => object.Key).filter(Boolean);
+				if (keys.length) {
+					await this.cos.deleteMultipleObject({
+						Bucket: this.legacyCosBucket,
+						Region: this.cosRegion,
+						Objects: keys.map((Key: string) => ({ Key })),
+						Quiet: true,
+					});
+					deletedCount += keys.length;
+				}
+				marker = result.IsTruncated === 'true' ? result.NextMarker : undefined;
+			} while (marker);
+		}
 		this.logger.log(`[OSS删除] 课程预览缓存清理完成: prefix=${safePrefix}, count=${deletedCount}`);
 		return deletedCount;
 	}
@@ -412,13 +607,26 @@ export class UploadService {
 		contentType = 'application/octet-stream',
 	): Promise<{
 		url: string;
-		method: 'PUT';
+		method: 'PUT' | 'SERVER_CHUNK';
+		provider: StorageProvider;
 		contentType: string;
 		headers: Record<string, string>;
 		path: string;
 		finalFileUrl: string;
 	}> {
 		const safeKey = this.normalizeObjectKey(cloudPath);
+		const provider = await this.getStorageProvider();
+		if (provider === StorageProvider.COS) {
+			return {
+				url: '',
+				method: 'SERVER_CHUNK',
+				provider,
+				contentType,
+				headers: {},
+				path: safeKey,
+				finalFileUrl: this.getCosObjectUrl(safeKey),
+			};
+		}
 		const headers: Record<string, string> = { 'Content-Type': contentType };
 		const signatureOptions: any = {
 			expires: 15 * 60,
@@ -429,6 +637,7 @@ export class UploadService {
 		return {
 			url,
 			method: 'PUT',
+			provider,
 			contentType,
 			headers,
 			path: safeKey,
@@ -439,19 +648,33 @@ export class UploadService {
 	/**
 	 * 获取 OSS 表单直传凭证。微信小程序的 uploadFile 仅支持 multipart 表单，使用此接口直传 OSS。
 	 */
-	getPostUploadCredentials(
+	async getPostUploadCredentials(
 		cloudPath: string,
 		contentType = 'application/octet-stream',
 		maxBytes = 300 * 1024 * 1024,
-	): {
+	): Promise<{
 		url: string;
-		method: 'POST';
+		method: 'POST' | 'WX_CLOUD';
+		provider: StorageProvider;
 		fields: Record<string, string>;
 		path: string;
+		cloudPath?: string;
 		finalFileUrl: string;
-	} {
-		this.requireOss();
+	}> {
 		const safeKey = this.normalizeObjectKey(cloudPath);
+		const provider = await this.getStorageProvider();
+		if (provider === StorageProvider.COS) {
+			return {
+				url: '',
+				method: 'WX_CLOUD',
+				provider,
+				fields: {},
+				path: safeKey,
+				cloudPath: safeKey,
+				finalFileUrl: this.getCosObjectUrl(safeKey),
+			};
+		}
+		this.requireOss();
 		const accessKeyId = this.configService.get<string>('OSS_ACCESS_KEY_ID');
 		const accessKeySecret = this.configService.get<string>('OSS_ACCESS_KEY_SECRET');
 		if (!accessKeyId || !accessKeySecret) {
@@ -471,6 +694,7 @@ export class UploadService {
 		return {
 			url: this.originBaseUrl,
 			method: 'POST',
+			provider,
 			fields: {
 				key: safeKey,
 				policy,
@@ -506,8 +730,12 @@ export class UploadService {
 			throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
 		}
 		const folder = 'course-files/staging';
-		if (this.isObjectStorageEnabled()) {
+		const provider = await this.getStorageProvider();
+		if (provider === StorageProvider.OSS) {
 			return this.uploadCourseFileToOss(file, folder);
+		}
+		if (this.isWeChatCloudBase()) {
+			return this.uploadCourseFileToCos(file, folder, openid);
 		}
 		return this.uploadCourseFileToLocal(file, folder);
 	}
@@ -582,6 +810,30 @@ export class UploadService {
 		return fileUrl;
 	}
 
+	private async uploadCourseFileToCos(
+		file: Express.Multer.File,
+		folder: string,
+		openid: string,
+	): Promise<string> {
+		const ext = this.getFileExtension(file.originalname).toLowerCase();
+		if (!['.pdf', '.doc', '.docx'].includes(ext)) {
+			throw new BadRequestException('仅支持 PDF、Word 文件');
+		}
+		const key = `${folder}/${Date.now()}-${Math.random().toString(36).substring(2, 15)}${ext}`;
+		const buffer = (file as any).buffer as Buffer | undefined;
+		const filePath = file.path && fs.existsSync(file.path) ? file.path : '';
+		if (!buffer && !filePath) throw new BadRequestException('无法读取文件内容');
+		const size = buffer?.length || (await fs.promises.stat(filePath)).size;
+		await this.putObjectToCos(
+			key,
+			buffer || fs.createReadStream(filePath),
+			file.mimetype,
+			size,
+			openid,
+		);
+		return this.getCosObjectUrl(key);
+	}
+
 	/**
 	 * 上传 PDF 到对象存储（用于「先上传再解析」流程）
 	 * 本地环境存到 uploads/pdf/，线上存到 OSS pdf/
@@ -595,8 +847,12 @@ export class UploadService {
 			throw new BadRequestException('仅支持 PDF 文件');
 		}
 		const buffer = await this.getPdfBuffer(file);
-		if (this.isObjectStorageEnabled()) {
+		const provider = await this.getStorageProvider();
+		if (provider === StorageProvider.OSS) {
 			return this.uploadPdfToOss(buffer);
+		}
+		if (this.isWeChatCloudBase()) {
+			return this.uploadPdfToCos(buffer);
 		}
 		return this.uploadPdfToLocal(buffer);
 	}
@@ -635,11 +891,21 @@ export class UploadService {
 		return this.getObjectUrl(fileName);
 	}
 
+	private async uploadPdfToCos(buffer: Buffer): Promise<string> {
+		const key = `pdf/${Date.now()}-${Math.random().toString(36).substring(2, 15)}.pdf`;
+		await this.putObjectToCos(key, buffer, 'application/pdf', buffer.length);
+		return this.getCosObjectUrl(key);
+	}
+
 	/**
 	 * 上传 Buffer 到当前对象存储桶，供服务端生成的缓存文件复用。
 	 */
 	async uploadBufferToOss(key: string, buffer: Buffer, contentType = 'application/octet-stream'): Promise<string> {
 		const safeKey = this.normalizeObjectKey(key);
+		if ((await this.getStorageProvider()) === StorageProvider.COS && this.isWeChatCloudBase()) {
+			await this.putObjectToCos(safeKey, buffer, contentType, buffer.length);
+			return this.getCosObjectUrl(safeKey);
+		}
 		await this.requireOss().put(safeKey, buffer, {
 			headers: {
 				'Content-Type': contentType,
@@ -651,6 +917,14 @@ export class UploadService {
 	async objectExists(key: string): Promise<boolean> {
 		const safeKey = this.normalizeObjectKey(key);
 		try {
+			if ((await this.getStorageProvider()) === StorageProvider.COS && this.isWeChatCloudBase()) {
+				await this.cos.headObject({
+					Bucket: this.legacyCosBucket,
+					Region: this.cosRegion,
+					Key: safeKey,
+				});
+				return true;
+			}
 			await this.requireOss().head(safeKey);
 			return true;
 		} catch {
@@ -661,6 +935,9 @@ export class UploadService {
 	async readObjectBuffer(key: string): Promise<Buffer | null> {
 		const safeKey = this.normalizeObjectKey(key);
 		try {
+			if ((await this.getStorageProvider()) === StorageProvider.COS && this.isWeChatCloudBase()) {
+				return this.readCosObjectBuffer(safeKey);
+			}
 			const result = await this.requireOss().get(safeKey);
 			const body = (result as any)?.content;
 			if (Buffer.isBuffer(body)) return body;
@@ -680,7 +957,23 @@ export class UploadService {
 		if (!key) {
 			return null;
 		}
+		if (this.isTencentStorageUrl(url)) {
+			return this.readCosObjectBuffer(key);
+		}
 		return this.readObjectBuffer(key);
+	}
+
+	private async readCosObjectBuffer(key: string): Promise<Buffer | null> {
+		try {
+			const result: any = await this.cos.getObject({
+				Bucket: this.legacyCosBucket,
+				Region: this.cosRegion,
+				Key: this.normalizeObjectKey(key),
+			});
+			return Buffer.isBuffer(result?.Body) ? result.Body : Buffer.from(result?.Body || '');
+		} catch {
+			return null;
+		}
 	}
 
 	getObjectUrl(key: string): string {
@@ -835,7 +1128,7 @@ export class UploadService {
 			]);
 			if (this.legacyCosBucket) {
 				allowedHosts.add(`${this.legacyCosBucket}.tcb.qcloud.la`);
-				allowedHosts.add(`${this.legacyCosBucket}.cos.ap-shanghai.myqcloud.com`);
+				allowedHosts.add(`${this.legacyCosBucket}.cos.${this.cosRegion}.myqcloud.com`);
 			}
 			return allowedHosts.has(u.hostname);
 		} catch {
@@ -909,11 +1202,15 @@ export class UploadService {
 			const host = new URL(url).hostname;
 			return (
 				host === `${this.legacyCosBucket}.tcb.qcloud.la` ||
-				host === `${this.legacyCosBucket}.cos.ap-shanghai.myqcloud.com`
+				host === `${this.legacyCosBucket}.cos.${this.cosRegion}.myqcloud.com`
 			);
 		} catch {
 			return false;
 		}
+	}
+
+	private isTencentStorageUrl(url: string): boolean {
+		return Boolean(this.extractLegacyCloudKey(url)) || this.isLegacyCosHttpsUrl(url);
 	}
 
 	private isImageContentType(contentType: string): boolean {

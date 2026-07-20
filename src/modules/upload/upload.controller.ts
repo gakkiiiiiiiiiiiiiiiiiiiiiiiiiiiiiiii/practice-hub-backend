@@ -288,7 +288,7 @@ export class AppUploadController {
       '.doc': 'application/msword',
       '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     };
-    const credentials = this.uploadService.getPostUploadCredentials(
+		const credentials = await this.uploadService.getPostUploadCredentials(
       cloudPath,
       contentTypes[ext],
       300 * 1024 * 1024,
@@ -326,7 +326,11 @@ export class AppUploadController {
       '.gif': 'image/gif',
       '.webp': 'image/webp',
     };
-    const credentials = this.uploadService.getPostUploadCredentials(path, mimeTypes[ext], 10 * 1024 * 1024);
+		const credentials = await this.uploadService.getPostUploadCredentials(
+			path,
+			mimeTypes[ext],
+			10 * 1024 * 1024,
+		);
     return CommonResponseDto.success({
       ...credentials,
       fileName: originalName,

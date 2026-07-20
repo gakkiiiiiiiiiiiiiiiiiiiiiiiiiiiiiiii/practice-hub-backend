@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like, Between } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -11,6 +11,11 @@ import { GetOperationLogsDto } from './dto/get-operation-logs.dto';
 import { GetErrorLogsDto } from './dto/get-error-logs.dto';
 import { SetCourseCoverConfigDto } from './dto/set-course-cover-config.dto';
 import { ceilIntegerYuanPrice } from '../../common/utils/price.util';
+import {
+  DEFAULT_STORAGE_PROVIDER,
+  STORAGE_PROVIDER_CONFIG_KEY,
+  StorageProvider,
+} from '../../common/constants/storage-provider';
 
 type CourseIntroTemplateItem = {
   id: string;
@@ -74,6 +79,55 @@ export class SystemService {
       config.updateTime = new Date();
     }
     await this.systemConfigRepository.save(config);
+  }
+
+  async getStorageProviderConfig() {
+    const provider = await this.getJsonConfig<StorageProvider>(
+      STORAGE_PROVIDER_CONFIG_KEY,
+      DEFAULT_STORAGE_PROVIDER,
+    );
+    return {
+      provider: Object.values(StorageProvider).includes(provider)
+        ? provider
+        : DEFAULT_STORAGE_PROVIDER,
+      providers: {
+        cos: {
+          configured: Boolean(
+            this.configService.get('COS_BUCKET') ||
+              this.configService.get(
+                'OSS_LEGACY_COS_BUCKET',
+                '7072-prod-d1gguk4ie589126ba-1424780330',
+              ),
+          ),
+          label: '腾讯云',
+        },
+        oss: {
+          configured: Boolean(
+            this.configService.get('OSS_BUCKET') &&
+              this.configService.get('OSS_ACCESS_KEY_ID') &&
+              this.configService.get('OSS_ACCESS_KEY_SECRET'),
+          ),
+          label: '阿里云',
+        },
+      },
+    };
+  }
+
+  async setStorageProvider(provider: StorageProvider) {
+    const status = await this.getStorageProviderConfig();
+    if (!status.providers[provider]?.configured) {
+      throw new BadRequestException(
+        provider === StorageProvider.OSS
+          ? '阿里云 OSS 配置不完整，暂时无法切换'
+          : '腾讯云 COS 配置不完整，暂时无法切换',
+      );
+    }
+    await this.setJsonConfig(
+      STORAGE_PROVIDER_CONFIG_KEY,
+      '当前对象存储服务（cos/oss）',
+      provider,
+    );
+    return this.getStorageProviderConfig();
   }
 
   private getDefaultCourseCoverConfig() {

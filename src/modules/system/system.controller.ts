@@ -18,6 +18,7 @@ import { UserTitleService, UserTitleConfig } from '../user/user-title.service';
 import { OperationLogInterceptor } from '../../common/interceptors/operation-log.interceptor';
 import { IssueCouponDto } from '../marketing/dto/issue-coupon.dto';
 import { GetAdminCouponListDto } from '../marketing/dto/get-admin-coupon-list.dto';
+import { SetStorageProviderDto } from './dto/set-storage-provider.dto';
 
 @ApiTags('系统管理')
 @Controller('admin')
@@ -30,6 +31,24 @@ export class SystemController {
     private readonly pointsService: PointsService,
     private readonly userTitleService: UserTitleService,
   ) {}
+
+  @Get('settings/storage-provider')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取当前对象存储服务' })
+  async getStorageProvider() {
+    return CommonResponseDto.success(
+      await this.systemService.getStorageProviderConfig(),
+    );
+  }
+
+  @Put('settings/storage-provider')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '切换对象存储服务' })
+  async setStorageProvider(@Body() dto: SetStorageProviderDto) {
+    return CommonResponseDto.success(
+      await this.systemService.setStorageProvider(dto.provider),
+    );
+  }
 
   @Put('settings/countdown')
   @Roles(AdminRole.SUPER_ADMIN)
