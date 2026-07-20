@@ -207,6 +207,36 @@ describe('OrderService WeChat Pay refund', () => {
   });
 });
 
+describe('OrderService admin pagination', () => {
+  it('honors the 100-row page size exposed by the admin table', async () => {
+    const query: any = {
+      leftJoin: jest.fn(),
+      select: jest.fn(),
+      orderBy: jest.fn(),
+      andWhere: jest.fn(),
+      clone: jest.fn(),
+      getCount: jest.fn().mockResolvedValue(0),
+      offset: jest.fn(),
+      limit: jest.fn(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    };
+    Object.keys(query).forEach((key) => {
+      if (!['getCount', 'getRawMany'].includes(key)) {
+        query[key].mockReturnValue(query);
+      }
+    });
+
+    const service = Object.create(OrderService.prototype) as any;
+    service.orderRepository = { createQueryBuilder: jest.fn().mockReturnValue(query) };
+    service.getLatestAfterSaleMap = jest.fn().mockResolvedValue(new Map());
+
+    const result = await service.getAdminOrderList({ page: 1, pageSize: 100 });
+
+    expect(query.limit).toHaveBeenCalledWith(100);
+    expect(result.pageSize).toBe(100);
+  });
+});
+
 describe('OrderService paper exam checkout', () => {
   const shippingAddress = {
     name: '张三',
