@@ -10,6 +10,7 @@ import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CourseCategory } from '../../database/entities/course-category.entity';
+import { Course } from '../../database/entities/course.entity';
 import { GetCourseListDto } from './dto/get-course-list.dto';
 
 @ApiTags('课程')
@@ -19,6 +20,8 @@ export class CourseController {
     private readonly courseService: CourseService,
     @InjectRepository(CourseCategory)
     private courseCategoryRepository: Repository<CourseCategory>,
+    @InjectRepository(Course)
+    private courseRepository: Repository<Course>,
   ) {}
 
   @Get()
@@ -313,10 +316,39 @@ export class CourseController {
         return CommonResponseDto.success([]);
       }
 
+      const courseCountRows = await this.courseRepository
+        .createQueryBuilder('course')
+        .select('course.category', 'category')
+        .addSelect('course.sub_category', 'sub_category')
+        .addSelect('COUNT(course.id)', 'course_count')
+        .where('course.status = :status', { status: 1 })
+        .andWhere('course.category IS NOT NULL')
+        .andWhere('course.sub_category IS NOT NULL')
+        .groupBy('course.category')
+        .addGroupBy('course.sub_category')
+        .getRawMany();
+      const courseCountByCategory = new Map<string, number>();
+      courseCountRows.forEach((row) => {
+        const categoryName = String(row.category || '').trim();
+        const subCategoryName = String(row.sub_category || '').trim();
+        if (!categoryName || !subCategoryName) return;
+        courseCountByCategory.set(
+          `${categoryName}__${subCategoryName}`,
+          Number(row.course_count) || 0,
+        );
+      });
+
       // 构建分类树
+      const rawCategoryMap = new Map(categories.map((category) => [category.id, category]));
       const categoryMap = new Map<number, any>();
       categories.forEach((category) => {
-        categoryMap.set(category.id, { ...category, children: [] });
+        const parent = category.parent_id ? rawCategoryMap.get(category.parent_id) : null;
+        const courseCount = parent
+          ? courseCountByCategory.get(
+              `${String(parent.name || '').trim()}__${String(category.name || '').trim()}`,
+            ) || 0
+          : 0;
+        categoryMap.set(category.id, { ...category, course_count: courseCount, children: [] });
       });
 
       const tree: any[] = [];
@@ -329,6 +361,12 @@ export class CourseController {
         } else {
           tree.push(category);
         }
+      });
+      tree.forEach((category) => {
+        category.course_count = category.children.reduce(
+          (total: number, child: { course_count?: number }) => total + Number(child.course_count || 0),
+          0,
+        );
       });
 
       return CommonResponseDto.success(tree);
