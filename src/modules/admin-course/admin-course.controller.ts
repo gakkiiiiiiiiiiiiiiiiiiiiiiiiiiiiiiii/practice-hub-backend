@@ -559,7 +559,7 @@ export class AppCourseAdminController {
 			price: this.optionalNumber(body?.price, 1),
 			agent_price: this.optionalNumber(body?.agent_price ?? body?.agentPrice, 1),
 			is_free: this.optionalNumber(body?.is_free ?? body?.isFree, 0),
-			validity_days: this.optionalNumber(body?.validity_days ?? body?.validityDays, 365),
+			validity_days: this.optionalNullableNumber(body?.validity_days ?? body?.validityDays),
 			introduction: this.optionalText(body?.introduction),
 			content_type: 'file',
 			file_url: primary.file_url,
@@ -611,5 +611,13 @@ export class AppCourseAdminController {
 		}
 		const num = Number(value);
 		return Number.isFinite(num) ? num : fallback;
+	}
+
+	private optionalNullableNumber(value: unknown): number | null {
+		if (value === undefined || value === null || value === '') {
+			return null;
+		}
+		const num = Number(value);
+		return Number.isFinite(num) ? num : null;
 	}
 }

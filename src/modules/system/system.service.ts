@@ -443,7 +443,7 @@ export class SystemService {
       price: 1,
       agent_price: 1,
       is_free: 0,
-      validity_days: 365,
+      validity_days: null,
       allow_source_file: 0,
       trial_preview_page_count: 3,
       content_type: 'normal',
@@ -458,6 +458,10 @@ export class SystemService {
     const contentType = ['normal', 'file', 'paper_exam'].includes(source.content_type)
       ? source.content_type
       : 'normal';
+    const rawValidityDays = source.validity_days === undefined
+      ? fallback.validity_days
+      : source.validity_days;
+    const parsedValidityDays = Number(rawValidityDays);
     return {
       subject: String(source.subject || '').trim(),
       school: String(source.school || '').trim(),
@@ -468,7 +472,9 @@ export class SystemService {
       agent_price: Math.max(0, ceilIntegerYuanPrice(Number(source.agent_price ?? fallback.agent_price) || 0)),
       is_free: isFree,
       validity_days:
-        isFree === 1 ? null : Math.max(1, Number(source.validity_days ?? fallback.validity_days) || 365),
+        isFree === 1 || rawValidityDays === null || !Number.isFinite(parsedValidityDays)
+          ? null
+          : Math.max(1, Math.trunc(parsedValidityDays)),
       allow_source_file: Number(source.allow_source_file ?? fallback.allow_source_file) === 1 ? 1 : 0,
       trial_preview_page_count: Math.min(
         50,

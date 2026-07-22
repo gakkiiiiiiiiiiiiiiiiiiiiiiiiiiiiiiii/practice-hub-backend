@@ -92,9 +92,6 @@ export class AdminCourseService {
         category: dto.category ?? course.category,
         sub_category: dto.sub_category ?? course.sub_category,
       });
-      if (dto.is_free === 0 && dto.validity_days === undefined && course.validity_days == null) {
-        dto.validity_days = 365;
-      }
       if (dto.is_free === 1) {
         dto.validity_days = null;
       }
@@ -177,7 +174,7 @@ export class AdminCourseService {
       dto.is_free = defaults.is_free;
     }
     if (dto.validity_days === undefined) {
-      dto.validity_days = defaults.is_free === 1 ? null : defaults.validity_days ?? 365;
+      dto.validity_days = defaults.is_free === 1 ? null : defaults.validity_days;
     }
     if (dto.allow_source_file === undefined || dto.allow_source_file === null) {
       dto.allow_source_file = defaults.allow_source_file;
