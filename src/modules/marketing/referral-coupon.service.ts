@@ -385,7 +385,14 @@ export class ReferralCouponService {
 				label: this.formatCouponLabel(amount, minAmount),
 				status,
 				source: coupon.source,
-				sourceLabel: coupon.source === 'admin' ? '后台发放' : coupon.source === 'referral' ? '拉新奖励' : coupon.source,
+				sourceLabel:
+					coupon.source === 'admin'
+						? '后台发放'
+						: coupon.source === 'referral'
+							? '拉新奖励'
+							: coupon.source === 'rewarded_ad'
+								? '广告奖励'
+								: coupon.source,
 				expireTime: coupon.expire_time,
 				createTime: coupon.create_time,
 				usedOrderId: coupon.used_order_id,

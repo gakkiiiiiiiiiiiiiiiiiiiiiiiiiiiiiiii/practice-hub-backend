@@ -50,6 +50,12 @@ export class AppUser {
   @Column({ type: 'int', default: 0, comment: '积分余额' })
   points_balance: number;
 
+  @Column({ type: 'int', default: 0, comment: '激励视频优惠券活动完成次数' })
+  rewarded_ad_watch_count: number;
+
+  @Column({ type: 'boolean', default: false, comment: '是否已领取激励视频优惠券' })
+  rewarded_ad_coupon_issued: boolean;
+
   @CreateDateColumn()
   create_time: Date;
 

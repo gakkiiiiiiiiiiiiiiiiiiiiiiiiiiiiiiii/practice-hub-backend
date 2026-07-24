@@ -6,6 +6,7 @@ import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { ReferralCouponService } from './referral-coupon.service';
 import { PointsService } from './points.service';
 import { UserCouponStatus } from '../../database/entities/user-coupon.entity';
+import { RewardedAdService } from './rewarded-ad.service';
 
 @ApiTags('营销')
 @Controller('app/marketing')
@@ -13,6 +14,7 @@ export class MarketingController {
 	constructor(
 		private readonly referralCouponService: ReferralCouponService,
 		private readonly pointsService: PointsService,
+		private readonly rewardedAdService: RewardedAdService,
 	) {}
 
 	@Get('referral/config')
@@ -47,6 +49,24 @@ export class MarketingController {
 				? (status as UserCouponStatus)
 				: undefined;
 		const result = await this.referralCouponService.getUserCoupons(user.userId, parsedStatus);
+		return CommonResponseDto.success(result);
+	}
+
+	@Get('rewarded-ad/status')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '激励视频优惠券进度' })
+	async getRewardedAdStatus(@CurrentUser() user: any) {
+		const result = await this.rewardedAdService.getStatus(user.userId);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('rewarded-ad/complete')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '记录一次完整观看并按进度发放优惠券' })
+	async completeRewardedAd(@CurrentUser() user: any) {
+		const result = await this.rewardedAdService.completeView(user.userId);
 		return CommonResponseDto.success(result);
 	}
 
