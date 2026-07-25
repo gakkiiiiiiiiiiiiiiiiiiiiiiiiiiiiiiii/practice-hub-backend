@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, UseGuards, Body } from '@nestjs/common';
+import { Controller, Get, Post, Query, UseGuards, Body, Param } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -7,6 +7,7 @@ import { ReferralCouponService } from './referral-coupon.service';
 import { PointsService } from './points.service';
 import { UserCouponStatus } from '../../database/entities/user-coupon.entity';
 import { RewardedAdService } from './rewarded-ad.service';
+import { TransferCouponDto } from './dto/transfer-coupon.dto';
 
 @ApiTags('营销')
 @Controller('app/marketing')
@@ -49,6 +50,23 @@ export class MarketingController {
 				? (status as UserCouponStatus)
 				: undefined;
 		const result = await this.referralCouponService.getUserCoupons(user.userId, parsedStatus);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post('coupons/:id/transfer')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '将未使用优惠券转赠给指定用户' })
+	async transferCoupon(
+		@CurrentUser() user: any,
+		@Param('id') couponId: number,
+		@Body() dto: TransferCouponDto,
+	) {
+		const result = await this.referralCouponService.transferCoupon(
+			user.userId,
+			+couponId,
+			dto.target_user_id,
+		);
 		return CommonResponseDto.success(result);
 	}
 

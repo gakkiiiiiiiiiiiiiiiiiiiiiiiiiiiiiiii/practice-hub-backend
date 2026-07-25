@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { DataSource, Repository, In } from 'typeorm';
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { UserReferral } from '../../database/entities/user-referral.entity';
 import { UserCoupon, UserCouponStatus } from '../../database/entities/user-coupon.entity';
@@ -30,6 +30,7 @@ const DEFAULT_REFERRAL_CONFIG: ReferralCouponConfig = {
 @Injectable()
 export class ReferralCouponService {
 	constructor(
+		private readonly dataSource: DataSource,
 		@InjectRepository(SystemConfig)
 		private systemConfigRepository: Repository<SystemConfig>,
 		@InjectRepository(UserReferral)
@@ -223,6 +224,42 @@ export class ReferralCouponService {
 				expireTime: coupon.expire_time,
 				createTime: coupon.create_time,
 				label: this.formatCouponLabel(Number(coupon.amount), Number(coupon.min_amount)),
+			};
+		});
+	}
+
+	async transferCoupon(userId: number, couponId: number, targetUserId: number) {
+		if (userId === targetUserId) {
+			throw new BadRequestException('不能转赠给自己');
+		}
+
+		return this.dataSource.transaction(async (manager) => {
+			const coupon = await manager.findOne(UserCoupon, {
+				where: { id: couponId, user_id: userId },
+				lock: { mode: 'pessimistic_write' },
+			});
+			if (!coupon) {
+				throw new NotFoundException('优惠券不存在或不属于当前用户');
+			}
+			if (coupon.status !== UserCouponStatus.UNUSED || coupon.used_order_id) {
+				throw new BadRequestException('仅未使用的优惠券可以转赠');
+			}
+			if (coupon.expire_time && coupon.expire_time <= new Date()) {
+				throw new BadRequestException('优惠券已过期，无法转赠');
+			}
+
+			const recipient = await manager.findOne(AppUser, { where: { id: targetUserId } });
+			if (!recipient) {
+				throw new NotFoundException('接收方用户不存在');
+			}
+
+			coupon.user_id = targetUserId;
+			await manager.save(UserCoupon, coupon);
+
+			return {
+				couponId: coupon.id,
+				targetUserId: recipient.id,
+				targetNickname: recipient.nickname || '未设置',
 			};
 		});
 	}

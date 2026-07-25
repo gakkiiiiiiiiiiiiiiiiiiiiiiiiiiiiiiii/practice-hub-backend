@@ -9,6 +9,7 @@ import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { GetUserListDto } from './dto/get-user-list.dto';
 import { AppUserRole } from '../../database/entities/app-user.entity';
+import { GrantUserPointsDto } from './dto/grant-user-points.dto';
 
 @ApiTags('管理员-小程序用户管理')
 @Controller('admin/users')
@@ -50,6 +51,13 @@ export class AdminController {
 	@ApiOperation({ summary: '重置为新用户（拉新测试/补绑）' })
 	async resetUserAsNew(@Param('id') id: number) {
 		const result = await this.adminService.resetUserAsNew(+id);
+		return CommonResponseDto.success(result);
+	}
+
+	@Post(':id/points/grant')
+	@ApiOperation({ summary: '向指定小程序用户赠送积分' })
+	async grantUserPoints(@Param('id') id: number, @Body() dto: GrantUserPointsDto) {
+		const result = await this.adminService.grantUserPoints(+id, dto);
 		return CommonResponseDto.success(result);
 	}
 }

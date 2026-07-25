@@ -1,21 +1,23 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, In } from 'typeorm';
+import { DataSource, Repository, Like, In } from 'typeorm';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UserAnswerLog } from '../../database/entities/user-answer-log.entity';
 import { UserWrongBook } from '../../database/entities/user-wrong-book.entity';
 import { UserCollection } from '../../database/entities/user-collection.entity';
 import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
 import { UserReferral } from '../../database/entities/user-referral.entity';
-import { UserPointsLog } from '../../database/entities/user-points-log.entity';
+import { UserPointsLog, UserPointsLogType } from '../../database/entities/user-points-log.entity';
 import { UserCheckin } from '../../database/entities/user-checkin.entity';
 import { Question } from '../../database/entities/question.entity';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { GetUserListDto } from './dto/get-user-list.dto';
+import { GrantUserPointsDto } from './dto/grant-user-points.dto';
 
 @Injectable()
 export class AdminService {
 	constructor(
+		private readonly dataSource: DataSource,
 		@InjectRepository(AppUser)
 		private appUserRepository: Repository<AppUser>,
 		@InjectRepository(UserAnswerLog)
@@ -47,9 +49,11 @@ export class AdminService {
 
 		// 搜索条件
 		if (keyword) {
+			const numericUserId = /^\d+$/.test(keyword.trim()) ? Number(keyword.trim()) : null;
 			queryBuilder.where(
-				'(user.nickname LIKE :keyword OR user.openid LIKE :keyword OR user.phone LIKE :keyword)',
-				{ keyword: `%${keyword}%` }
+				'(user.nickname LIKE :keyword OR user.openid LIKE :keyword OR user.phone LIKE :keyword' +
+					(numericUserId ? ' OR user.id = :numericUserId)' : ')'),
+				{ keyword: `%${keyword}%`, numericUserId },
 			);
 		}
 
@@ -80,6 +84,7 @@ export class AdminService {
 				openId: user.openid,
 				avatar: user.avatar,
 				phone: user.phone,
+				pointsBalance: user.points_balance || 0,
 				role: user.role || AppUserRole.USER,
 				isAppAdmin: user.role === AppUserRole.ADMIN,
 				isBankAdmin: user.role === AppUserRole.BANK_ADMIN,
@@ -159,6 +164,7 @@ export class AdminService {
 				openId: user.openid,
 				avatar: user.avatar,
 				phone: user.phone,
+				pointsBalance: user.points_balance || 0,
 				role: user.role || AppUserRole.USER,
 				isAppAdmin: user.role === AppUserRole.ADMIN,
 				isBankAdmin: user.role === AppUserRole.BANK_ADMIN,
@@ -178,6 +184,39 @@ export class AdminService {
 			},
 			wrongQuestions,
 		};
+	}
+
+	async grantUserPoints(userId: number, dto: GrantUserPointsDto) {
+		return this.dataSource.transaction(async (manager) => {
+			const user = await manager.findOne(AppUser, {
+				where: { id: userId },
+				lock: { mode: 'pessimistic_write' },
+			});
+			if (!user) {
+				throw new NotFoundException('用户不存在');
+			}
+
+			const amount = Number(dto.amount);
+			user.points_balance = Number(user.points_balance || 0) + amount;
+			await manager.save(AppUser, user);
+			await manager.save(
+				UserPointsLog,
+				manager.create(UserPointsLog, {
+					userId,
+					changeAmount: amount,
+					balanceAfter: user.points_balance,
+					type: UserPointsLogType.ADJUST,
+					remark: dto.remark?.trim() || '管理员赠送积分',
+				}),
+			);
+
+			return {
+				userId: user.id,
+				nickname: user.nickname || '未设置',
+				grantedAmount: amount,
+				pointsBalance: user.points_balance,
+			};
+		});
 	}
 
 	/**
