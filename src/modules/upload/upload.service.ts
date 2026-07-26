@@ -5,6 +5,7 @@ import * as COS from 'cos-nodejs-sdk-v5';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { pipeline } from 'stream/promises';
 import { createHmac } from 'crypto';
 import axios from 'axios';
 import { StorageProvider } from '../../common/constants/storage-provider';
@@ -939,6 +940,76 @@ export class UploadService {
 			return this.readCosObjectBuffer(key);
 		}
 		return this.readOssObjectBuffer(key);
+	}
+
+	/**
+	 * 将课程源文件流式写入本地临时文件。
+	 * 预览服务必须使用该方法处理大文件，避免把数百 MB 的 PDF 整体放进 Node.js 堆内存。
+	 */
+	async downloadObjectUrlToFile(url: string, destinationPath: string, timeout = 10 * 60 * 1000): Promise<number> {
+		if (!this.isAllowedProxyUrl(url)) {
+			throw new BadRequestException('仅允许读取本项目的课程文件地址');
+		}
+		const key = this.extractKeyFromUrl(url);
+		if (!key) {
+			throw new BadRequestException('课程文件地址无效');
+		}
+		await fs.promises.mkdir(path.dirname(destinationPath), { recursive: true });
+		try {
+			if (this.isTencentStorageUrl(url)) {
+				const publicUrl = this.getPublicImageUrl(url);
+				if (publicUrl.startsWith('https://')) {
+					try {
+						const response = await axios.get(publicUrl, {
+							responseType: 'stream',
+							timeout,
+							maxContentLength: Infinity,
+							maxBodyLength: Infinity,
+							headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PracticeHub/1.0)' },
+						});
+						await pipeline(response.data, fs.createWriteStream(destinationPath));
+					} catch {
+						try {
+							await fs.promises.unlink(destinationPath);
+						} catch (_) {}
+						await this.downloadCosObjectToFile(key, destinationPath);
+					}
+				} else {
+					await this.downloadCosObjectToFile(key, destinationPath);
+				}
+			} else {
+				const result = await this.requireOss().getStream(this.normalizeObjectKey(key));
+				await pipeline((result as any).stream, fs.createWriteStream(destinationPath));
+			}
+			const stat = await fs.promises.stat(destinationPath);
+			if (!stat.isFile() || stat.size < 1) {
+				throw new Error('课程文件内容为空');
+			}
+			return stat.size;
+		} catch (error) {
+			try {
+				await fs.promises.unlink(destinationPath);
+			} catch (_) {}
+			throw error;
+		}
+	}
+
+	private async downloadCosObjectToFile(key: string, destinationPath: string): Promise<void> {
+		const output = fs.createWriteStream(destinationPath);
+		await new Promise<void>((resolve, reject) => {
+			this.cos.getObject(
+				{
+					Bucket: this.legacyCosBucket,
+					Region: this.cosRegion,
+					Key: this.normalizeObjectKey(key),
+					Output: output,
+				} as any,
+				(error: any) => {
+					if (error) reject(error);
+					else resolve();
+				},
+			);
+		});
 	}
 
 	private async readOssObjectBuffer(key: string): Promise<Buffer | null> {

@@ -1,4 +1,8 @@
 import { ConfigService } from '@nestjs/config';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { Readable } from 'stream';
 import { StorageProvider } from '../../common/constants/storage-provider';
 import { StorageProviderService } from './storage-provider.service';
 import { UploadService } from './upload.service';
@@ -82,5 +86,28 @@ describe('UploadService storage provider credentials', () => {
 		expect(result).toEqual(Buffer.from('%PDF-test'));
 		expect(getObject).toHaveBeenCalledWith('course-files/repaired/file.pdf');
 		expect(storageProviderService.getProvider).not.toHaveBeenCalled();
+	});
+
+	it('streams a large OSS course file to disk without consulting the active provider', async () => {
+		storageProviderService.getProvider.mockResolvedValue(StorageProvider.COS);
+		const payload = Buffer.from('%PDF-streamed');
+		jest
+			.spyOn((service as any).oss, 'getStream')
+			.mockResolvedValue({ stream: Readable.from(payload) });
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'upload-service-stream-'));
+		const destination = path.join(tmpDir, 'source.pdf');
+
+		try {
+			const size = await service.downloadObjectUrlToFile(
+				'https://example-bucket.oss-cn-shanghai.aliyuncs.com/course-files/source.pdf',
+				destination,
+			);
+
+			expect(size).toBe(payload.length);
+			expect(fs.readFileSync(destination)).toEqual(payload);
+			expect(storageProviderService.getProvider).not.toHaveBeenCalled();
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 });

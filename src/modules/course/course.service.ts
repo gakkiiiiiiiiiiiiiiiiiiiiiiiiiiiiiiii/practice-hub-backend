@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -28,6 +34,15 @@ const execFileAsync = promisify(execFile);
 const PREVIEW_IMAGE_WIDTH = 1440;
 const PREVIEW_IMAGE_DENSITY = 160;
 const PREVIEW_IMAGE_QUALITY = 90;
+const PREVIEW_REQUEST_WAIT_MS = 25000;
+const PREVIEW_PDF_PATH_TTL_MS = 10 * 60 * 1000;
+const LARGE_PREVIEW_FILE_BYTES = 100 * 1024 * 1024;
+
+type PreviewPdfPathEntry = {
+  pdfPath: string;
+  tmpDir: string;
+  expiresAt: number;
+};
 
 export interface PreviewWarmupResult {
   courseId: number;
@@ -91,6 +106,9 @@ export class CourseService {
   private readonly previewRenderTasks = new Map<string, Promise<{ buffer: Buffer; contentType: string }>>();
   private readonly previewPdfDownloadTasks = new Map<string, Promise<Buffer>>();
   private readonly previewPdfBufferCache = new Map<string, { buffer: Buffer; expiresAt: number }>();
+  private readonly previewPdfPathTasks = new Map<string, Promise<PreviewPdfPathEntry>>();
+  private readonly previewPdfPathCache = new Map<string, PreviewPdfPathEntry>();
+  private readonly previewPageCountTasks = new Map<string, Promise<number>>();
   private readonly previewWarmupTasks = new Map<string, Promise<PreviewWarmupResult>>();
   private readonly previewWarmupProgress = new Map<number, PreviewWarmupProgress>();
 
@@ -789,6 +807,22 @@ export class CourseService {
     }
   }
 
+  private async resolvePdfPageCountFromPath(pdfPath: string): Promise<PdfPageCountResult> {
+    const pdfinfoCount = await this.resolvePdfPageCountWithPdfinfo(pdfPath);
+    if (pdfinfoCount && pdfinfoCount > 0) {
+      return { pageCount: pdfinfoCount, parser: 'pdfinfo', warnings: [] };
+    }
+    const gsCount = await this.resolvePdfPageCountWithGhostscript(pdfPath);
+    if (gsCount && gsCount > 0) {
+      return {
+        pageCount: gsCount,
+        parser: 'ghostscript',
+        warnings: ['pdfinfo 无法解析页数，已使用 Ghostscript 兜底'],
+      };
+    }
+    throw new Error('无法解析 PDF 页数');
+  }
+
   private async resolvePdfPageCountWithPdfinfo(pdfPath: string): Promise<number | null> {
     try {
       const { stdout, stderr } = await execFileAsync('pdfinfo', [pdfPath]);
@@ -851,9 +885,10 @@ export class CourseService {
       };
     }
 
+    let source: { pdfPath: string; cleanup: () => void } | undefined;
     try {
-      const pdfBuffer = await this.getCourseFileAsPdfBuffer(file, 120000);
-      const result = await this.resolvePdfPageCount(pdfBuffer);
+      source = await this.createCourseFilePdfTemp(file, 10 * 60 * 1000);
+      const result = await this.resolvePdfPageCountFromPath(source.pdfPath);
       const exportHint = '建议用 Adobe Acrobat 或 WPS「另存为 PDF」重新导出后再上传，以避免预览异常。';
       return {
         ...base,
@@ -872,6 +907,8 @@ export class CourseService {
         healthy: false,
         warnings: [`无法解析 PDF：${message}`, '建议重新导出 PDF 后上传。'],
       };
+    } finally {
+      source?.cleanup();
     }
   }
 
@@ -958,7 +995,7 @@ export class CourseService {
     courseId: number,
     userId?: number,
     fileId?: number,
-  ): Promise<{ totalPages: number; cacheVersion: string; fileId: number }> {
+  ): Promise<{ totalPages: number; cacheVersion: string; fileId: number; preferImageViewer: boolean }> {
     const { course, hasAuth } = await this.getCourseAccessContext(courseId, userId);
     const courseFile = await this.courseFileService.resolve(courseId, fileId);
     if (!this.isPreviewImageSupportedFileRecord(courseFile)) {
@@ -976,6 +1013,7 @@ export class CourseService {
       totalPages: Math.max(0, totalPages),
       cacheVersion: this.getPreviewCacheVersion(courseFile.file_url, previewScope),
       fileId: courseFile.id,
+      preferImageViewer: Number(courseFile.file_size || 0) >= LARGE_PREVIEW_FILE_BYTES,
     };
   }
 
@@ -1013,7 +1051,7 @@ export class CourseService {
     const taskKey = `${courseId}:${courseFile.id}:${previewScope}:${this.getPreviewCacheVersion(courseFile.file_url, previewScope)}:${pageNum}`;
     const existingTask = this.previewRenderTasks.get(taskKey);
     if (existingTask) {
-      return existingTask;
+      return this.waitForPreviewRenderTask(existingTask);
     }
 
     const renderTask = this.renderAndCachePreviewPage({
@@ -1027,7 +1065,26 @@ export class CourseService {
       this.previewRenderTasks.delete(taskKey);
     });
     this.previewRenderTasks.set(taskKey, renderTask);
-    return renderTask;
+    return this.waitForPreviewRenderTask(renderTask);
+  }
+
+  private async waitForPreviewRenderTask(
+    renderTask: Promise<{ buffer: Buffer; contentType: string }>,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        renderTask,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new ServiceUnavailableException('预览文件首次处理中，请稍后自动重试')),
+            PREVIEW_REQUEST_WAIT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /** 管理后台：获取文件课程试读预览图状态 */
@@ -1403,75 +1460,86 @@ export class CourseService {
     onProgress?: PreviewWarmupProgressListener,
   ): Promise<PreviewWarmupResult> {
     const courseId = course.id;
-    const pdfBuffer = await this.getCourseFileAsPdfBuffer(courseFile, 120000);
-    const { pageCount: totalPages, warnings: pageCountWarnings } = await this.resolvePdfPageCount(pdfBuffer);
-    if (pageCountWarnings.length) {
-      this.logger.warn(
-        `课程 ${courseId} 文件 ${courseFile.id} 页数解析警告: ${pageCountWarnings.join('; ')}`,
-      );
-    }
-    const versionKey = this.getFilePageCountVersionKey(courseFile.file_url);
-    await this.courseFileService.persistPageCount(courseFile.id, courseFile.file_url, totalPages, versionKey);
-    const previewScope: 'full' = 'full';
-    const result: PreviewWarmupResult = {
-      courseId,
-      totalPages,
-      generated: 0,
-      skipped: 0,
-      failed: 0,
-      errors: [],
-    };
-    this.updatePreviewWarmupProgress(courseId, {
-      ...result,
-      currentFileName: courseFile.display_name,
-      status: 'running',
-    });
-    await this.notifyPreviewWarmupProgress(courseId, onProgress);
-
-    for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
+    const source = await this.createCourseFilePdfTemp(courseFile, 10 * 60 * 1000);
+    try {
+      const { pageCount: totalPages, warnings: pageCountWarnings } =
+        await this.resolvePdfPageCountFromPath(source.pdfPath);
+      if (pageCountWarnings.length) {
+        this.logger.warn(
+          `课程 ${courseId} 文件 ${courseFile.id} 页数解析警告: ${pageCountWarnings.join('; ')}`,
+        );
+      }
+      const versionKey = this.getFilePageCountVersionKey(courseFile.file_url);
+      await this.courseFileService.persistPageCount(courseFile.id, courseFile.file_url, totalPages, versionKey);
+      const previewScope: 'full' = 'full';
+      const result: PreviewWarmupResult = {
+        courseId,
+        totalPages,
+        generated: 0,
+        skipped: 0,
+        failed: 0,
+        errors: [],
+      };
       this.updatePreviewWarmupProgress(courseId, {
-        currentPage: pageNum,
+        ...result,
         currentFileName: courseFile.display_name,
         status: 'running',
       });
       await this.notifyPreviewWarmupProgress(courseId, onProgress);
-      const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
-      if (!force && (await this.uploadService.objectExists(cacheKey))) {
-        result.skipped += 1;
-        this.updatePreviewWarmupProgress(courseId, { skipped: result.skipped });
-        await this.notifyPreviewWarmupProgress(courseId, onProgress);
-        continue;
-      }
-      try {
-        await this.renderAndCachePreviewPage({
-          course,
-          courseFile,
-          hasAuth: true,
-          courseId,
-          pageNum,
-          cacheKey,
-          pdfBufferOverride: pdfBuffer,
-        });
-        result.generated += 1;
-        this.updatePreviewWarmupProgress(courseId, { generated: result.generated });
-        await this.notifyPreviewWarmupProgress(courseId, onProgress);
-      } catch (error) {
-        result.failed += 1;
-        const message = error instanceof Error ? error.message : String(error);
-        result.errors.push({ pageNum, message: `[${courseFile.display_name}] ${message}` });
+
+      for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
         this.updatePreviewWarmupProgress(courseId, {
-          failed: result.failed,
-          errors: result.errors,
-          message,
+          currentPage: pageNum,
+          currentFileName: courseFile.display_name,
+          status: 'running',
         });
         await this.notifyPreviewWarmupProgress(courseId, onProgress);
-        this.logger.warn(
-          `课程预览缓存页生成失败 course=${courseId} file=${courseFile.id} page=${pageNum}: ${message}`,
+        const cacheKey = this.getPreviewImageCacheKey(
+          courseId,
+          courseFile.id,
+          pageNum,
+          courseFile.file_url,
+          previewScope,
         );
+        if (!force && (await this.uploadService.objectExists(cacheKey))) {
+          result.skipped += 1;
+          this.updatePreviewWarmupProgress(courseId, { skipped: result.skipped });
+          await this.notifyPreviewWarmupProgress(courseId, onProgress);
+          continue;
+        }
+        try {
+          await this.renderAndCachePreviewPage({
+            course,
+            courseFile,
+            hasAuth: true,
+            courseId,
+            pageNum,
+            cacheKey,
+            pdfPathOverride: source.pdfPath,
+          });
+          result.generated += 1;
+          this.updatePreviewWarmupProgress(courseId, { generated: result.generated });
+          await this.notifyPreviewWarmupProgress(courseId, onProgress);
+        } catch (error) {
+          result.failed += 1;
+          const message = error instanceof Error ? error.message : String(error);
+          result.errors.push({ pageNum, message: `[${courseFile.display_name}] ${message}` });
+          this.updatePreviewWarmupProgress(courseId, {
+            failed: result.failed,
+            errors: result.errors,
+            message,
+          });
+          await this.notifyPreviewWarmupProgress(courseId, onProgress);
+          this.logger.warn(
+            `课程预览缓存页生成失败 course=${courseId} file=${courseFile.id} page=${pageNum}: ${message}`,
+          );
+        }
+        await this.sleep(20);
       }
-      await this.sleep(20);
+      return result;
+    } finally {
+      source.cleanup();
     }
-    return result;
   }
 
   private async notifyPreviewWarmupProgress(courseId: number, listener?: PreviewWarmupProgressListener) {
@@ -1499,7 +1567,7 @@ export class CourseService {
     courseId,
     pageNum,
     cacheKey,
-    pdfBufferOverride,
+    pdfPathOverride,
   }: {
     course: Course;
     courseFile: CourseFile;
@@ -1507,25 +1575,12 @@ export class CourseService {
     courseId: number;
     pageNum: number;
     cacheKey: string;
-    pdfBufferOverride?: Buffer;
+    pdfPathOverride?: string;
   }): Promise<{ buffer: Buffer; contentType: string }> {
-    let pdfBuffer: Buffer;
-    if (pdfBufferOverride) {
-      pdfBuffer = pdfBufferOverride;
-    } else {
-      pdfBuffer = await this.resolvePreviewPdfBuffer({
-        course,
-        courseFile,
-        hasAuth,
-        courseId,
-      });
-    }
-
     const tmpDir = path.join(os.tmpdir(), `course-preview-${courseId}-${pageNum}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     fs.mkdirSync(tmpDir, { recursive: true });
-    const pdfPath = path.join(tmpDir, 'doc.pdf');
     try {
-      fs.writeFileSync(pdfPath, pdfBuffer);
+      const pdfPath = pdfPathOverride || (await this.resolvePreviewPdfPath(courseFile, courseId));
       let buffer = await this.renderPdfPageToJpeg(pdfPath, pageNum, tmpDir);
       if (!buffer || (await this.isPreviewJpegBlank(buffer, tmpDir))) {
         const pageText = await this.extractPdfPageText(pdfPath, pageNum);
@@ -1556,6 +1611,127 @@ export class CourseService {
       try {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       } catch (_) {}
+    }
+  }
+
+  private async resolvePreviewPdfPath(courseFile: CourseFile, courseId: number): Promise<string> {
+    const cacheKey = `${courseId}:${courseFile.id}:${courseFile.file_url || ''}`;
+    this.cleanupExpiredPreviewPdfPaths();
+    const cached = this.previewPdfPathCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now() && fs.existsSync(cached.pdfPath)) {
+      cached.expiresAt = Date.now() + PREVIEW_PDF_PATH_TTL_MS;
+      return cached.pdfPath;
+    }
+
+    const existingTask = this.previewPdfPathTasks.get(cacheKey);
+    if (existingTask) {
+      const entry = await existingTask;
+      entry.expiresAt = Date.now() + PREVIEW_PDF_PATH_TTL_MS;
+      return entry.pdfPath;
+    }
+
+    const task = this.createCourseFilePdfTemp(courseFile, 10 * 60 * 1000)
+      .then((source) => {
+        const entry: PreviewPdfPathEntry = {
+          pdfPath: source.pdfPath,
+          tmpDir: source.tmpDir,
+          expiresAt: Date.now() + PREVIEW_PDF_PATH_TTL_MS,
+        };
+        this.previewPdfPathCache.set(cacheKey, entry);
+        return entry;
+      })
+      .finally(() => {
+        this.previewPdfPathTasks.delete(cacheKey);
+      });
+    this.previewPdfPathTasks.set(cacheKey, task);
+    return (await task).pdfPath;
+  }
+
+  private cleanupExpiredPreviewPdfPaths() {
+    const now = Date.now();
+    for (const [key, entry] of this.previewPdfPathCache.entries()) {
+      if (entry.expiresAt > now) continue;
+      this.previewPdfPathCache.delete(key);
+      try {
+        fs.rmSync(entry.tmpDir, { recursive: true, force: true });
+      } catch (_) {}
+    }
+  }
+
+  private async createCourseFilePdfTemp(
+    courseFile: Pick<CourseFile, 'id' | 'course_id' | 'file_url' | 'file_type'>,
+    timeout: number,
+  ): Promise<{ pdfPath: string; tmpDir: string; cleanup: () => void }> {
+    const fileType = String(courseFile.file_type || '').toLowerCase();
+    if (!['pdf', 'doc', 'docx'].includes(fileType)) {
+      throw new BadRequestException('暂不支持该文件类型预览');
+    }
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `course-preview-source-${courseFile.course_id}-${courseFile.id}-`),
+    );
+    const sourcePath = path.join(tmpDir, `source.${fileType}`);
+    const pdfPath = fileType === 'pdf' ? sourcePath : path.join(tmpDir, 'source.pdf');
+    const cleanup = () => {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch (_) {}
+    };
+    try {
+      await this.uploadService.downloadObjectUrlToFile(courseFile.file_url, sourcePath, timeout);
+      if (fileType === 'pdf') {
+        const descriptor = fs.openSync(pdfPath, 'r');
+        const header = Buffer.alloc(4);
+        try {
+          fs.readSync(descriptor, header, 0, header.length, 0);
+        } finally {
+          fs.closeSync(descriptor);
+        }
+        if (header.toString() !== '%PDF') {
+          throw new Error('课程源文件不是有效 PDF');
+        }
+      } else {
+        await this.convertWordFileToPdfPath(sourcePath, pdfPath, tmpDir);
+      }
+      return { pdfPath, tmpDir, cleanup };
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+  }
+
+  private async convertWordFileToPdfPath(inputPath: string, outputPath: string, tmpDir: string): Promise<void> {
+    const profileDir = path.join(tmpDir, 'lo-profile');
+    fs.mkdirSync(profileDir, { recursive: true });
+    try {
+      await this.withTimeout(
+        execFileAsync('soffice', [
+          `-env:UserInstallation=file://${profileDir}`,
+          '--headless',
+          '--invisible',
+          '--nodefault',
+          '--nolockcheck',
+          '--nologo',
+          '--nofirststartwizard',
+          '--convert-to',
+          'pdf',
+          '--outdir',
+          tmpDir,
+          inputPath,
+        ]),
+        120000,
+        'Word 转 PDF 超时，请稍后重试',
+      );
+      if (!fs.existsSync(outputPath)) {
+        throw new Error('Word 转 PDF 未生成有效文件');
+      }
+    } catch (error: any) {
+      const message =
+        error?.code === 'ENOENT'
+          ? '未找到 soffice，请确认容器已安装 LibreOffice'
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      throw new Error(`Word 转 PDF 失败: ${message}`);
     }
   }
 
@@ -1922,15 +2098,70 @@ export class CourseService {
     if (cached) {
       return cached;
     }
-    const bytes = await this.getCourseFileAsPdfBuffer(file, 120000);
-    const { pageCount: fullCount, warnings } = await this.resolvePdfPageCount(bytes);
-    if (warnings.length) {
-      this.logger.warn(`课程文件 ${file.id} 页数解析警告: ${warnings.join('; ')}`);
+    const inferredCount = this.inferPageCountFromCourseFileName(file);
+    if (inferredCount) {
+      await this.courseFileService.persistPageCount(file.id, file.file_url, inferredCount, versionKey);
+      return inferredCount;
     }
-    if (fullCount > 0) {
-      await this.courseFileService.persistPageCount(file.id, file.file_url, fullCount, versionKey);
+
+    const taskKey = `${file.id}:${versionKey}`;
+    let task = this.previewPageCountTasks.get(taskKey);
+    if (!task) {
+      task = this.resolveAndPersistFullFilePageCount(file, versionKey).finally(() => {
+        this.previewPageCountTasks.delete(taskKey);
+      });
+      this.previewPageCountTasks.set(taskKey, task);
     }
-    return fullCount;
+    return this.waitForPreviewPageCount(task);
+  }
+
+  private inferPageCountFromCourseFileName(
+    file: Pick<CourseFile, 'display_name' | 'file_name'>,
+  ): number | null {
+    const text = `${file.display_name || ''} ${file.file_name || ''}`;
+    const patterns = [
+      /[【\[]\s*(\d{1,5})\s*页?\s*[】\]]/,
+      /(?:共|合计)\s*(\d{1,5})\s*页/i,
+      /[-—]\s*(\d{1,5})\s*页(?:\s|$)/i,
+    ];
+    for (const pattern of patterns) {
+      const count = Number.parseInt(text.match(pattern)?.[1] || '', 10);
+      if (Number.isInteger(count) && count > 0 && count <= 20000) {
+        return count;
+      }
+    }
+    return null;
+  }
+
+  private async resolveAndPersistFullFilePageCount(file: CourseFile, versionKey: string): Promise<number> {
+    const source = await this.createCourseFilePdfTemp(file, 10 * 60 * 1000);
+    try {
+      const { pageCount, warnings } = await this.resolvePdfPageCountFromPath(source.pdfPath);
+      if (warnings.length) {
+        this.logger.warn(`课程文件 ${file.id} 页数解析警告: ${warnings.join('; ')}`);
+      }
+      await this.courseFileService.persistPageCount(file.id, file.file_url, pageCount, versionKey);
+      return pageCount;
+    } finally {
+      source.cleanup();
+    }
+  }
+
+  private async waitForPreviewPageCount(task: Promise<number>): Promise<number> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        task,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new ServiceUnavailableException('预览文件首次处理中，请稍后自动重试')),
+            PREVIEW_REQUEST_WAIT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private getPreviewImageCacheKey(
