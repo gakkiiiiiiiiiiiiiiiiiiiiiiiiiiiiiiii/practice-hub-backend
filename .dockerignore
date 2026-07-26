@@ -29,7 +29,6 @@ env.example
 
 # 文档
 *.md
-!README.md
 
 # 测试
 coverage/
