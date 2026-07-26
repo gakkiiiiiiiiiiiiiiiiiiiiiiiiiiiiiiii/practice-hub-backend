@@ -68,4 +68,19 @@ describe('UploadService storage provider credentials', () => {
 
 		expect(service.getPublicImageUrl(fileId)).toBe(fileId);
 	});
+
+	it('reads an OSS URL from OSS even when the active upload provider is COS', async () => {
+		storageProviderService.getProvider.mockResolvedValue(StorageProvider.COS);
+		const getObject = jest
+			.spyOn((service as any).oss, 'get')
+			.mockResolvedValue({ content: Buffer.from('%PDF-test') });
+
+		const result = await service.readObjectUrlBuffer(
+			'https://example-bucket.oss-cn-shanghai.aliyuncs.com/course-files/repaired/file.pdf',
+		);
+
+		expect(result).toEqual(Buffer.from('%PDF-test'));
+		expect(getObject).toHaveBeenCalledWith('course-files/repaired/file.pdf');
+		expect(storageProviderService.getProvider).not.toHaveBeenCalled();
+	});
 });

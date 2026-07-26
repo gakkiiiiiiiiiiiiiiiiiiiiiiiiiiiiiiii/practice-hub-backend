@@ -921,12 +921,7 @@ export class UploadService {
 			if ((await this.getStorageProvider()) === StorageProvider.COS && this.isWeChatCloudBase()) {
 				return this.readCosObjectBuffer(safeKey);
 			}
-			const result = await this.requireOss().get(safeKey);
-			const body = (result as any)?.content;
-			if (Buffer.isBuffer(body)) return body;
-			if (body instanceof Uint8Array) return Buffer.from(body);
-			if (typeof body === 'string') return Buffer.from(body);
-			return null;
+			return this.readOssObjectBuffer(safeKey);
 		} catch {
 			return null;
 		}
@@ -943,7 +938,20 @@ export class UploadService {
 		if (this.isTencentStorageUrl(url)) {
 			return this.readCosObjectBuffer(key);
 		}
-		return this.readObjectBuffer(key);
+		return this.readOssObjectBuffer(key);
+	}
+
+	private async readOssObjectBuffer(key: string): Promise<Buffer | null> {
+		try {
+			const result = await this.requireOss().get(this.normalizeObjectKey(key));
+			const body = (result as any)?.content;
+			if (Buffer.isBuffer(body)) return body;
+			if (body instanceof Uint8Array) return Buffer.from(body);
+			if (typeof body === 'string') return Buffer.from(body);
+			return null;
+		} catch {
+			return null;
+		}
 	}
 
 	private async readCosObjectBuffer(key: string): Promise<Buffer | null> {
