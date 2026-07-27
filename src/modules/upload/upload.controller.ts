@@ -29,6 +29,7 @@ import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UploadImageBase64Dto } from './dto/upload-image-base64.dto';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
+import { normalizeUploadedFileName } from '../../common/utils/file-name-encoding';
 
 @ApiTags('文件上传')
 @Controller('admin/upload')
@@ -224,12 +225,14 @@ export class UploadController {
     if (!file) {
       throw new BadRequestException('请选择 PDF 或 Word 文件');
     }
+    const fileName = normalizeUploadedFileName(file.originalname);
+    file.originalname = fileName;
     const fileUrl = await this.uploadService.uploadCourseFile(file, '');
     return CommonResponseDto.success({
       url: fileUrl,
       fileUrl,
-      fileName: file.originalname,
-      fileType: file.originalname.toLowerCase().endsWith('.pdf') ? 'pdf' : file.originalname.toLowerCase().endsWith('.docx') ? 'docx' : 'doc',
+      fileName,
+      fileType: fileName.toLowerCase().endsWith('.pdf') ? 'pdf' : fileName.toLowerCase().endsWith('.docx') ? 'docx' : 'doc',
     });
   }
 }

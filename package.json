@@ -36,6 +36,7 @@
 		"storage:verify:oss": "node scripts/migrate-cos-to-oss.js --verify",
 		"storage:rewrite-urls": "node scripts/rewrite-storage-urls.js",
 		"course-validity:permanent": "node scripts/set-paid-course-validity-permanent.js",
+		"course-file:fix-name-encoding": "ts-node -r tsconfig-paths/register scripts/fix-course-file-name-encoding.ts",
 		"course-file:replace-pdf": "node scripts/replace-course-file-pdf.js",
 		"storage:configure-lifecycle": "node scripts/configure-oss-lifecycle.js",
 		"check:remote": "node scripts/check-remote-db.js",
