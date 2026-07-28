@@ -94,7 +94,7 @@ function createTencentCredentialProvider(sourceBucket, sourceRegion) {
 	let cached;
 	return async () => {
 		const now = Math.floor(Date.now() / 1000);
-		if (cached && Number(cached.expired_time) - now > 300) return cached;
+		if (cached && Number(cached.expired_time) - now > 30) return cached;
 		const credentials = await retry('刷新 COS 临时凭证失败', async () => {
 			const value = await fetchApi('wxa-dev-qbase/gettcbtoken', {
 				region: sourceRegion,
