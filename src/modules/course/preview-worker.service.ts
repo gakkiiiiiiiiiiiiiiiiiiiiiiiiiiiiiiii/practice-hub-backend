@@ -5,12 +5,20 @@ import { Course } from '../../database/entities/course.entity';
 import { CourseFile } from '../../database/entities/course-file.entity';
 import { CourseFileService } from './course-file.service';
 import { CourseService } from './course.service';
+import { UploadService } from '../upload/upload.service';
 
 export interface PreviewWorkerResult {
   fileId: number;
   fileUrl: string;
   pageCount: number;
   pageCountVersion: string;
+}
+
+export interface PreviewWorkerUploadRequest {
+  fileId: number;
+  fileUrl: string;
+  pageCountVersion: string;
+  pageNum: number;
 }
 
 @Injectable()
@@ -20,6 +28,7 @@ export class PreviewWorkerService {
     private readonly courseFileRepository: Repository<CourseFile>,
     private readonly courseFileService: CourseFileService,
     private readonly courseService: CourseService,
+    private readonly uploadService: UploadService,
   ) {}
 
   async listJobs(cursor = 0, limit = 20) {
@@ -69,6 +78,13 @@ export class PreviewWorkerService {
         prewarmPages: Math.max(3, trialPages),
         fullCachePrefix: `course-preview-cache/${courseId}/${fileId}/${versions.full}`,
         trialCachePrefix: `course-preview-cache/${courseId}/${fileId}/${versions.trial}`,
+        sourceUrl: this.uploadService.getPreviewWorkerDownloadUrl(fileUrl),
+        fullCacheBaseUrl: this.uploadService.getObjectUrl(
+          `course-preview-cache/${courseId}/${fileId}/${versions.full}`,
+        ),
+        trialCacheBaseUrl: this.uploadService.getObjectUrl(
+          `course-preview-cache/${courseId}/${fileId}/${versions.trial}`,
+        ),
       };
     });
 
@@ -76,6 +92,39 @@ export class PreviewWorkerService {
       jobs,
       nextCursor: jobs.length > 0 ? jobs[jobs.length - 1].fileId : safeCursor,
       hasMore,
+    };
+  }
+
+  async getUploadUrls(input: PreviewWorkerUploadRequest) {
+    const fileId = Number(input.fileId);
+    const pageNum = Number(input.pageNum);
+    if (!Number.isInteger(fileId) || fileId <= 0) {
+      throw new BadRequestException('fileId 无效');
+    }
+    if (!Number.isInteger(pageNum) || pageNum <= 0 || pageNum > 10) {
+      throw new BadRequestException('pageNum 无效');
+    }
+
+    const file = await this.courseFileRepository.findOne({ where: { id: fileId } });
+    if (!file) throw new NotFoundException('课程文件不存在');
+    if (file.file_url !== input.fileUrl) {
+      throw new BadRequestException('课程文件已被替换');
+    }
+    const versions = this.courseService.getPreviewWorkerCacheVersions(file.file_url);
+    if (versions.pageCount !== input.pageCountVersion) {
+      throw new BadRequestException('课程文件版本不匹配');
+    }
+
+    const keys = [
+      `course-preview-cache/${file.course_id}/${file.id}/${versions.full}/${pageNum}.jpg`,
+      `course-preview-cache/${file.course_id}/${file.id}/${versions.trial}/${pageNum}.jpg`,
+    ];
+    return {
+      fileId: file.id,
+      pageNum,
+      uploads: keys.map((key) =>
+        this.uploadService.getPreviewWorkerUploadUrl(key, 'image/jpeg'),
+      ),
     };
   }
 

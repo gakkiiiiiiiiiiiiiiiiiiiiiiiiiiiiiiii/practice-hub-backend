@@ -6,8 +6,5 @@
   "scripts": {
     "preview": "node preview-worker.js",
     "health": "node storage-health-check.js"
-  },
-  "dependencies": {
-    "ali-oss": "^6.23.0"
   }
 }

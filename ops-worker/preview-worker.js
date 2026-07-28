@@ -7,7 +7,6 @@ const { execFile } = require('child_process');
 const { pipeline } = require('stream/promises');
 const { Readable } = require('stream');
 const { promisify } = require('util');
-const OSS = require('ali-oss');
 const { loadEnv, required } = require('./env');
 
 const execFileAsync = promisify(execFile);
@@ -18,22 +17,6 @@ const stateFile = env.WORKER_STATE_FILE || '/var/lib/practice-hub-worker/preview
 const maxJobsPerRun = Math.max(1, Number(env.PREVIEW_MAX_JOBS_PER_RUN || 5));
 const pageWidth = Math.max(720, Number(env.PREVIEW_IMAGE_WIDTH || 1440));
 const jpegQuality = Math.min(95, Math.max(60, Number(env.PREVIEW_IMAGE_QUALITY || 90)));
-const allowedSourceHosts = new Set(
-  String(env.PREVIEW_ALLOWED_SOURCE_HOSTS || 'cdn.ltzm.me')
-    .split(',')
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean),
-);
-
-const oss = new OSS({
-  region: env.OSS_REGION || 'oss-cn-shanghai',
-  endpoint: env.OSS_INTERNAL_ENDPOINT || 'https://oss-cn-shanghai-internal.aliyuncs.com',
-  bucket: required(env, 'OSS_BUCKET'),
-  accessKeyId: required(env, 'OSS_ACCESS_KEY_ID'),
-  accessKeySecret: required(env, 'OSS_ACCESS_KEY_SECRET'),
-  secure: true,
-  timeout: 10 * 60 * 1000,
-});
 
 function loadState() {
   if (!fs.existsSync(stateFile)) return { completed: {}, updatedAt: null };
@@ -77,39 +60,25 @@ async function api(pathname, options = {}) {
   return payload.data ?? payload;
 }
 
-function decodeObjectKey(url) {
-  const parsed = new URL(url);
-  if (!allowedSourceHosts.has(parsed.hostname.toLowerCase())) return null;
-  return parsed.pathname
-    .replace(/^\/+/, '')
-    .split('/')
-    .map((part) => {
-      try {
-        return decodeURIComponent(part);
-      } catch {
-        return part;
-      }
-    })
-    .join('/');
-}
-
-async function objectExists(key) {
+async function objectExists(url) {
   try {
-    await oss.head(key);
-    return true;
-  } catch (error) {
-    if (error.status === 404 || error.code === 'NoSuchKey') return false;
-    throw error;
+    const response = await fetch(url, { method: 'HEAD' });
+    return response.ok;
+  } catch {
+    return false;
   }
 }
 
 async function downloadSource(job, pdfPath) {
-  const objectKey = decodeObjectKey(job.fileUrl);
-  if (!objectKey) {
+  if (!job.sourceUrl) {
     return { skipped: true, reason: 'source_not_on_oss' };
   }
-  await oss.get(objectKey, pdfPath);
-  return { skipped: false, objectKey };
+  const response = await fetch(job.sourceUrl);
+  if (!response.ok || !response.body) {
+    throw new Error(`下载 PDF 失败: HTTP ${response.status}`);
+  }
+  await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(pdfPath));
+  return { skipped: false };
 }
 
 async function readPdfPageCount(pdfPath) {
@@ -154,15 +123,26 @@ async function renderPage(pdfPath, pageNum, outputPrefix) {
   return outputPath;
 }
 
-async function uploadPreviewPage(outputPath, keys) {
-  for (const key of keys) {
-    if (await objectExists(key)) continue;
-    await oss.put(key, outputPath, {
-      headers: {
-        'Content-Type': 'image/jpeg',
-        'Cache-Control': 'public, max-age=31536000, immutable',
-      },
+async function uploadPreviewPage(job, pageNum, outputPath) {
+  const signed = await api('/api/internal/preview-worker/uploads', {
+    method: 'POST',
+    body: JSON.stringify({
+      fileId: job.fileId,
+      fileUrl: job.fileUrl,
+      pageCountVersion: job.pageCountVersion,
+      pageNum,
+    }),
+  });
+  const body = fs.readFileSync(outputPath);
+  for (const upload of signed.uploads || []) {
+    const response = await fetch(upload.url, {
+      method: upload.method || 'PUT',
+      headers: upload.headers || { 'Content-Type': 'image/jpeg' },
+      body,
     });
+    if (!response.ok) {
+      throw new Error(`上传预览图失败: HTTP ${response.status}`);
+    }
   }
 }
 
@@ -179,17 +159,17 @@ async function processJob(job) {
     let generated = 0;
     let skipped = 0;
     for (let pageNum = 1; pageNum <= pagesToWarm; pageNum += 1) {
-      const keys = [
-        `${job.fullCachePrefix}/${pageNum}.jpg`,
-        `${job.trialCachePrefix}/${pageNum}.jpg`,
+      const urls = [
+        `${job.fullCacheBaseUrl}/${pageNum}.jpg`,
+        `${job.trialCacheBaseUrl}/${pageNum}.jpg`,
       ];
-      const existing = await Promise.all(keys.map(objectExists));
+      const existing = await Promise.all(urls.map(objectExists));
       if (existing.every(Boolean)) {
         skipped += 1;
         continue;
       }
       const outputPath = await renderPage(pdfPath, pageNum, path.join(tmpDir, `page-${pageNum}`));
-      await uploadPreviewPage(outputPath, keys);
+      await uploadPreviewPage(job, pageNum, outputPath);
       generated += 1;
     }
 

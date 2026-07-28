@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-const OSS = require('ali-oss');
 const { loadEnv, required } = require('./env');
 
 const env = loadEnv();
@@ -24,16 +23,6 @@ async function record(name, operation) {
 async function run() {
   const apiBase = required(env, 'WORKER_API_BASE_URL').replace(/\/$/, '');
   const workerToken = required(env, 'PREVIEW_WORKER_TOKEN');
-  const oss = new OSS({
-    region: env.OSS_REGION || 'oss-cn-shanghai',
-    endpoint: env.OSS_INTERNAL_ENDPOINT || 'https://oss-cn-shanghai-internal.aliyuncs.com',
-    bucket: required(env, 'OSS_BUCKET'),
-    accessKeyId: required(env, 'OSS_ACCESS_KEY_ID'),
-    accessKeySecret: required(env, 'OSS_ACCESS_KEY_SECRET'),
-    secure: true,
-    timeout: 30 * 1000,
-  });
-
   await record('backend', async () => {
     const response = await fetch(`${apiBase}/api/app/recommend/categories`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -46,9 +35,15 @@ async function run() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return `HTTP ${response.status}`;
   });
-  await record('oss-internal', async () => {
-    const result = await oss.list({ 'max-keys': 1 }, {});
-    return `objects>=${(result.objects || []).length}`;
+  await record('oss-internal-network', async () => {
+    const response = await fetch(
+      env.OSS_INTERNAL_HEALTHCHECK_URL ||
+        'https://practice-hub-prod-1424780330.oss-cn-shanghai-internal.aliyuncs.com/',
+    );
+    if (![200, 403, 404].includes(response.status)) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return `HTTP ${response.status}`;
   });
   if (env.CDN_HEALTHCHECK_URL) {
     await record('cdn', async () => {

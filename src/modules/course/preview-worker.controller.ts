@@ -12,6 +12,7 @@ import { PreviewWorkerGuard } from './preview-worker.guard';
 import {
   PreviewWorkerResult,
   PreviewWorkerService,
+  PreviewWorkerUploadRequest,
 } from './preview-worker.service';
 
 @ApiTags('内部预览工作节点')
@@ -43,6 +44,13 @@ export class PreviewWorkerController {
   @ApiOperation({ summary: '回写 PDF 页数与文件版本' })
   async reportResult(@Body() body: PreviewWorkerResult) {
     const result = await this.previewWorkerService.reportResult(body);
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('uploads')
+  @ApiOperation({ summary: '签发指定预览页的 OSS 内网上传地址' })
+  async getUploadUrls(@Body() body: PreviewWorkerUploadRequest) {
+    const result = await this.previewWorkerService.getUploadUrls(body);
     return CommonResponseDto.success(result);
   }
 }

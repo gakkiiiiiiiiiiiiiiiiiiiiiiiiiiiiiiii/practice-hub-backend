@@ -22,6 +22,7 @@ interface CosTempAuth {
 export class UploadService {
 	private readonly logger = new Logger(UploadService.name);
 	private oss: OSS | null = null;
+	private ossInternal: OSS | null = null;
 	private cos: COS;
 	private cosRegion: string;
 	private cosTempAuth: CosTempAuth | null = null;
@@ -83,6 +84,19 @@ export class UploadService {
 				accessKeyId,
 				accessKeySecret,
 				...(this.endpoint ? { endpoint: this.endpoint } : {}),
+				secure: true,
+				timeout: 10 * 60 * 1000,
+			});
+			const internalEndpoint = this.configService.get<string>(
+				'OSS_INTERNAL_ENDPOINT',
+				`https://${this.region}-internal.aliyuncs.com`,
+			);
+			this.ossInternal = new OSS({
+				region: this.region,
+				endpoint: internalEndpoint,
+				bucket: this.bucket,
+				accessKeyId,
+				accessKeySecret,
 				secure: true,
 				timeout: 10 * 60 * 1000,
 			});
@@ -643,6 +657,76 @@ export class UploadService {
 			path: safeKey,
 			finalFileUrl: this.getObjectUrl(safeKey),
 		};
+	}
+
+	/**
+	 * 为同地域异步工作节点签发短期 OSS 内网上传地址。
+	 * 长期 AccessKey 仅保留在后端，工作节点只能 PUT 指定对象。
+	 */
+	getPreviewWorkerUploadUrl(
+		cloudPath: string,
+		contentType = 'image/jpeg',
+	): {
+		url: string;
+		method: 'PUT';
+		contentType: string;
+		headers: Record<string, string>;
+		path: string;
+		finalFileUrl: string;
+	} {
+		const safeKey = this.normalizeObjectKey(cloudPath);
+		if (!safeKey.startsWith('course-preview-cache/')) {
+			throw new BadRequestException('工作节点仅允许写入课程预览缓存');
+		}
+		if (!this.ossInternal) {
+			throw new BadRequestException('阿里云 OSS 内网配置不完整');
+		}
+		const headers = {
+			'Content-Type': contentType,
+			'Cache-Control': 'public, max-age=31536000, immutable',
+		};
+		const url = this.ossInternal.signatureUrl(safeKey, {
+			expires: 15 * 60,
+			method: 'PUT',
+			'Content-Type': contentType,
+			'Cache-Control': headers['Cache-Control'],
+		} as any);
+		return {
+			url,
+			method: 'PUT',
+			contentType,
+			headers,
+			path: safeKey,
+			finalFileUrl: this.getObjectUrl(safeKey),
+		};
+	}
+
+	/**
+	 * 为同地域异步工作节点签发短期 OSS 内网下载地址。
+	 * 旧 COS 地址返回 null，等待资源迁移并完成数据库地址切换后再处理。
+	 */
+	getPreviewWorkerDownloadUrl(fileUrl: string): string | null {
+		if (!this.ossInternal || !fileUrl || typeof fileUrl !== 'string') return null;
+		try {
+			const parsed = new URL(fileUrl);
+			const publicHost = new URL(this.publicBaseUrl).hostname;
+			const originHost = new URL(this.originBaseUrl).hostname;
+			const allowedOssHosts = new Set([
+				publicHost,
+				originHost,
+				`${this.bucket}.${this.region}.aliyuncs.com`,
+				`${this.bucket}.oss-accelerate.aliyuncs.com`,
+			]);
+			if (!allowedOssHosts.has(parsed.hostname)) return null;
+			const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+			if (!key || key.includes('..') || key.includes('\\')) return null;
+			return this.ossInternal.signatureUrl(this.normalizeObjectKey(key), {
+				expires: 15 * 60,
+				method: 'GET',
+			});
+		} catch {
+			return null;
+		}
 	}
 
 	/**
