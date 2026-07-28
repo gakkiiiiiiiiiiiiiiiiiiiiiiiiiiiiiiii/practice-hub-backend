@@ -94,7 +94,8 @@ export interface CourseFilePdfHealth {
   fileId: number | null;
   displayName: string;
   fileUrl: string;
-  healthy: boolean;
+  healthy: boolean | null;
+  status: 'ready' | 'pending' | 'invalid';
   warnings: string[];
   pageCount: number | null;
   parser: string | null;
@@ -875,54 +876,52 @@ export class CourseService {
 
   /** 管理后台：检测课程 PDF 文件结构是否规范 */
   async inspectCourseFilePdfHealth(
-    file: Pick<CourseFile, 'id' | 'course_id' | 'file_url' | 'file_type' | 'display_name'>,
+    file: Pick<CourseFile, 'id' | 'course_id' | 'file_url' | 'file_type' | 'display_name'> &
+      Partial<Pick<CourseFile, 'file_page_count' | 'file_page_count_key'>>,
   ): Promise<CourseFilePdfHealth> {
     const base: CourseFilePdfHealth = {
       fileId: file.id ?? null,
       displayName: file.display_name || '',
       fileUrl: file.file_url,
-      healthy: true,
+      healthy: null,
+      status: 'pending',
       warnings: [],
       pageCount: null,
-      parser: null,
+      parser: 'aliyun-worker',
     };
     const fileType = (file.file_type || '').toLowerCase();
     if (fileType !== 'pdf') {
-      return base;
+      return { ...base, healthy: true, status: 'ready' };
     }
     if (!file.file_url) {
       return {
         ...base,
         healthy: false,
+        status: 'invalid',
         warnings: ['文件地址为空'],
       };
     }
-
-    let source: { pdfPath: string; cleanup: () => void } | undefined;
-    try {
-      source = await this.createCourseFilePdfTemp(file, 10 * 60 * 1000);
-      const result = await this.resolvePdfPageCountFromPath(source.pdfPath);
-      const exportHint = '建议用 Adobe Acrobat 或 WPS「另存为 PDF」重新导出后再上传，以避免预览异常。';
+    const versionKey = this.getFilePageCountVersionKey(file.file_url);
+    const pageCount = this.courseFileService.getCachedPageCount(
+      {
+        file_url: file.file_url,
+        file_page_count: file.file_page_count ?? null,
+        file_page_count_key: file.file_page_count_key ?? null,
+      },
+      versionKey,
+    );
+    if (pageCount) {
       return {
         ...base,
-        healthy: result.warnings.length === 0,
-        warnings:
-          result.warnings.length > 0
-            ? [...result.warnings, exportHint]
-            : [],
-        pageCount: result.pageCount,
-        parser: result.parser,
+        healthy: true,
+        status: 'ready',
+        pageCount,
       };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        ...base,
-        healthy: false,
-        warnings: [`无法解析 PDF：${message}`, '建议重新导出 PDF 后上传。'],
-      };
-    } finally {
-      source?.cleanup();
     }
+    return {
+      ...base,
+      warnings: ['PDF 结构检测已交由阿里云上海工作节点，结果生成后自动更新。'],
+    };
   }
 
   async getAdminCourseFilesPdfHealth(courseId: number): Promise<CourseFilePdfHealth[]> {
@@ -1237,6 +1236,17 @@ export class CourseService {
     await this.notifyPreviewWarmupProgress(courseId, onProgress);
 
     for (const courseFile of supportedFiles) {
+      if (force) {
+        const versions = this.getPreviewWorkerCacheVersions(courseFile.file_url);
+        await Promise.all([
+          this.uploadService.deletePreviewCachePrefix(
+            `course-preview-cache/${course.id}/${courseFile.id}/${versions.full}`,
+          ),
+          this.uploadService.deletePreviewCachePrefix(
+            `course-preview-cache/${course.id}/${courseFile.id}/${versions.trial}`,
+          ),
+        ]);
+      }
       const versionKey = this.getFilePageCountVersionKey(courseFile.file_url);
       aggregated.totalPages +=
         this.courseFileService.getCachedPageCount(courseFile, versionKey) || 0;
@@ -1256,6 +1266,10 @@ export class CourseService {
 
   /** 扫描已生成但内容为空白页的预览缓存（抽样前 3 页） */
   async scanCoursesWithBlankPreviewCache(): Promise<BlankPreviewCacheItem[]> {
+    if (this.uploadService.isCourseSourceBodyReadBlocked('course-files/__preview-worker-probe__.pdf')) {
+      this.logger.log('空白预览图内容检测已交由上海工作节点，腾讯云后端仅执行缓存存在性检查');
+      return [];
+    }
     const courseIds = await this.courseFileService.findCourseIdsWithPreviewableFiles();
     const blankItems: BlankPreviewCacheItem[] = [];
     const seenCourseIds = new Set<number>();

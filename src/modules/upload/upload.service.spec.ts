@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -33,6 +34,12 @@ describe('UploadService storage provider credentials', () => {
 
 	beforeEach(() => {
 		storageProviderService.getProvider.mockReset();
+		delete process.env.WX_CLOUD_RUN_ENV;
+	});
+
+	afterEach(() => {
+		delete process.env.WX_CLOUD_RUN_ENV;
+		jest.restoreAllMocks();
 	});
 
 	it('uses WeChat cloud upload credentials for Tencent COS', async () => {
@@ -93,6 +100,21 @@ describe('UploadService storage provider credentials', () => {
 		expect(service.getAuthorizedCourseFileUrl('https://other.example.com/course-files/example.pdf')).toBe(
 			'https://other.example.com/course-files/example.pdf',
 		);
+		now.mockRestore();
+	});
+
+	it('rewrites the OSS origin URL to the signed CDN domain', () => {
+		const now = jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+		const pathname = '/course-files/example.pdf';
+		const hash = createHash('md5')
+			.update(`${pathname}-1700000000-0-0-testcdnprivatekey123`)
+			.digest('hex');
+
+		expect(
+			service.getAuthorizedCourseFileUrl(
+				`https://example-bucket.oss-cn-shanghai.aliyuncs.com${pathname}`,
+			),
+		).toBe(`https://cdn.example.com${pathname}?auth_key=1700000000-0-0-${hash}`);
 		now.mockRestore();
 	});
 
@@ -187,5 +209,53 @@ describe('UploadService storage provider credentials', () => {
 		} finally {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}
+	});
+
+	it('blocks OSS course source body reads inside WeChat CloudBase', async () => {
+		process.env.WX_CLOUD_RUN_ENV = 'true';
+		const getObject = jest.spyOn((service as any).oss, 'get');
+		const url = 'https://example-bucket.oss-cn-shanghai.aliyuncs.com/course-files/source.pdf';
+
+		await expect(service.readObjectUrlBuffer(url)).rejects.toBeInstanceOf(ServiceUnavailableException);
+		expect(getObject).not.toHaveBeenCalled();
+	});
+
+	it('blocks streaming OSS course sources to disk inside WeChat CloudBase', async () => {
+		process.env.WX_CLOUD_RUN_ENV = 'true';
+		const getStream = jest.spyOn((service as any).oss, 'getStream');
+		const url = 'https://cdn.example.com/course-files/source.pdf';
+		const destination = path.join(os.tmpdir(), 'blocked-course-source.pdf');
+
+		await expect(service.downloadObjectUrlToFile(url, destination)).rejects.toBeInstanceOf(
+			ServiceUnavailableException,
+		);
+		expect(getStream).not.toHaveBeenCalled();
+	});
+
+	it('deletes only objects under an approved preview cache prefix', async () => {
+		const list = jest
+			.spyOn((service as any).oss, 'list')
+			.mockResolvedValueOnce({
+				objects: [
+					{ name: 'course-preview-cache/4/2/version/1.jpg' },
+					{ name: 'course-preview-cache/4/2/version/2.jpg' },
+				],
+				isTruncated: false,
+			});
+		const deleteMulti = jest.spyOn((service as any).oss, 'deleteMulti').mockResolvedValue({});
+
+		await expect(service.deletePreviewCachePrefix('course-preview-cache/4/2/version')).resolves.toBe(2);
+		expect(list).toHaveBeenCalledWith({
+			prefix: 'course-preview-cache/4/2/version/',
+			marker: undefined,
+			'max-keys': 1000,
+		}, {});
+		expect(deleteMulti).toHaveBeenCalledWith(
+			[
+				'course-preview-cache/4/2/version/1.jpg',
+				'course-preview-cache/4/2/version/2.jpg',
+			],
+			{ quiet: true },
+		);
 	});
 });

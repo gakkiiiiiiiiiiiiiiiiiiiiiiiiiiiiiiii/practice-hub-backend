@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import OSS = require('ali-oss');
 import * as COS from 'cos-nodejs-sdk-v5';
@@ -142,6 +142,31 @@ export class UploadService {
 			process.env.COS_BUCKET ||
 			process.env.WX_CLOUD_RUN_ENV === 'true',
 		);
+	}
+
+	private isCourseSourceKey(key: string): boolean {
+		return /^course-files(?:\/|$)/i.test(this.normalizeObjectKey(key));
+	}
+
+	/**
+	 * 腾讯云容器不得读取 OSS 课程源文件正文。
+	 * 课程预览生成统一由阿里云上海节点通过内网 Endpoint 完成，避免产生 OSS 公网流出费用。
+	 */
+	isCourseSourceBodyReadBlocked(urlOrKey: string): boolean {
+		if (!this.isWeChatCloudBase()) return false;
+		const allowOverride =
+			this.configService.get<string>('OSS_ALLOW_CLOUDBASE_COURSE_SOURCE_READ', 'false').toLowerCase() === 'true';
+		if (allowOverride) return false;
+		const key = this.extractKeyFromUrl(urlOrKey) || urlOrKey;
+		return this.isCourseSourceKey(key);
+	}
+
+	private assertCourseSourceBodyReadAllowed(urlOrKey: string): void {
+		if (this.isCourseSourceBodyReadBlocked(urlOrKey)) {
+			throw new ServiceUnavailableException(
+				'课程源文件读取已迁移到阿里云上海工作节点，腾讯云后端禁止读取 OSS 文件正文',
+			);
+		}
 	}
 
 	private async getCosTempAuth(): Promise<CosTempAuth> {
@@ -1024,6 +1049,7 @@ export class UploadService {
 
 	async readObjectBuffer(key: string): Promise<Buffer | null> {
 		const safeKey = this.normalizeObjectKey(key);
+		this.assertCourseSourceBodyReadAllowed(safeKey);
 		try {
 			if ((await this.getStorageProvider()) === StorageProvider.COS && this.isWeChatCloudBase()) {
 				return this.readCosObjectBuffer(safeKey);
@@ -1038,6 +1064,7 @@ export class UploadService {
 		if (!this.isAllowedProxyUrl(url)) {
 			return null;
 		}
+		this.assertCourseSourceBodyReadAllowed(url);
 		const key = this.extractKeyFromUrl(url);
 		if (!key) {
 			return null;
@@ -1064,6 +1091,7 @@ export class UploadService {
 		if (!this.isAllowedProxyUrl(url)) {
 			throw new BadRequestException('仅允许读取本项目的课程文件地址');
 		}
+		this.assertCourseSourceBodyReadAllowed(url);
 		const key = this.extractKeyFromUrl(url);
 		if (!key) {
 			throw new BadRequestException('课程文件地址无效');
@@ -1198,17 +1226,57 @@ export class UploadService {
 	 * 数据库始终保存无鉴权参数的稳定 URL，仅在向已授权客户端返回时动态签名。
 	 */
 	getAuthorizedCourseFileUrl(url: string): string {
-		if (!this.cdnAuthEnabled || !url || typeof url !== 'string') return url;
+		if (!url || typeof url !== 'string') return url;
 		try {
 			const parsed = new URL(url);
-			const publicHost = new URL(this.publicBaseUrl).hostname;
-			if (parsed.hostname !== publicHost || !parsed.pathname.startsWith('/course-files/')) {
+			const publicBase = new URL(this.publicBaseUrl);
+			const allowedHosts = new Set([
+				publicBase.hostname,
+				new URL(this.originBaseUrl).hostname,
+				`${this.bucket}.${this.region}.aliyuncs.com`,
+				`${this.bucket}.oss-accelerate.aliyuncs.com`,
+			]);
+			if (!allowedHosts.has(parsed.hostname) || !parsed.pathname.startsWith('/course-files/')) {
 				return url;
 			}
+			parsed.protocol = publicBase.protocol;
+			parsed.host = publicBase.host;
+			parsed.search = '';
+			parsed.hash = '';
 			return this.signCdnUrl(parsed.toString());
 		} catch {
 			return url;
 		}
+	}
+
+	/**
+	 * 仅删除预览缓存对象，不读取对象正文。
+	 * 强制重建时由腾讯云后端清理标记，上海工作节点在下一轮扫描中重新生成。
+	 */
+	async deletePreviewCachePrefix(prefix: string): Promise<number> {
+		const safePrefix = this.normalizeObjectKey(prefix).replace(/\/?$/, '/');
+		if (!safePrefix.startsWith('course-preview-cache/')) {
+			throw new BadRequestException('仅允许清理课程预览缓存');
+		}
+		const oss = this.requireOss();
+		let marker: string | undefined;
+		let deleted = 0;
+		do {
+			const result: any = await oss.list({
+				prefix: safePrefix,
+				marker,
+				'max-keys': 1000,
+			}, {});
+			const keys = (result.objects || [])
+				.map((item: any) => String(item?.name || ''))
+				.filter((key: string) => key.startsWith(safePrefix));
+			if (keys.length > 0) {
+				await oss.deleteMulti(keys, { quiet: true });
+				deleted += keys.length;
+			}
+			marker = result.isTruncated ? result.nextMarker : undefined;
+		} while (marker);
+		return deleted;
 	}
 
 	/**

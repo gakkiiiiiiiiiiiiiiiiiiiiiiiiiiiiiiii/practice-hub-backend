@@ -1,7 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Post, Param, Query, UseGuards, Res, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Param, Query, UseGuards, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { Request, Response } from 'express';
-import { createHash } from 'crypto';
+import { Response } from 'express';
 import { CourseService } from './course.service';
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -116,7 +115,6 @@ export class CourseController {
     @Query('ticket') ticket: string | undefined,
     @Query('fileId') fileIdStr: string | undefined,
     @CurrentUser() user: any,
-    @Req() req: Request,
     @Res({ passthrough: false }) res: Response,
   ) {
     const courseId = +id;
@@ -152,25 +150,11 @@ export class CourseController {
         this.courseService.getAuthorizedCourseFileUrl(courseFile.file_url),
       );
     }
-    if (!['pdf', 'doc', 'docx'].includes((courseFile.file_type || '').toLowerCase())) {
-      return res.status(403).send('仅支持 PDF/Word 试读');
-    }
-    if (maxPages < 1) {
-      return res.status(403).send('该课程已关闭试读预览');
-    }
-    const buffer = await this.courseService.getCourseFilePreviewPdf(
-      courseId,
-      maxPages,
-      courseFile.id,
-    );
-    const etag = this.createBufferEtag(buffer);
-    if (this.isFresh(req, etag)) {
-      return res.status(304).end();
-    }
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"');
-    this.setCacheHeaders(res, etag, 86400);
-    res.send(buffer);
+    // 旧客户端曾由腾讯云容器下载完整 OSS 文件并裁剪试读 PDF，会产生高额公网流出。
+    // 新客户端统一调用 preview-pages-info / preview-page-url，直接展示上海节点生成的 CDN 图片。
+    return res
+      .status(410)
+      .send(maxPages < 1 ? '该资料已关闭试读预览' : '旧版 PDF 试读已停用，请升级后使用图片预览');
   }
 
   @Get(':id/preview-pages-info')
@@ -268,23 +252,6 @@ export class CourseController {
       Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
     );
     return CommonResponseDto.success(result);
-  }
-
-  private createBufferEtag(buffer: Buffer): string {
-    return `"${createHash('sha1').update(buffer).digest('base64url')}"`;
-  }
-
-  private isFresh(req: Request, etag: string): boolean {
-    return req.headers['if-none-match']
-      ?.split(',')
-      .map((value) => value.trim())
-      .includes(etag) ?? false;
-  }
-
-  private setCacheHeaders(res: Response, etag: string, maxAgeSeconds: number) {
-    res.setHeader('ETag', etag);
-    res.setHeader('Cache-Control', `private, max-age=${maxAgeSeconds}`);
-    res.setHeader('Vary', 'Authorization');
   }
 
   @Get(':id/detail')

@@ -25,4 +25,56 @@ describe('CourseService preview metadata', () => {
 
 		expect(result).toBeNull();
 	});
+
+	it('returns pending PDF health without downloading the OSS source', async () => {
+		const healthService = Object.create(CourseService.prototype) as CourseService;
+		(healthService as any).courseFileService = {
+			getCachedPageCount: jest.fn().mockReturnValue(null),
+		};
+		(healthService as any).uploadService = {
+			readObjectUrlBuffer: jest.fn(),
+			downloadObjectUrlToFile: jest.fn(),
+		};
+
+		const result = await healthService.inspectCourseFilePdfHealth({
+			id: 7,
+			course_id: 4,
+			file_url: 'https://cdn.example.com/course-files/source.pdf',
+			file_type: 'pdf',
+			display_name: '资料.pdf',
+		});
+
+		expect(result).toMatchObject({
+			fileId: 7,
+			healthy: null,
+			status: 'pending',
+			parser: 'aliyun-worker',
+		});
+		expect((healthService as any).uploadService.readObjectUrlBuffer).not.toHaveBeenCalled();
+		expect((healthService as any).uploadService.downloadObjectUrlToFile).not.toHaveBeenCalled();
+	});
+
+	it('reports worker-cached PDF page metadata as ready', async () => {
+		const healthService = Object.create(CourseService.prototype) as CourseService;
+		(healthService as any).courseFileService = {
+			getCachedPageCount: jest.fn().mockReturnValue(314),
+		};
+
+		const result = await healthService.inspectCourseFilePdfHealth({
+			id: 7,
+			course_id: 4,
+			file_url: 'https://cdn.example.com/course-files/source.pdf',
+			file_type: 'pdf',
+			display_name: '资料.pdf',
+			file_page_count: 314,
+			file_page_count_key: 'cached-version',
+		});
+
+		expect(result).toMatchObject({
+			healthy: true,
+			status: 'ready',
+			pageCount: 314,
+			parser: 'aliyun-worker',
+		});
+	});
 });
