@@ -167,6 +167,10 @@ async function run() {
 	const targetRegion = env.OSS_REGION || DEFAULT_TARGET_REGION;
 	const sourcePrefix = env.OSS_MIGRATION_PREFIX || '';
 	const concurrency = Math.max(1, Math.min(32, Number(env.OSS_MIGRATION_CONCURRENCY) || 8));
+	const timeout = Math.max(
+		10 * 60 * 1000,
+		Number(env.OSS_MIGRATION_TIMEOUT_MS) || 2 * 60 * 60 * 1000,
+	);
 	const verifyOnly = process.argv.includes('--verify');
 	const dryRun = process.argv.includes('--dry-run');
 
@@ -179,7 +183,7 @@ async function run() {
 		bucket: targetBucket,
 		accessKeyId: env.OSS_ACCESS_KEY_ID,
 		accessKeySecret: env.OSS_ACCESS_KEY_SECRET,
-		timeout: 10 * 60 * 1000,
+		timeout,
 	});
 	const getCredentials = createTencentCredentialProvider(sourceBucket, sourceRegion);
 	console.log('正在读取 OSS 目标对象清单...');
