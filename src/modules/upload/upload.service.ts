@@ -708,7 +708,9 @@ export class UploadService {
 			throw new BadRequestException('仅允许检查课程预览缓存');
 		}
 		try {
-			await (this.ossInternal || this.requireOss()).head(safeKey);
+			// 腾讯云后端无法访问阿里云 VPC 内网 Endpoint；这里只做轻量 HEAD，
+			// 必须走 OSS 公网客户端。源文件下载和图片上传仍由上海节点使用内网签名地址。
+			await this.requireOss().head(safeKey);
 			return true;
 		} catch {
 			return false;
