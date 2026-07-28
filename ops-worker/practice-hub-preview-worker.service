@@ -1,0 +1,20 @@
+[Unit]
+Description=Practice Hub PDF preview prewarming
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=practice-hub
+Group=practice-hub
+WorkingDirectory=/opt/practice-hub-worker
+EnvironmentFile=/etc/practice-hub-worker.env
+ExecStart=/usr/bin/node /opt/practice-hub-worker/preview-worker.js
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

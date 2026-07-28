@@ -9,6 +9,9 @@ import { DatabaseModule } from '../../database/database.module';
 import { UploadModule } from '../upload/upload.module';
 import { PackageModule } from '../package/package.module';
 import { StorageCleanupModule } from '../storage-cleanup/storage-cleanup.module';
+import { PreviewWorkerController } from './preview-worker.controller';
+import { PreviewWorkerGuard } from './preview-worker.guard';
+import { PreviewWorkerService } from './preview-worker.service';
 
 @Module({
   imports: [
@@ -26,8 +29,13 @@ import { StorageCleanupModule } from '../storage-cleanup/storage-cleanup.module'
       inject: [ConfigService],
     }),
   ],
-  controllers: [CourseController, AppPdfViewerController],
-  providers: [CourseService, CourseFileService],
+  controllers: [CourseController, AppPdfViewerController, PreviewWorkerController],
+  providers: [
+    CourseService,
+    CourseFileService,
+    PreviewWorkerGuard,
+    PreviewWorkerService,
+  ],
   exports: [CourseService, CourseFileService],
 })
 export class CourseModule {}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Practice Hub storage and API health check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=practice-hub
+Group=practice-hub
+WorkingDirectory=/opt/practice-hub-worker
+EnvironmentFile=/etc/practice-hub-worker.env
+ExecStart=/usr/bin/node /opt/practice-hub-worker/storage-health-check.js
+NoNewPrivileges=true
+PrivateTmp=true

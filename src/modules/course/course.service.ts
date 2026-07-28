@@ -2237,6 +2237,14 @@ export class CourseService {
       .slice(0, 12);
   }
 
+  getPreviewWorkerCacheVersions(fileUrl: string) {
+    return {
+      full: this.getPreviewCacheVersion(fileUrl, 'full'),
+      trial: this.getPreviewCacheVersion(fileUrl, 'trial'),
+      pageCount: this.getFilePageCountVersionKey(fileUrl),
+    };
+  }
+
   /**
    * 获取课程相关推荐
    * 优先使用课程级别的配置（course.recommended_course_ids），如果没有则使用公共配置（course_recommendation）

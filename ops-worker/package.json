@@ -1,0 +1,13 @@
+{
+  "name": "practice-hub-ops-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "preview": "node preview-worker.js",
+    "health": "node storage-health-check.js"
+  },
+  "dependencies": {
+    "ali-oss": "^6.23.0"
+  }
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Practice Hub PDF preview prewarming every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target
