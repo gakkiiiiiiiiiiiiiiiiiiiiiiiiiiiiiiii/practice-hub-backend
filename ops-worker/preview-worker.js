@@ -217,10 +217,11 @@ async function run() {
   const state = loadState();
   let cursor = 0;
   let processed = 0;
+  let attempted = 0;
   let scanned = 0;
   const failures = [];
 
-  while (processed < maxJobsPerRun) {
+  while (attempted < maxJobsPerRun) {
     const page = await api(
       `/api/internal/preview-worker/jobs?cursor=${cursor}&limit=50`,
     );
@@ -236,6 +237,7 @@ async function run() {
         delete state.inProgress[signature];
         saveState(state);
       }
+      attempted += 1;
       try {
         const result = await processJob(job, state);
         if (result.skipped) {
@@ -257,7 +259,7 @@ async function run() {
         failures.push({ fileId: job.fileId, message });
         console.error(`[失败] file=${job.fileId}: ${message}`);
       }
-      if (processed >= maxJobsPerRun) break;
+      if (attempted >= maxJobsPerRun) break;
     }
     if (!page.hasMore) break;
   }
@@ -266,6 +268,7 @@ async function run() {
     JSON.stringify({
       completed: failures.length === 0,
       scanned,
+      attempted,
       processed,
       failures,
     }),
