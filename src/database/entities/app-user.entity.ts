@@ -56,6 +56,12 @@ export class AppUser {
   @Column({ type: 'boolean', default: false, comment: '是否已领取激励视频优惠券' })
   rewarded_ad_coupon_issued: boolean;
 
+  @Column({ type: 'date', nullable: true, comment: '激励视频每日奖励统计日期' })
+  rewarded_ad_activity_date: string | null;
+
+  @Column({ type: 'int', default: 0, comment: '激励视频当日已领取优惠券张数' })
+  rewarded_ad_daily_coupon_count: number;
+
   @CreateDateColumn()
   create_time: Date;
 

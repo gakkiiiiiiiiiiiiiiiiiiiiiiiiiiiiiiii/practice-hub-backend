@@ -14,6 +14,8 @@ import { DistributorController } from './distributor.controller';
 import { AdminDistributorController } from './admin-distributor.controller';
 import { OrderModule } from '../order/order.module';
 import { UploadModule } from '../upload/upload.module';
+import { MarketingModule } from '../marketing/marketing.module';
+import { AppAdminRewardService } from './app-admin-reward.service';
 
 @Module({
 	imports: [
@@ -30,9 +32,10 @@ import { UploadModule } from '../upload/upload.module';
 		]),
 		forwardRef(() => OrderModule),
 		forwardRef(() => UploadModule),
+		MarketingModule,
 	],
 	controllers: [DistributorController, AdminDistributorController],
-	providers: [DistributorService],
+	providers: [DistributorService, AppAdminRewardService],
 	exports: [DistributorService],
 })
 export class DistributorModule {}

@@ -8,11 +8,17 @@ import { ActivationCodeTargetType } from '../../database/entities/activation-cod
 import { ApplyDistributorDto } from './dto/apply-distributor.dto';
 import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
+import { GrantAppUserPointsDto } from './dto/grant-app-user-points.dto';
+import { IssueCouponDto } from '../marketing/dto/issue-coupon.dto';
+import { AppAdminRewardService } from './app-admin-reward.service';
 
 @ApiTags('分销')
 @Controller('app/distributor')
 export class DistributorController {
-	constructor(private readonly distributorService: DistributorService) {}
+	constructor(
+		private readonly distributorService: DistributorService,
+		private readonly appAdminRewardService: AppAdminRewardService,
+	) {}
 
 	@Post('apply')
 	@UseGuards(JwtAuthGuard)
@@ -83,6 +89,41 @@ export class DistributorController {
 			},
 		) {
 			const result = await this.distributorService.generateAdminActivationCodes(user.userId, body);
+			return CommonResponseDto.success(result);
+		}
+
+		@Get('admin/users/:id')
+		@UseGuards(JwtAuthGuard)
+		@ApiBearerAuth()
+		@ApiOperation({ summary: '小程序超级管理员查询奖励接收用户' })
+		async getAdminRewardUser(@CurrentUser() user: any, @Param('id') id: string) {
+			const result = await this.appAdminRewardService.getTargetUser(user.userId, parseInt(id, 10));
+			return CommonResponseDto.success(result);
+		}
+
+		@Post('admin/users/:id/points/grant')
+		@UseGuards(JwtAuthGuard)
+		@ApiBearerAuth()
+		@ApiOperation({ summary: '小程序超级管理员向指定用户赠送积分' })
+		async grantAdminUserPoints(
+			@CurrentUser() user: any,
+			@Param('id') id: string,
+			@Body() dto: GrantAppUserPointsDto,
+		) {
+			const result = await this.appAdminRewardService.grantPoints(
+				user.userId,
+				parseInt(id, 10),
+				dto,
+			);
+			return CommonResponseDto.success(result);
+		}
+
+		@Post('admin/coupons/issue')
+		@UseGuards(JwtAuthGuard)
+		@ApiBearerAuth()
+		@ApiOperation({ summary: '小程序超级管理员向指定用户赠送优惠券' })
+		async issueAdminUserCoupons(@CurrentUser() user: any, @Body() dto: IssueCouponDto) {
+			const result = await this.appAdminRewardService.issueCoupons(user.userId, dto);
 			return CommonResponseDto.success(result);
 		}
 
