@@ -129,6 +129,26 @@ async function destinationHasSameSize(client, key, expectedSize) {
 	}
 }
 
+async function listDestinationSizes(client, prefix) {
+	const sizes = new Map();
+	let marker;
+	let pages = 0;
+	do {
+		const query = { marker, 'max-keys': 1000 };
+		if (prefix) query.prefix = prefix;
+		const result = await client.list(query, {});
+		for (const object of result.objects || []) {
+			sizes.set(object.name, Number(object.size) || 0);
+		}
+		marker = result.isTruncated ? result.nextMarker : undefined;
+		pages += 1;
+		if (pages % 50 === 0) {
+			console.log(`[OSS 清单] 已读取 ${sizes.size} 个对象`);
+		}
+	} while (marker);
+	return sizes;
+}
+
 function copyResponseHeaders(response) {
 	const headers = {};
 	for (const name of ['content-type', 'cache-control', 'content-encoding', 'content-disposition', 'content-language', 'expires']) {
@@ -162,6 +182,9 @@ async function run() {
 		timeout: 10 * 60 * 1000,
 	});
 	const getCredentials = createTencentCredentialProvider(sourceBucket, sourceRegion);
+	console.log('正在读取 OSS 目标对象清单...');
+	const destinationSizes = await listDestinationSizes(oss, sourcePrefix);
+	console.log(`OSS 目标对象清单读取完成：${destinationSizes.size}`);
 	let marker = '';
 	let page = 0;
 	const stats = { scanned: 0, copied: 0, skipped: 0, excluded: 0, failed: 0, bytesCopied: 0 };
@@ -185,7 +208,7 @@ async function run() {
 				return;
 			}
 			try {
-				const exists = await retry(`检查 OSS 对象失败 (${key})`, () => destinationHasSameSize(oss, key, size));
+				const exists = destinationSizes.get(key) === size;
 				if (exists) {
 					stats.skipped += 1;
 					return;
@@ -209,6 +232,7 @@ async function run() {
 					const verified = await destinationHasSameSize(oss, key, size);
 					if (!verified) throw new Error('上传后大小校验失败');
 				});
+				destinationSizes.set(key, size);
 				stats.copied += 1;
 				stats.bytesCopied += size;
 			} catch (error) {
