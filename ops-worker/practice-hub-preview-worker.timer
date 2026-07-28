@@ -3,6 +3,7 @@ Description=Run Practice Hub PDF preview generation every 10 minutes
 
 [Timer]
 OnBootSec=5min
+OnActiveSec=1min
 OnUnitActiveSec=10min
 RandomizedDelaySec=60
 Persistent=true
