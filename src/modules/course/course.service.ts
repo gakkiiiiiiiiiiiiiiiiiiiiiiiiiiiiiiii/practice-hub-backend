@@ -514,17 +514,24 @@ export class CourseService {
     if (course.content_type === 'file') {
       await this.courseFileService.ensureFromLegacyCourse(course);
     }
-    const courseFiles =
+    const rawCourseFiles =
       course.content_type === 'file'
         ? (await this.courseFileService.listByCourseId(courseId)).map((file) =>
             this.courseFileService.formatFileListItem(file),
           )
         : [];
-    const primaryFile = courseFiles[0];
+    const primaryFile = rawCourseFiles[0];
     const fileType = (primaryFile?.file_type || course.file_type || '').toLowerCase();
-    const isFileCourse = course.content_type === 'file' && courseFiles.length > 0;
+    const isFileCourse = course.content_type === 'file' && rawCourseFiles.length > 0;
     const allowSourceFile = course.allow_source_file !== 0;
     const price = Number(course.price) || 0;
+    const canAccessSourceFile = allowSourceFile && (hasAuth || price === 0 || course.is_free === 1);
+    const courseFiles = rawCourseFiles.map((file) => ({
+      ...file,
+      file_url: canAccessSourceFile
+        ? this.uploadService.getAuthorizedCourseFileUrl(file.file_url)
+        : null,
+    }));
     const needPreviewUrl =
       isFileCourse &&
       !hasAuth &&
@@ -540,7 +547,9 @@ export class CourseService {
     return {
       ...course,
       files: courseFiles,
-      file_url: allowSourceFile ? primaryFile?.file_url || course.file_url : null,
+      file_url: canAccessSourceFile
+        ? this.uploadService.getAuthorizedCourseFileUrl(primaryFile?.file_url || course.file_url)
+        : null,
       file_name: primaryFile?.file_name || course.file_name,
       file_display_name: primaryFile?.display_name || null,
       file_type: primaryFile?.file_type || course.file_type,
@@ -585,11 +594,15 @@ export class CourseService {
     }
 
     return {
-      url: courseFile.file_url,
+      url: this.uploadService.getAuthorizedCourseFileUrl(courseFile.file_url),
       fileType,
       fileName: courseFile.display_name || courseFile.file_name || `course.${fileType}`,
       fileId: courseFile.id,
     };
+  }
+
+  getAuthorizedCourseFileUrl(fileUrl: string): string {
+    return this.uploadService.getAuthorizedCourseFileUrl(fileUrl);
   }
 
   async getCourseAccessContext(courseId: number, userId?: number, withChapters = false) {

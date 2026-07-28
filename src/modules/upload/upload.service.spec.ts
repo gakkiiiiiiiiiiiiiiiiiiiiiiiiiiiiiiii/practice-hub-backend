@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { Readable } from 'stream';
 import { StorageProvider } from '../../common/constants/storage-provider';
 import { StorageProviderService } from './storage-provider.service';
@@ -13,8 +14,11 @@ describe('UploadService storage provider credentials', () => {
 		OSS_REGION: 'oss-cn-shanghai',
 		OSS_ACCESS_KEY_ID: 'test-access-key',
 		OSS_ACCESS_KEY_SECRET: 'test-secret',
+		OSS_PUBLIC_BASE_URL: 'https://cdn.example.com',
 		OSS_LEGACY_COS_BUCKET: 'example-cos-bucket',
 		OSS_LEGACY_COS_ENV_ID: 'example-env',
+		CDN_AUTH_ENABLED: 'true',
+		CDN_AUTH_KEY: 'testcdnprivatekey123',
 		COS_BUCKET: 'example-cos-bucket',
 		COS_REGION: 'ap-shanghai',
 		UPLOAD_DIR: '/tmp/practice-hub-upload-tests',
@@ -71,6 +75,25 @@ describe('UploadService storage provider credentials', () => {
 		const fileId = 'cloud://another-env.another-bucket/feedback/example.jpg';
 
 		expect(service.getPublicImageUrl(fileId)).toBe(fileId);
+	});
+
+	it('signs only course files on the configured CDN domain', () => {
+		const now = jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+		const pathname = '/course-files/example.pdf';
+		const hash = createHash('md5')
+			.update(`${pathname}-1700000000-0-0-testcdnprivatekey123`)
+			.digest('hex');
+
+		expect(service.getAuthorizedCourseFileUrl(`https://cdn.example.com${pathname}`)).toBe(
+			`https://cdn.example.com${pathname}?auth_key=1700000000-0-0-${hash}`,
+		);
+		expect(service.getAuthorizedCourseFileUrl('https://cdn.example.com/images/cover.jpg')).toBe(
+			'https://cdn.example.com/images/cover.jpg',
+		);
+		expect(service.getAuthorizedCourseFileUrl('https://other.example.com/course-files/example.pdf')).toBe(
+			'https://other.example.com/course-files/example.pdf',
+		);
+		now.mockRestore();
 	});
 
 	it('reads an OSS URL from OSS even when the active upload provider is COS', async () => {

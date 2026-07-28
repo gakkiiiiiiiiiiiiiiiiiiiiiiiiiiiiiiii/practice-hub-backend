@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { pipeline } from 'stream/promises';
-import { createHmac } from 'crypto';
+import { createHash, createHmac } from 'crypto';
 import axios from 'axios';
 import { StorageProvider } from '../../common/constants/storage-provider';
 import { StorageProviderService } from './storage-provider.service';
@@ -31,6 +31,8 @@ export class UploadService {
 	private endpoint: string;
 	private originBaseUrl: string;
 	private publicBaseUrl: string;
+	private cdnAuthKey: string;
+	private cdnAuthEnabled: boolean;
 	private legacyCosBucket: string;
 	private legacyCosEnvId: string;
 	private uploadDir: string;
@@ -57,6 +59,10 @@ export class UploadService {
 			/\/$/,
 			'',
 		);
+		this.cdnAuthKey = this.configService.get<string>('CDN_AUTH_KEY', '').trim();
+		this.cdnAuthEnabled =
+			this.configService.get<string>('CDN_AUTH_ENABLED', 'false').toLowerCase() === 'true' &&
+			Boolean(this.cdnAuthKey);
 
 		// 本地存储配置（可通过 UPLOAD_DIR 覆盖；容器内默认 uploads）
 		this.uploadDir = this.configService.get<string>('UPLOAD_DIR') || path.join(process.cwd(), 'uploads');
@@ -1040,6 +1046,31 @@ export class UploadService {
 
 	getObjectUrl(key: string): string {
 		return `${this.publicBaseUrl}/${this.normalizeObjectKey(key).split('/').map(encodeURIComponent).join('/')}`;
+	}
+
+	/**
+	 * 为受保护的课程文件生成阿里云 CDN 鉴权 A 地址。
+	 * 数据库始终保存无鉴权参数的稳定 URL，仅在向已授权客户端返回时动态签名。
+	 */
+	getAuthorizedCourseFileUrl(url: string): string {
+		if (!this.cdnAuthEnabled || !url || typeof url !== 'string') return url;
+		try {
+			const parsed = new URL(url);
+			const publicHost = new URL(this.publicBaseUrl).hostname;
+			if (parsed.hostname !== publicHost || !parsed.pathname.startsWith('/course-files/')) {
+				return url;
+			}
+			const timestamp = Math.floor(Date.now() / 1000);
+			const rand = '0';
+			const uid = '0';
+			const hash = createHash('md5')
+				.update(`${parsed.pathname}-${timestamp}-${rand}-${uid}-${this.cdnAuthKey}`, 'utf8')
+				.digest('hex');
+			parsed.searchParams.set('auth_key', `${timestamp}-${rand}-${uid}-${hash}`);
+			return parsed.toString();
+		} catch {
+			return url;
+		}
 	}
 
 	/**

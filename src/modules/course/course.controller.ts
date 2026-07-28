@@ -147,7 +147,10 @@ export class CourseController {
     const maxPages = Math.min(configuredPreviewPages, requestedMaxPages);
     const allowSourceFile = course.allow_source_file !== 0;
     if (allowSourceFile && (hasAuth || Number(course.price) === 0 || course.is_free === 1)) {
-      return res.redirect(302, courseFile.file_url);
+      return res.redirect(
+        302,
+        this.courseService.getAuthorizedCourseFileUrl(courseFile.file_url),
+      );
     }
     if (!['pdf', 'doc', 'docx'].includes((courseFile.file_type || '').toLowerCase())) {
       return res.status(403).send('仅支持 PDF/Word 试读');
