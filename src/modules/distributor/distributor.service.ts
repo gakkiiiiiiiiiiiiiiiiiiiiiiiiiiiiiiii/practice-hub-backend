@@ -448,7 +448,7 @@ export class DistributorService {
 		);
 
 		// 检查响应是否是错误信息（微信 API 错误时返回 JSON）
-		const contentType = response.headers['content-type'] || '';
+		const contentType = String(response.headers['content-type'] || '');
 		const fileBuffer = Buffer.from(response.data);
 		const responseText = fileBuffer.toString('utf-8').trim();
 		if (contentType.includes('application/json') || contentType.includes('text/') || responseText.startsWith('{')) {
