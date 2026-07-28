@@ -15,7 +15,6 @@ import {
 	ForbiddenException,
 } from '@nestjs/common';
 import { Response } from 'express';
-import { createHash } from 'crypto';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiBody } from '@nestjs/swagger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -423,17 +422,12 @@ export class AdminCourseController {
 			return res.status(400).send('页码无效');
 		}
 		const fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
-		const { buffer, contentType } = await this.adminCourseService.getPreviewSamplePageImage(
+		const { url } = await this.adminCourseService.getPreviewSamplePageUrl(
 			+id,
 			pageNum,
 			Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
 		);
-		const etag = `"${createHash('sha1').update(buffer).digest('base64url')}"`;
-		res.setHeader('Content-Type', contentType);
-		res.setHeader('Content-Length', String(buffer.length));
-		res.setHeader('Cache-Control', 'private, max-age=86400');
-		res.setHeader('ETag', etag);
-		res.send(buffer);
+		res.redirect(302, url);
 	}
 
 	@Get(':id')

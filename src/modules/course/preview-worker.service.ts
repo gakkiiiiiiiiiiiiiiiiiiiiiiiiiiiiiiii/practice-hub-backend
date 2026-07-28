@@ -57,36 +57,51 @@ export class PreviewWorkerService {
 
     const hasMore = rows.length > safeLimit;
     const page = rows.slice(0, safeLimit);
-    const jobs = page.map((row) => {
+    const jobs = await Promise.all(page.map(async (row) => {
       const fileUrl = String(row.file_url || '');
       const versions = this.courseService.getPreviewWorkerCacheVersions(fileUrl);
       const fileId = Number(row.file_id);
       const courseId = Number(row.course_id);
       const trialPages = Math.min(
-        10,
+        50,
         Math.max(0, Number(row.trial_preview_page_count ?? 3) || 0),
       );
+      const cachedPageCount = Number(row.file_page_count || 0);
+      const pageCountVersionMatches =
+        cachedPageCount > 0 &&
+        String(row.file_page_count_key || '') === versions.pageCount;
+      let cacheComplete = false;
+      if (pageCountVersionMatches) {
+        const requiredKeys = [
+          `course-preview-cache/${courseId}/${fileId}/${versions.full}/${cachedPageCount}.jpg`,
+        ];
+        if (trialPages > 0) {
+          requiredKeys.push(
+            `course-preview-cache/${courseId}/${fileId}/${versions.trial}/${Math.min(trialPages, cachedPageCount)}.jpg`,
+          );
+        }
+        cacheComplete = (
+          await Promise.all(
+            requiredKeys.map((key) => this.uploadService.previewCacheObjectExists(key)),
+          )
+        ).every(Boolean);
+      }
       return {
         fileId,
         courseId,
         displayName: String(row.display_name || ''),
         fileUrl,
         fileSize: Number(row.file_size || 0),
-        cachedPageCount: Number(row.file_page_count || 0),
+        cachedPageCount,
         cachedPageCountVersion: String(row.file_page_count_key || ''),
         pageCountVersion: versions.pageCount,
-        prewarmPages: Math.max(3, trialPages),
+        trialPages,
+        cacheComplete,
         fullCachePrefix: `course-preview-cache/${courseId}/${fileId}/${versions.full}`,
         trialCachePrefix: `course-preview-cache/${courseId}/${fileId}/${versions.trial}`,
         sourceUrl: this.uploadService.getPreviewWorkerDownloadUrl(fileUrl),
-        fullCacheBaseUrl: this.uploadService.getObjectUrl(
-          `course-preview-cache/${courseId}/${fileId}/${versions.full}`,
-        ),
-        trialCacheBaseUrl: this.uploadService.getObjectUrl(
-          `course-preview-cache/${courseId}/${fileId}/${versions.trial}`,
-        ),
       };
-    });
+    }));
 
     return {
       jobs,
@@ -101,7 +116,7 @@ export class PreviewWorkerService {
     if (!Number.isInteger(fileId) || fileId <= 0) {
       throw new BadRequestException('fileId 无效');
     }
-    if (!Number.isInteger(pageNum) || pageNum <= 0 || pageNum > 10) {
+    if (!Number.isInteger(pageNum) || pageNum <= 0 || pageNum > 20000) {
       throw new BadRequestException('pageNum 无效');
     }
 
@@ -115,15 +130,30 @@ export class PreviewWorkerService {
       throw new BadRequestException('课程文件版本不匹配');
     }
 
+    const course = await this.courseFileRepository.manager
+      .getRepository(Course)
+      .findOne({ where: { id: file.course_id }, select: ['id', 'trial_preview_page_count'] });
+    if (!course) throw new NotFoundException('课程不存在');
+    const trialPages = Math.min(
+      50,
+      Math.max(0, Number(course.trial_preview_page_count ?? 3) || 0),
+    );
     const keys = [
       `course-preview-cache/${file.course_id}/${file.id}/${versions.full}/${pageNum}.jpg`,
-      `course-preview-cache/${file.course_id}/${file.id}/${versions.trial}/${pageNum}.jpg`,
     ];
+    if (pageNum <= trialPages) {
+      keys.push(
+        `course-preview-cache/${file.course_id}/${file.id}/${versions.trial}/${pageNum}.jpg`,
+      );
+    }
     return {
       fileId: file.id,
       pageNum,
-      uploads: keys.map((key) =>
-        this.uploadService.getPreviewWorkerUploadUrl(key, 'image/jpeg'),
+      uploads: await Promise.all(
+        keys.map(async (key) => ({
+          ...this.uploadService.getPreviewWorkerUploadUrl(key, 'image/jpeg'),
+          exists: await this.uploadService.previewCacheObjectExists(key),
+        })),
       ),
     };
   }

@@ -96,6 +96,20 @@ describe('UploadService storage provider credentials', () => {
 		now.mockRestore();
 	});
 
+	it('signs generated preview cache URLs on the CDN domain', () => {
+		const now = jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+		const key = 'course-preview-cache/4/2/full-version/19.jpg';
+		const pathname = `/${key}`;
+		const hash = createHash('md5')
+			.update(`${pathname}-1700000000-0-0-testcdnprivatekey123`)
+			.digest('hex');
+
+		expect(service.getAuthorizedPreviewCacheUrl(key)).toBe(
+			`https://cdn.example.com${pathname}?auth_key=1700000000-0-0-${hash}`,
+		);
+		now.mockRestore();
+	});
+
 	it('reads an OSS URL from OSS even when the active upload provider is COS', async () => {
 		storageProviderService.getProvider.mockResolvedValue(StorageProvider.COS);
 		const getObject = jest

@@ -1,5 +1,5 @@
 [Unit]
-Description=Run Practice Hub PDF preview prewarming every 10 minutes
+Description=Run Practice Hub PDF preview generation every 10 minutes
 
 [Timer]
 OnBootSec=5min

@@ -306,8 +306,8 @@ export class AdminCourseService {
     return this.courseService.checkCourseFilePdfHealthByUrl(fileUrl.trim(), displayName?.trim());
   }
 
-  async getPreviewSamplePageImage(courseId: number, pageNum: number, fileId?: number) {
-    return this.courseService.getAdminCoursePreviewSamplePageImage(courseId, pageNum, fileId);
+  async getPreviewSamplePageUrl(courseId: number, pageNum: number, fileId?: number) {
+    return this.courseService.getAdminCoursePreviewSamplePageUrl(courseId, pageNum, fileId);
   }
 
   async warmupPreviewCache(courseId: number, force = false) {

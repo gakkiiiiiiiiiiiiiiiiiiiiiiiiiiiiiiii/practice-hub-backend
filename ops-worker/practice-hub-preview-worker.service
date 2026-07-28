@@ -10,6 +10,7 @@ Group=practice-hub
 WorkingDirectory=/opt/practice-hub-worker
 EnvironmentFile=/etc/practice-hub-worker.env
 ExecStart=/usr/bin/node /opt/practice-hub-worker/preview-worker.js
+TimeoutStartSec=6h
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=6

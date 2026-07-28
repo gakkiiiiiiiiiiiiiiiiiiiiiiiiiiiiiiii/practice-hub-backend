@@ -14,20 +14,21 @@ const env = loadEnv();
 const apiBase = required(env, 'WORKER_API_BASE_URL').replace(/\/$/, '');
 const workerToken = required(env, 'PREVIEW_WORKER_TOKEN');
 const stateFile = env.WORKER_STATE_FILE || '/var/lib/practice-hub-worker/preview-state.json';
-const maxJobsPerRun = Math.max(1, Number(env.PREVIEW_MAX_JOBS_PER_RUN || 5));
+const maxJobsPerRun = Math.max(1, Number(env.PREVIEW_MAX_JOBS_PER_RUN || 1));
 const pageWidth = Math.max(720, Number(env.PREVIEW_IMAGE_WIDTH || 1440));
 const jpegQuality = Math.min(95, Math.max(60, Number(env.PREVIEW_IMAGE_QUALITY || 90)));
 
 function loadState() {
-  if (!fs.existsSync(stateFile)) return { completed: {}, updatedAt: null };
+  if (!fs.existsSync(stateFile)) return { completed: {}, inProgress: {}, updatedAt: null };
   try {
     const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     return {
       completed: state.completed && typeof state.completed === 'object' ? state.completed : {},
+      inProgress: state.inProgress && typeof state.inProgress === 'object' ? state.inProgress : {},
       updatedAt: state.updatedAt || null,
     };
   } catch {
-    return { completed: {}, updatedAt: null };
+    return { completed: {}, inProgress: {}, updatedAt: null };
   }
 }
 
@@ -58,15 +59,6 @@ async function api(pathname, options = {}) {
     throw new Error(payload.message || `工作节点接口 HTTP ${response.status}`);
   }
   return payload.data ?? payload;
-}
-
-async function objectExists(url) {
-  try {
-    const response = await fetch(url, { method: 'HEAD' });
-    return response.ok;
-  } catch {
-    return false;
-  }
 }
 
 async function downloadSource(job, pdfPath) {
@@ -123,8 +115,8 @@ async function renderPage(pdfPath, pageNum, outputPrefix) {
   return outputPath;
 }
 
-async function uploadPreviewPage(job, pageNum, outputPath) {
-  const signed = await api('/api/internal/preview-worker/uploads', {
+async function getUploadTargets(job, pageNum) {
+  return api('/api/internal/preview-worker/uploads', {
     method: 'POST',
     body: JSON.stringify({
       fileId: job.fileId,
@@ -133,8 +125,11 @@ async function uploadPreviewPage(job, pageNum, outputPath) {
       pageNum,
     }),
   });
+}
+
+async function uploadPreviewPage(targets, outputPath) {
   const body = fs.readFileSync(outputPath);
-  for (const upload of signed.uploads || []) {
+  for (const upload of targets) {
     const response = await fetch(upload.url, {
       method: upload.method || 'PUT',
       headers: upload.headers || { 'Content-Type': 'image/jpeg' },
@@ -146,7 +141,19 @@ async function uploadPreviewPage(job, pageNum, outputPath) {
   }
 }
 
-async function processJob(job) {
+async function reportPageCount(job, pageCount) {
+  await api('/api/internal/preview-worker/results', {
+    method: 'POST',
+    body: JSON.stringify({
+      fileId: job.fileId,
+      fileUrl: job.fileUrl,
+      pageCount,
+      pageCountVersion: job.pageCountVersion,
+    }),
+  });
+}
+
+async function processJob(job, state) {
   const signature = `${job.fileId}:${job.pageCountVersion}`;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `preview-worker-${job.fileId}-`));
   const pdfPath = path.join(tmpDir, 'source.pdf');
@@ -155,33 +162,40 @@ async function processJob(job) {
     if (source.skipped) return { signature, skipped: true, reason: source.reason };
 
     const pageCount = await readPdfPageCount(pdfPath);
-    const pagesToWarm = Math.min(pageCount, Math.max(1, Number(job.prewarmPages || 3)));
+    await reportPageCount(job, pageCount);
+    const resume = state.inProgress[signature];
+    const startPage =
+      resume && Number(resume.pageCount) === pageCount
+        ? Math.min(pageCount + 1, Math.max(1, Number(resume.nextPage) || 1))
+        : 1;
     let generated = 0;
     let skipped = 0;
-    for (let pageNum = 1; pageNum <= pagesToWarm; pageNum += 1) {
-      const urls = [
-        `${job.fullCacheBaseUrl}/${pageNum}.jpg`,
-        `${job.trialCacheBaseUrl}/${pageNum}.jpg`,
-      ];
-      const existing = await Promise.all(urls.map(objectExists));
-      if (existing.every(Boolean)) {
+    for (let pageNum = startPage; pageNum <= pageCount; pageNum += 1) {
+      const signed = await getUploadTargets(job, pageNum);
+      const missingTargets = (signed.uploads || []).filter((upload) => !upload.exists);
+      if (missingTargets.length === 0) {
         skipped += 1;
-        continue;
+      } else {
+        const outputPath = await renderPage(pdfPath, pageNum, path.join(tmpDir, `page-${pageNum}`));
+        await uploadPreviewPage(missingTargets, outputPath);
+        generated += 1;
+        fs.rmSync(outputPath, { force: true });
       }
-      const outputPath = await renderPage(pdfPath, pageNum, path.join(tmpDir, `page-${pageNum}`));
-      await uploadPreviewPage(job, pageNum, outputPath);
-      generated += 1;
+      state.inProgress[signature] = {
+        nextPage: pageNum + 1,
+        pageCount,
+        updatedAt: new Date().toISOString(),
+      };
+      saveState(state);
+      if (pageNum === 1 || pageNum % 10 === 0 || pageNum === pageCount) {
+        console.log(
+          `[进度] file=${job.fileId} page=${pageNum}/${pageCount} generated=${generated} cached=${skipped}`,
+        );
+      }
     }
 
-    await api('/api/internal/preview-worker/results', {
-      method: 'POST',
-      body: JSON.stringify({
-        fileId: job.fileId,
-        fileUrl: job.fileUrl,
-        pageCount,
-        pageCountVersion: job.pageCountVersion,
-      }),
-    });
+    delete state.inProgress[signature];
+    saveState(state);
     return { signature, skipped: false, pageCount, generated, cached: skipped };
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -206,9 +220,14 @@ async function run() {
       cursor = Number(job.fileId) || cursor;
       scanned += 1;
       const signature = `${job.fileId}:${job.pageCountVersion}`;
-      if (state.completed[signature]) continue;
+      if (state.completed[signature] && job.cacheComplete) continue;
+      if (state.completed[signature] && !job.cacheComplete) {
+        delete state.completed[signature];
+        delete state.inProgress[signature];
+        saveState(state);
+      }
       try {
-        const result = await processJob(job);
+        const result = await processJob(job, state);
         if (result.skipped) {
           console.log(`[跳过] file=${job.fileId} reason=${result.reason}`);
           continue;

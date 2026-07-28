@@ -1001,6 +1001,27 @@ export class CourseService {
     return Math.min(50, Math.max(0, value));
   }
 
+  private async getWorkerResolvedPageCount(courseFile: CourseFile): Promise<number> {
+    const versionKey = this.getFilePageCountVersionKey(courseFile.file_url);
+    const cached = this.courseFileService.getCachedPageCount(courseFile, versionKey);
+    if (cached) return cached;
+
+    const inferred = this.inferPageCountFromCourseFileName(courseFile);
+    if (inferred) {
+      await this.courseFileService.persistPageCount(
+        courseFile.id,
+        courseFile.file_url,
+        inferred,
+        versionKey,
+      );
+      return inferred;
+    }
+
+    throw new ServiceUnavailableException(
+      '上海预览节点正在解析文件页数，请稍后重试',
+    );
+  }
+
   /**
    * 获取课程文件预览页数（用于图片预览：已购/免费为全部，未购付费为 3）
    */
@@ -1014,7 +1035,7 @@ export class CourseService {
     if (!this.isPreviewImageSupportedFileRecord(courseFile)) {
       throw new NotFoundException('课程无可预览文件');
     }
-    const fullCount = await this.resolveFullFilePageCount(courseFile);
+    const fullCount = await this.getWorkerResolvedPageCount(courseFile);
     const trialPreviewPageCount = this.getTrialPreviewPageCount(course);
     const totalPages =
       hasAuth || Number(course.price) === 0 || course.is_free === 1
@@ -1031,73 +1052,38 @@ export class CourseService {
   }
 
   /**
-   * 将课程文件指定页转为预览图（用于小程序内图片预览）
-   * 使用 JPEG 以在尽量保持清晰度的前提下降低传输体积。
-   * 依赖 Ghostscript / Poppler 将 PDF 页转为 JPEG，失败时抛出
+   * 返回上海工作节点已经生成的 CDN 预览页。
+   * 腾讯云后端仅负责鉴权和 HEAD 检查，不再下载源 PDF 或图片二进制。
    */
-  async getCourseFilePreviewPageImage(
+  async getCourseFilePreviewPageUrl(
     courseId: number,
     pageNum: number,
     userId?: number,
     fileId?: number,
-  ): Promise<{ buffer: Buffer; contentType: string }> {
+  ): Promise<{ url: string; contentType: 'image/jpeg' }> {
     const { course, hasAuth } = await this.getCourseAccessContext(courseId, userId);
     const courseFile = await this.courseFileService.resolve(courseId, fileId);
     if (!this.isPreviewImageSupportedFileRecord(courseFile)) {
       throw new NotFoundException('课程无可预览文件');
     }
-    const maxPages =
-      hasAuth || Number(course.price) === 0 || course.is_free === 1
-        ? 999
-        : this.getTrialPreviewPageCount(course);
+    const hasFullAccess = hasAuth || Number(course.price) === 0 || course.is_free === 1;
+    const maxPages = hasFullAccess
+      ? await this.getWorkerResolvedPageCount(courseFile)
+      : this.getTrialPreviewPageCount(course);
     if (pageNum < 1 || pageNum > maxPages) {
       throw new NotFoundException('页码超出范围');
     }
-    const previewScope =
-      hasAuth || Number(course.price) === 0 || course.is_free === 1 ? 'full' : 'trial';
+    const previewScope = hasFullAccess ? 'full' : 'trial';
     const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
-    const cached = await this.uploadService.readObjectBuffer(cacheKey);
-    if (cached && this.isJpegBuffer(cached)) {
-      return { buffer: cached, contentType: 'image/jpeg' };
+    if (!(await this.uploadService.previewCacheObjectExists(cacheKey))) {
+      throw new ServiceUnavailableException(
+        '该页正在由上海预览节点生成，请稍后重试',
+      );
     }
-
-    const taskKey = `${courseId}:${courseFile.id}:${previewScope}:${this.getPreviewCacheVersion(courseFile.file_url, previewScope)}:${pageNum}`;
-    const existingTask = this.previewRenderTasks.get(taskKey);
-    if (existingTask) {
-      return this.waitForPreviewRenderTask(existingTask);
-    }
-
-    const renderTask = this.renderAndCachePreviewPage({
-      course,
-      courseFile,
-      hasAuth,
-      courseId,
-      pageNum,
-      cacheKey,
-    }).finally(() => {
-      this.previewRenderTasks.delete(taskKey);
-    });
-    this.previewRenderTasks.set(taskKey, renderTask);
-    return this.waitForPreviewRenderTask(renderTask);
-  }
-
-  private async waitForPreviewRenderTask(
-    renderTask: Promise<{ buffer: Buffer; contentType: string }>,
-  ): Promise<{ buffer: Buffer; contentType: string }> {
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      return await Promise.race([
-        renderTask,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new ServiceUnavailableException('预览文件首次处理中，请稍后自动重试')),
-            PREVIEW_REQUEST_WAIT_MS,
-          );
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+    return {
+      url: this.uploadService.getAuthorizedPreviewCacheUrl(cacheKey),
+      contentType: 'image/jpeg',
+    };
   }
 
   /** 管理后台：获取文件课程试读预览图状态 */
@@ -1117,14 +1103,14 @@ export class CourseService {
         fileId: courseFile.id,
       };
     }
-    const fullTotalPages = await this.resolveFullFilePageCount(courseFile);
+    const fullTotalPages = await this.getWorkerResolvedPageCount(courseFile);
     const sampleCount = Math.min(this.getTrialPreviewPageCount(course), Math.max(0, fullTotalPages));
     const previewScope: 'full' = 'full';
     const cacheVersion = this.getPreviewCacheVersion(courseFile.file_url, previewScope);
     const samplePages: Array<{ pageNum: number; ready: boolean }> = [];
     for (let pageNum = 1; pageNum <= sampleCount; pageNum += 1) {
       const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
-      const ready = await this.uploadService.objectExists(cacheKey);
+      const ready = await this.uploadService.previewCacheObjectExists(cacheKey);
       samplePages.push({ pageNum, ready });
     }
     return {
@@ -1137,12 +1123,12 @@ export class CourseService {
     };
   }
 
-  /** 管理后台：获取文件课程指定试读页预览图（JPEG） */
-  async getAdminCoursePreviewSamplePageImage(
+  /** 管理后台：返回上海节点已生成的 CDN 试读预览页。 */
+  async getAdminCoursePreviewSamplePageUrl(
     courseId: number,
     pageNum: number,
     fileId?: number,
-  ): Promise<{ buffer: Buffer; contentType: string }> {
+  ): Promise<{ url: string; contentType: 'image/jpeg' }> {
     const course = await this.courseRepository.findOne({ where: { id: courseId } });
     if (!course) {
       throw new NotFoundException('课程不存在');
@@ -1157,72 +1143,21 @@ export class CourseService {
     }
     const previewScope: 'full' = 'full';
     const cacheKey = this.getPreviewImageCacheKey(courseId, courseFile.id, pageNum, courseFile.file_url, previewScope);
-    const cached = await this.uploadService.readObjectBuffer(cacheKey);
-    if (cached && this.isJpegBuffer(cached)) {
-      return { buffer: cached, contentType: 'image/jpeg' };
+    if (!(await this.uploadService.previewCacheObjectExists(cacheKey))) {
+      throw new ServiceUnavailableException(
+        '该页正在由上海预览节点生成，请稍后重试',
+      );
     }
-
-    const taskKey = `admin:${courseId}:${courseFile.id}:${previewScope}:${this.getPreviewCacheVersion(courseFile.file_url, previewScope)}:${pageNum}`;
-    const existingTask = this.previewRenderTasks.get(taskKey);
-    if (existingTask) {
-      return existingTask;
-    }
-
-    const renderTask = this.renderAndCachePreviewPage({
-      course,
-      courseFile,
-      hasAuth: true,
-      courseId,
-      pageNum,
-      cacheKey,
-    }).finally(() => {
-      this.previewRenderTasks.delete(taskKey);
-    });
-    this.previewRenderTasks.set(taskKey, renderTask);
-    return renderTask;
+    return {
+      url: this.uploadService.getAuthorizedPreviewCacheUrl(cacheKey),
+      contentType: 'image/jpeg',
+    };
   }
 
   warmupCoursePreviewCacheInBackground(courseId: number, force = false): { started: boolean; running: boolean; progress: PreviewWarmupProgress | null } {
-    const taskKey = `${courseId}:${force ? 'force' : 'reuse'}`;
-    if (this.hasRunningPreviewWarmupTask(courseId)) {
-      return { started: false, running: true, progress: this.previewWarmupProgress.get(courseId) || null };
-    }
-
-    const task = this.generateCoursePreviewCache(courseId, force)
-      .then((result) => {
-        this.logger.log(
-          `课程预览缓存生成完成 course=${courseId} generated=${result.generated} skipped=${result.skipped} failed=${result.failed} total=${result.totalPages}`,
-        );
-        return result;
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        const previous = this.previewWarmupProgress.get(courseId);
-        if (previous) {
-          this.updatePreviewWarmupProgress(courseId, {
-            status: 'failed',
-            failed: previous.failed || 1,
-            errors: previous.errors?.length ? previous.errors : [{ pageNum: previous.currentPage || 0, message }],
-            message,
-            finishedAt: Date.now(),
-          });
-        }
-        this.logger.error(`课程预览缓存生成失败 course=${courseId}: ${message}`);
-        return {
-          courseId,
-          totalPages: previous?.totalPages || 0,
-          generated: previous?.generated || 0,
-          skipped: previous?.skipped || 0,
-          failed: previous?.failed || 1,
-          errors: previous?.errors?.length ? previous.errors : [{ pageNum: previous?.currentPage || 0, message }],
-        };
-      })
-      .finally(() => {
-        this.previewWarmupTasks.delete(taskKey);
-      });
-
-    this.previewWarmupTasks.set(taskKey, task);
-    return { started: true, running: false, progress: this.previewWarmupProgress.get(courseId) || null };
+    void force;
+    this.logger.log(`课程预览缓存已交由上海工作节点处理 course=${courseId}`);
+    return { started: true, running: true, progress: null };
   }
 
   private hasRunningPreviewWarmupTask(courseId: number) {
@@ -1266,6 +1201,7 @@ export class CourseService {
     force = false,
     onProgress?: PreviewWarmupProgressListener,
   ): Promise<PreviewWarmupResult> {
+    void force;
     const course = await this.courseRepository.findOne({ where: { id: courseId } });
     if (!course) {
       throw new NotFoundException('课程不存在');
@@ -1301,26 +1237,20 @@ export class CourseService {
     await this.notifyPreviewWarmupProgress(courseId, onProgress);
 
     for (const courseFile of supportedFiles) {
-      this.updatePreviewWarmupProgress(courseId, {
-        currentFileName: courseFile.display_name,
-        status: 'running',
-      });
-      await this.notifyPreviewWarmupProgress(courseId, onProgress);
-      const fileResult = await this.generateSingleCourseFilePreviewCache(course, courseFile, force, onProgress);
-      aggregated.totalPages += fileResult.totalPages;
-      aggregated.generated += fileResult.generated;
-      aggregated.skipped += fileResult.skipped;
-      aggregated.failed += fileResult.failed;
-      aggregated.errors.push(...fileResult.errors);
+      const versionKey = this.getFilePageCountVersionKey(courseFile.file_url);
+      aggregated.totalPages +=
+        this.courseFileService.getCachedPageCount(courseFile, versionKey) || 0;
     }
 
     this.updatePreviewWarmupProgress(courseId, {
       ...aggregated,
-      currentPage: aggregated.totalPages,
-      status: aggregated.failed > 0 ? 'failed' : 'completed',
+      currentPage: 0,
+      status: 'pending',
       finishedAt: Date.now(),
+      currentFileName: undefined,
     });
     await this.notifyPreviewWarmupProgress(courseId, onProgress);
+    this.logger.log(`课程预览生成任务已交由上海工作节点 course=${courseId}`);
     return aggregated;
   }
 

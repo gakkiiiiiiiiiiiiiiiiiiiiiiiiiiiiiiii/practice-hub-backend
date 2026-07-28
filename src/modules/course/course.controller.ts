@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Param, Query, UseGuards, Res, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Param, Query, UseGuards, Res, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Request, Response } from 'express';
 import { createHash } from 'crypto';
@@ -204,14 +204,13 @@ export class CourseController {
   @Get(':id/preview-page/:pageNum')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: '课程文件指定页图片（PDF 转 PNG，用于图片预览）' })
+  @ApiOperation({ summary: '兼容旧客户端：校验后重定向到已生成的 CDN 预览页' })
   async getPreviewPageImage(
     @Param('id') id: string,
     @Param('pageNum') pageNumStr: string,
     @Query('ticket') ticket: string | undefined,
     @Query('fileId') fileIdStr: string | undefined,
     @CurrentUser() user: any,
-    @Req() req: Request,
     @Res({ passthrough: false }) res: Response,
   ) {
     const courseId = +id;
@@ -228,20 +227,47 @@ export class CourseController {
         if (!fileId && verified.fileId) fileId = verified.fileId;
       }
     }
-    const { buffer, contentType } = await this.courseService.getCourseFilePreviewPageImage(
+    const { url } = await this.courseService.getCourseFilePreviewPageUrl(
       courseId,
       pageNum,
       userId,
       Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
     );
-    const etag = this.createBufferEtag(buffer);
-    if (this.isFresh(req, etag)) {
-      return res.status(304).end();
+    return res.redirect(302, url);
+  }
+
+  @Get(':id/preview-page-url/:pageNum')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '校验课程权限并返回上海节点已生成的 CDN 预览页地址' })
+  async getPreviewPageUrl(
+    @Param('id') id: string,
+    @Param('pageNum') pageNumStr: string,
+    @Query('ticket') ticket: string | undefined,
+    @Query('fileId') fileIdStr: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    const courseId = +id;
+    const pageNum = parseInt(pageNumStr, 10);
+    if (!Number.isInteger(pageNum) || pageNum < 1) {
+      throw new BadRequestException('页码无效');
     }
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Length', String(buffer.length));
-    this.setCacheHeaders(res, etag, 86400);
-    res.send(buffer);
+    let userId = user?.userId;
+    let fileId = fileIdStr ? parseInt(fileIdStr, 10) : undefined;
+    if (ticket && !userId) {
+      const verified = this.courseService.verifyPreviewTicket(ticket);
+      if (verified && verified.courseId === courseId) {
+        userId = verified.userId ?? undefined;
+        if (!fileId && verified.fileId) fileId = verified.fileId;
+      }
+    }
+    const result = await this.courseService.getCourseFilePreviewPageUrl(
+      courseId,
+      pageNum,
+      userId,
+      Number.isInteger(fileId) && fileId > 0 ? fileId : undefined,
+    );
+    return CommonResponseDto.success(result);
   }
 
   private createBufferEtag(buffer: Buffer): string {

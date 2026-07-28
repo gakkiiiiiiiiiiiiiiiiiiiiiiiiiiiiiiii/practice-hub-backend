@@ -701,6 +701,20 @@ export class UploadService {
 		};
 	}
 
+	/** 课程预览缓存固定存放在 OSS，不受后台默认存储开关影响。 */
+	async previewCacheObjectExists(cloudPath: string): Promise<boolean> {
+		const safeKey = this.normalizeObjectKey(cloudPath);
+		if (!safeKey.startsWith('course-preview-cache/')) {
+			throw new BadRequestException('仅允许检查课程预览缓存');
+		}
+		try {
+			await (this.ossInternal || this.requireOss()).head(safeKey);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	/**
 	 * 为同地域异步工作节点签发短期 OSS 内网下载地址。
 	 * 旧 COS 地址返回 null，等待资源迁移并完成数据库地址切换后再处理。
@@ -1150,6 +1164,33 @@ export class UploadService {
 		return `${this.publicBaseUrl}/${this.normalizeObjectKey(key).split('/').map(encodeURIComponent).join('/')}`;
 	}
 
+	private signCdnUrl(url: string): string {
+		if (!this.cdnAuthEnabled || !url || typeof url !== 'string') return url;
+		try {
+			const parsed = new URL(url);
+			const publicHost = new URL(this.publicBaseUrl).hostname;
+			if (parsed.hostname !== publicHost) return url;
+			const timestamp = Math.floor(Date.now() / 1000);
+			const rand = '0';
+			const uid = '0';
+			const hash = createHash('md5')
+				.update(`${parsed.pathname}-${timestamp}-${rand}-${uid}-${this.cdnAuthKey}`, 'utf8')
+				.digest('hex');
+			parsed.searchParams.set('auth_key', `${timestamp}-${rand}-${uid}-${hash}`);
+			return parsed.toString();
+		} catch {
+			return url;
+		}
+	}
+
+	getAuthorizedPreviewCacheUrl(key: string): string {
+		const safeKey = this.normalizeObjectKey(key);
+		if (!safeKey.startsWith('course-preview-cache/')) {
+			throw new BadRequestException('仅允许签发课程预览缓存地址');
+		}
+		return this.signCdnUrl(this.getObjectUrl(safeKey));
+	}
+
 	/**
 	 * 为受保护的课程文件生成阿里云 CDN 鉴权 A 地址。
 	 * 数据库始终保存无鉴权参数的稳定 URL，仅在向已授权客户端返回时动态签名。
@@ -1162,14 +1203,7 @@ export class UploadService {
 			if (parsed.hostname !== publicHost || !parsed.pathname.startsWith('/course-files/')) {
 				return url;
 			}
-			const timestamp = Math.floor(Date.now() / 1000);
-			const rand = '0';
-			const uid = '0';
-			const hash = createHash('md5')
-				.update(`${parsed.pathname}-${timestamp}-${rand}-${uid}-${this.cdnAuthKey}`, 'utf8')
-				.digest('hex');
-			parsed.searchParams.set('auth_key', `${timestamp}-${rand}-${uid}-${hash}`);
-			return parsed.toString();
+			return this.signCdnUrl(parsed.toString());
 		} catch {
 			return url;
 		}
