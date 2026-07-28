@@ -95,15 +95,18 @@ function createTencentCredentialProvider(sourceBucket, sourceRegion) {
 	return async () => {
 		const now = Math.floor(Date.now() / 1000);
 		if (cached && Number(cached.expired_time) - now > 300) return cached;
-		const credentials = await fetchApi('wxa-dev-qbase/gettcbtoken', {
-			region: sourceRegion,
-			source: sourceBucket,
-			scene: 'TOKEN_SCENE_COS',
-			service: 'cos',
+		const credentials = await retry('刷新 COS 临时凭证失败', async () => {
+			const value = await fetchApi('wxa-dev-qbase/gettcbtoken', {
+				region: sourceRegion,
+				source: sourceBucket,
+				scene: 'TOKEN_SCENE_COS',
+				service: 'cos',
+			});
+			if (!value?.secretid || !value?.secretkey || !value?.token) {
+				throw new Error('微信云服务未返回完整 COS 临时凭证');
+			}
+			return value;
 		});
-		if (!credentials?.secretid || !credentials?.secretkey || !credentials?.token) {
-			throw new Error('微信云服务未返回完整 COS 临时凭证，请重新执行 wxcloud login');
-		}
 		cached = credentials;
 		return credentials;
 	};
