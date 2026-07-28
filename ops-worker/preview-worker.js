@@ -18,6 +18,8 @@ const maxJobsPerRun = Math.max(1, Number(env.PREVIEW_MAX_JOBS_PER_RUN || 1));
 const pageWidth = Math.max(720, Number(env.PREVIEW_IMAGE_WIDTH || 1440));
 const jpegQuality = Math.min(95, Math.max(60, Number(env.PREVIEW_IMAGE_QUALITY || 90)));
 
+class FatalWorkerError extends Error {}
+
 function loadState() {
   if (!fs.existsSync(stateFile)) return { completed: {}, inProgress: {}, updatedAt: null };
   try {
@@ -67,6 +69,14 @@ async function downloadSource(job, pdfPath) {
   }
   const response = await fetch(job.sourceUrl);
   if (!response.ok || !response.body) {
+    if (response.status === 403) {
+      const errorBody = await response.text();
+      const errorCode = errorBody.match(/<Code>([^<]+)/)?.[1] || '';
+      if (errorCode === 'UserDisable') {
+        throw new FatalWorkerError('OSS 账号当前不可用（UserDisable），已停止本轮任务');
+      }
+      throw new Error(`下载 PDF 失败: HTTP 403${errorCode ? ` (${errorCode})` : ''}`);
+    }
     throw new Error(`下载 PDF 失败: HTTP ${response.status}`);
   }
   await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(pdfPath));
@@ -242,6 +252,7 @@ async function run() {
           `[完成] file=${job.fileId} pages=${result.pageCount} generated=${result.generated} cached=${result.cached}`,
         );
       } catch (error) {
+        if (error instanceof FatalWorkerError) throw error;
         const message = error instanceof Error ? error.message : String(error);
         failures.push({ fileId: job.fileId, message });
         console.error(`[失败] file=${job.fileId}: ${message}`);
