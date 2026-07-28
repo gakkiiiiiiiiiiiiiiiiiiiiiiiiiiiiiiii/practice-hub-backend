@@ -1029,7 +1029,15 @@ export class UploadService {
 		if (this.isTencentStorageUrl(url)) {
 			return this.readCosObjectBuffer(key);
 		}
-		return this.readOssObjectBuffer(key);
+		const ossBuffer = await this.readOssObjectBuffer(key);
+		if (ossBuffer) {
+			return ossBuffer;
+		}
+		const cosBuffer = await this.readCosObjectBuffer(key);
+		if (cosBuffer) {
+			this.logger.warn(`OSS 对象读取失败，已回退腾讯云: ${key}`);
+		}
+		return cosBuffer;
 	}
 
 	/**
@@ -1068,8 +1076,18 @@ export class UploadService {
 					await this.downloadCosObjectToFile(key, destinationPath);
 				}
 			} else {
-				const result = await this.requireOss().getStream(this.normalizeObjectKey(key));
-				await pipeline((result as any).stream, fs.createWriteStream(destinationPath));
+				try {
+					const result = await this.requireOss().getStream(this.normalizeObjectKey(key));
+					await pipeline((result as any).stream, fs.createWriteStream(destinationPath));
+				} catch (ossError: any) {
+					try {
+						await fs.promises.unlink(destinationPath);
+					} catch (_) {}
+					this.logger.warn(
+						`OSS 课程文件读取失败，尝试回退腾讯云: ${key} (${ossError?.code || ossError?.message || '未知错误'})`,
+					);
+					await this.downloadCosObjectToFile(key, destinationPath);
+				}
 			}
 			const stat = await fs.promises.stat(destinationPath);
 			if (!stat.isFile() || stat.size < 1) {
@@ -1406,7 +1424,7 @@ export class UploadService {
 
 	private getLegacyCosFallbackUrl(url: string, key: string): string | null {
 		if (this.isLegacyCosHttpsUrl(url)) return url;
-		if (!this.extractLegacyCloudKey(url)) return null;
+		if (!this.legacyCosBucket || !key) return null;
 		const encodedKey = key.split('/').map(encodeURIComponent).join('/');
 		return `https://${this.legacyCosBucket}.tcb.qcloud.la/${encodedKey}`;
 	}

@@ -133,4 +133,45 @@ describe('UploadService storage provider credentials', () => {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}
 	});
+
+	it('falls back to Tencent COS when reading an OSS URL fails', async () => {
+		const payload = Buffer.from('%PDF-from-cos');
+		jest.spyOn(service as any, 'readOssObjectBuffer').mockResolvedValue(null);
+		const readCosObjectBuffer = jest.spyOn(service as any, 'readCosObjectBuffer').mockResolvedValue(payload);
+
+		const result = await service.readObjectUrlBuffer(
+			'https://cdn.example.com/course-files/source.pdf',
+		);
+
+		expect(result).toEqual(payload);
+		expect(readCosObjectBuffer).toHaveBeenCalledWith('course-files/source.pdf');
+	});
+
+	it('falls back to Tencent COS when streaming an OSS course file fails', async () => {
+		const payload = Buffer.from('%PDF-streamed-from-cos');
+		jest.spyOn((service as any).oss, 'getStream').mockRejectedValue({
+			code: 'UserDisable',
+			status: 403,
+		});
+		const downloadCosObjectToFile = jest
+			.spyOn(service as any, 'downloadCosObjectToFile')
+			.mockImplementation(async (_key: string, destination: string) => {
+				await fs.promises.writeFile(destination, payload);
+			});
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'upload-service-fallback-'));
+		const destination = path.join(tmpDir, 'source.pdf');
+
+		try {
+			const size = await service.downloadObjectUrlToFile(
+				'https://cdn.example.com/course-files/source.pdf',
+				destination,
+			);
+
+			expect(size).toBe(payload.length);
+			expect(fs.readFileSync(destination)).toEqual(payload);
+			expect(downloadCosObjectToFile).toHaveBeenCalledWith('course-files/source.pdf', destination);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
 });
