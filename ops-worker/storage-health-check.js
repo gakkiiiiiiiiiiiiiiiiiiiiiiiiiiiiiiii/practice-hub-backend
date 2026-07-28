@@ -40,10 +40,15 @@ async function run() {
       env.OSS_INTERNAL_HEALTHCHECK_URL ||
         'https://practice-hub-prod-1424780330.oss-cn-shanghai-internal.aliyuncs.com/',
     );
+    const responseText = response.status === 403 ? await response.text() : '';
+    const errorCode = responseText.match(/<Code>([^<]+)/)?.[1] || '';
+    if (errorCode === 'UserDisable') {
+      throw new Error('OSS 账号不可用（UserDisable）');
+    }
     if (![200, 403, 404].includes(response.status)) {
       throw new Error(`HTTP ${response.status}`);
     }
-    return `HTTP ${response.status}`;
+    return `HTTP ${response.status}${errorCode ? ` (${errorCode})` : ''}`;
   });
   if (env.CDN_HEALTHCHECK_URL) {
     await record('cdn', async () => {
