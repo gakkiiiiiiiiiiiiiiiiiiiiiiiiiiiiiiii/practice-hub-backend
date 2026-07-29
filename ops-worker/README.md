@@ -20,3 +20,5 @@
 
 可通过 `PREVIEW_MAX_JOBS_PER_RUN` 控制每轮处理文件数，2C2G 实例建议保持为 `1`。
 试读补齐阶段默认每轮串行处理 20 份资料，可通过 `PREVIEW_MAX_TRIAL_JOBS_PER_RUN` 调整。
+需要立即补齐指定资料时，可将 `PREVIEW_START_CURSOR` 设置为目标文件 ID 减 1，
+并将 `PREVIEW_TRIAL_ONLY=true`、`PREVIEW_MAX_TRIAL_JOBS_PER_RUN=1`，只生成该资料的试读页。
