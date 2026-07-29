@@ -163,8 +163,9 @@ async function reportPageCount(job, pageCount) {
   });
 }
 
-async function processJob(job, state) {
+async function processJob(job, state, mode = 'full') {
   const signature = `${job.fileId}:${job.pageCountVersion}`;
+  const progressSignature = mode === 'trial' ? `${signature}:trial` : signature;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `preview-worker-${job.fileId}-`));
   const pdfPath = path.join(tmpDir, 'source.pdf');
   try {
@@ -173,16 +174,27 @@ async function processJob(job, state) {
 
     const pageCount = await readPdfPageCount(pdfPath);
     await reportPageCount(job, pageCount);
-    const resume = state.inProgress[signature];
+    const lastPage = mode === 'trial'
+      ? Math.min(pageCount, Math.max(0, Number(job.trialPages) || 0))
+      : pageCount;
+    if (lastPage < 1) {
+      return { signature: progressSignature, skipped: true, reason: 'trial_disabled' };
+    }
+    const resume = state.inProgress[progressSignature];
     const startPage =
       resume && Number(resume.pageCount) === pageCount
-        ? Math.min(pageCount + 1, Math.max(1, Number(resume.nextPage) || 1))
+        ? Math.min(lastPage + 1, Math.max(1, Number(resume.nextPage) || 1))
         : 1;
     let generated = 0;
     let skipped = 0;
-    for (let pageNum = startPage; pageNum <= pageCount; pageNum += 1) {
+    for (let pageNum = startPage; pageNum <= lastPage; pageNum += 1) {
       const signed = await getUploadTargets(job, pageNum);
-      const missingTargets = (signed.uploads || []).filter((upload) => !upload.exists);
+      const missingTargets = (signed.uploads || []).filter((upload) => {
+        if (upload.exists) return false;
+        if (mode !== 'trial') return true;
+        return String(upload.path || '').startsWith(`${job.trialCachePrefix}/`)
+          || String(upload.path || '').startsWith(`${job.fullCachePrefix}/`);
+      });
       if (missingTargets.length === 0) {
         skipped += 1;
       } else {
@@ -191,30 +203,29 @@ async function processJob(job, state) {
         generated += 1;
         fs.rmSync(outputPath, { force: true });
       }
-      state.inProgress[signature] = {
+      state.inProgress[progressSignature] = {
         nextPage: pageNum + 1,
         pageCount,
+        mode,
         updatedAt: new Date().toISOString(),
       };
       saveState(state);
-      if (pageNum === 1 || pageNum % 10 === 0 || pageNum === pageCount) {
+      if (pageNum === 1 || pageNum % 10 === 0 || pageNum === lastPage) {
         console.log(
-          `[进度] file=${job.fileId} page=${pageNum}/${pageCount} generated=${generated} cached=${skipped}`,
+          `[进度] mode=${mode} file=${job.fileId} page=${pageNum}/${lastPage} generated=${generated} cached=${skipped}`,
         );
       }
     }
 
-    delete state.inProgress[signature];
+    delete state.inProgress[progressSignature];
     saveState(state);
-    return { signature, skipped: false, pageCount, generated, cached: skipped };
+    return { signature: progressSignature, skipped: false, pageCount, generated, cached: skipped };
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 
-async function run() {
-  await api('/api/internal/preview-worker/health');
-  const state = loadState();
+async function runPass(state, mode) {
   let cursor = 0;
   let processed = 0;
   let attempted = 0;
@@ -231,27 +242,30 @@ async function run() {
       cursor = Number(job.fileId) || cursor;
       scanned += 1;
       const signature = `${job.fileId}:${job.pageCountVersion}`;
-      if (state.completed[signature] && job.cacheComplete) continue;
-      if (state.completed[signature] && !job.cacheComplete) {
-        delete state.completed[signature];
-        delete state.inProgress[signature];
+      const progressSignature = mode === 'trial' ? `${signature}:trial` : signature;
+      const modeComplete = mode === 'trial' ? job.trialCacheComplete : job.fullCacheComplete;
+      if (modeComplete) continue;
+      if (state.completed[progressSignature] && !modeComplete) {
+        delete state.completed[progressSignature];
+        delete state.inProgress[progressSignature];
         saveState(state);
       }
       attempted += 1;
       try {
-        const result = await processJob(job, state);
+        const result = await processJob(job, state, mode);
         if (result.skipped) {
-          console.log(`[跳过] file=${job.fileId} reason=${result.reason}`);
+          console.log(`[跳过] mode=${mode} file=${job.fileId} reason=${result.reason}`);
           continue;
         }
-        state.completed[signature] = {
+        state.completed[progressSignature] = {
           completedAt: new Date().toISOString(),
           pageCount: result.pageCount,
+          mode,
         };
         saveState(state);
         processed += 1;
         console.log(
-          `[完成] file=${job.fileId} pages=${result.pageCount} generated=${result.generated} cached=${result.cached}`,
+          `[完成] mode=${mode} file=${job.fileId} pages=${result.pageCount} generated=${result.generated} cached=${result.cached}`,
         );
       } catch (error) {
         if (error instanceof FatalWorkerError) throw error;
@@ -264,16 +278,26 @@ async function run() {
     if (!page.hasMore) break;
   }
 
+  return { mode, scanned, attempted, processed, failures };
+}
+
+async function run() {
+  await api('/api/internal/preview-worker/health');
+  const state = loadState();
+  // 先让所有付费资料尽快具备前几页试读能力，再继续生成耗时较长的完整缓存。
+  // 避免一个数百页 PDF 阻塞后续所有课程的试读。
+  const trialResult = await runPass(state, 'trial');
+  const result = trialResult.attempted > 0
+    ? trialResult
+    : await runPass(state, 'full');
+
   console.log(
     JSON.stringify({
-      completed: failures.length === 0,
-      scanned,
-      attempted,
-      processed,
-      failures,
+      completed: result.failures.length === 0,
+      ...result,
     }),
   );
-  if (failures.length > 0) process.exitCode = 2;
+  if (result.failures.length > 0) process.exitCode = 2;
 }
 
 run().catch((error) => {

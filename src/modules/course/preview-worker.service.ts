@@ -71,20 +71,18 @@ export class PreviewWorkerService {
         cachedPageCount > 0 &&
         String(row.file_page_count_key || '') === versions.pageCount;
       let cacheComplete = false;
+      let fullCacheComplete = false;
+      let trialCacheComplete = trialPages < 1;
       if (pageCountVersionMatches) {
-        const requiredKeys = [
+        fullCacheComplete = await this.uploadService.previewCacheObjectExists(
           `course-preview-cache/${courseId}/${fileId}/${versions.full}/${cachedPageCount}.jpg`,
-        ];
+        );
         if (trialPages > 0) {
-          requiredKeys.push(
+          trialCacheComplete = await this.uploadService.previewCacheObjectExists(
             `course-preview-cache/${courseId}/${fileId}/${versions.trial}/${Math.min(trialPages, cachedPageCount)}.jpg`,
           );
         }
-        cacheComplete = (
-          await Promise.all(
-            requiredKeys.map((key) => this.uploadService.previewCacheObjectExists(key)),
-          )
-        ).every(Boolean);
+        cacheComplete = fullCacheComplete && trialCacheComplete;
       }
       return {
         fileId,
@@ -97,6 +95,8 @@ export class PreviewWorkerService {
         pageCountVersion: versions.pageCount,
         trialPages,
         cacheComplete,
+        fullCacheComplete,
+        trialCacheComplete,
         fullCachePrefix: `course-preview-cache/${courseId}/${fileId}/${versions.full}`,
         trialCachePrefix: `course-preview-cache/${courseId}/${fileId}/${versions.trial}`,
         sourceUrl: this.uploadService.getPreviewWorkerDownloadUrl(fileUrl),
