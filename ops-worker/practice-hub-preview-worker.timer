@@ -1,11 +1,11 @@
 [Unit]
-Description=Run Practice Hub PDF preview generation every 10 minutes
+Description=Run Practice Hub PDF preview generation every minute
 
 [Timer]
-OnBootSec=5min
+OnBootSec=1min
 OnActiveSec=1min
-OnUnitActiveSec=10min
-RandomizedDelaySec=60
+OnUnitActiveSec=1min
+RandomizedDelaySec=15
 Persistent=true
 
 [Install]

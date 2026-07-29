@@ -180,6 +180,7 @@ export class CourseFileService {
           file_type: fileType,
           file_size: Number(input.file_size || 0),
           sort: Number.isInteger(input.sort) ? Number(input.sort) : await this.getNextSort(courseId, manager),
+          full_preview_requested: 1,
           status: 1,
         });
         const saved = await repository.save(entity);
@@ -219,6 +220,7 @@ export class CourseFileService {
         });
         if (!file) throw new NotFoundException('课程文件不存在');
         const previousUrl = file.file_url;
+        let shouldRequestFullPreview = false;
         if (patch.display_name !== undefined) {
           const displayName = String(patch.display_name || '').trim();
           if (!displayName) throw new BadRequestException('请填写文件展示名称');
@@ -230,6 +232,7 @@ export class CourseFileService {
             file.file_page_count = null;
             file.file_page_count_key = null;
           }
+          shouldRequestFullPreview = true;
           file.file_url = promoted.url;
         }
         if (patch.file_name !== undefined) file.file_name = patch.file_name;
@@ -240,9 +243,13 @@ export class CourseFileService {
           if (!['pdf', 'doc', 'docx'].includes(fileType)) {
             throw new BadRequestException('仅支持 PDF、Word（.doc/.docx）文件');
           }
+          if (fileType !== String(file.file_type || '').trim().toLowerCase()) {
+            shouldRequestFullPreview = true;
+          }
           file.file_type = fileType;
         }
         if (patch.file_size !== undefined) file.file_size = Number(patch.file_size || 0);
+        if (shouldRequestFullPreview) file.full_preview_requested = 1;
         const saved = await repository.save(file);
         await this.syncPrimaryMirror(courseId, manager);
         if (promoted && previousUrl !== promoted.url) {

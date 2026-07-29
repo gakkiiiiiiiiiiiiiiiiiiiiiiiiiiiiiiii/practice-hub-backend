@@ -150,7 +150,7 @@ export class UploadService {
 
 	/**
 	 * 腾讯云容器不得读取 OSS 课程源文件正文。
-	 * 课程预览生成统一由阿里云上海节点通过内网 Endpoint 完成，避免产生 OSS 公网流出费用。
+	 * 课程预览按源文件实际位置交给同地域工作节点，避免对象存储公网流出费用。
 	 */
 	isCourseSourceBodyReadBlocked(urlOrKey: string): boolean {
 		if (!this.isWeChatCloudBase()) return false;

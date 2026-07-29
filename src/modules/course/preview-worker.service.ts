@@ -134,6 +134,7 @@ export class PreviewWorkerService {
           'file.file_size AS file_size',
           'file.file_page_count AS file_page_count',
           'file.file_page_count_key AS file_page_count_key',
+          'file.full_preview_requested AS full_preview_requested',
           'course.trial_preview_page_count AS trial_preview_page_count',
         ])
         .addSelect(
@@ -207,6 +208,15 @@ export class PreviewWorkerService {
         }
         cacheComplete = fullCacheComplete && trialCacheComplete;
       }
+      const uploadRequested = Number(row.full_preview_requested || 0) === 1;
+      if (uploadRequested && fullCacheComplete) {
+        await this.courseFileRepository.update(fileId, {
+          full_preview_requested: 0,
+        });
+      }
+      const fullPreviewEligible =
+        Number(row.full_preview_eligible || 0) === 1 ||
+        (uploadRequested && !fullCacheComplete);
       return {
         fileId,
         courseId,
@@ -219,7 +229,8 @@ export class PreviewWorkerService {
         pageCountVersion: versions.pageCount,
         trialPages,
         sourceProvider,
-        fullPreviewEligible: Number(row.full_preview_eligible || 0) === 1,
+        fullPreviewEligible,
+        fullPreviewRequested: uploadRequested && !fullCacheComplete,
         cacheComplete,
         fullCacheComplete,
         trialCacheComplete,
@@ -268,7 +279,11 @@ export class PreviewWorkerService {
       50,
       Math.max(0, Number(course.trial_preview_page_count ?? 3) || 0),
     );
-    if (pageNum > trialPages && !(await this.hasFullPreviewDemand(course.id))) {
+    if (
+      pageNum > trialPages &&
+      Number(file.full_preview_requested || 0) !== 1 &&
+      !(await this.hasFullPreviewDemand(course.id))
+    ) {
       throw new BadRequestException('该课程暂无完整预览生成需求');
     }
     const keys = [

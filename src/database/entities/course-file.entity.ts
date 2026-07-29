@@ -43,6 +43,9 @@ export class CourseFile {
   @Column({ type: 'varchar', length: 32, nullable: true, comment: '页数缓存对应的文件版本' })
   file_page_count_key: string | null;
 
+  @Column({ type: 'tinyint', default: 0, comment: '是否需要生成完整预览图片' })
+  full_preview_requested: number;
+
   @Column({ type: 'tinyint', default: 1, comment: '0-禁用，1-启用' })
   status: number;
 
