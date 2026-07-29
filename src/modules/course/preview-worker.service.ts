@@ -31,6 +31,62 @@ export class PreviewWorkerService {
     private readonly uploadService: UploadService,
   ) {}
 
+  private getFullPreviewDemandSql(courseAlias = 'course') {
+    return `(
+      ${courseAlias}.is_free = 1
+      OR ${courseAlias}.price = 0
+      OR EXISTS (
+        SELECT 1
+        FROM user_course_auth course_auth
+        WHERE course_auth.course_id = ${courseAlias}.id
+          AND (
+            course_auth.expire_time IS NULL
+            OR course_auth.expire_time > NOW()
+          )
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM user_package_subscription ups
+        INNER JOIN package_section ps
+          ON ps.id = ups.section_id
+          AND ps.status = 1
+        INNER JOIN package_section_scope pss
+          ON pss.section_id = ps.id
+        WHERE ups.expire_time > NOW()
+          AND (
+            pss.scope_type = 'all'
+            OR (
+            pss.scope_type = 'course'
+              AND CAST(TRIM(pss.scope_value) AS UNSIGNED) = ${courseAlias}.id
+            )
+            OR (
+              pss.scope_type = 'category'
+              AND TRIM(pss.scope_value) COLLATE utf8mb4_unicode_ci
+                = TRIM(COALESCE(${courseAlias}.category, ''))
+            )
+            OR (
+              pss.scope_type = 'sub_category'
+              AND TRIM(pss.scope_value) COLLATE utf8mb4_unicode_ci
+                = TRIM(COALESCE(${courseAlias}.sub_category, ''))
+            )
+          )
+      )
+    )`;
+  }
+
+  private async hasFullPreviewDemand(courseId: number) {
+    const row = await this.courseFileRepository.manager
+      .getRepository(Course)
+      .createQueryBuilder('course')
+      .select(
+        `CASE WHEN ${this.getFullPreviewDemandSql('course')} THEN 1 ELSE 0 END`,
+        'full_preview_eligible',
+      )
+      .where('course.id = :courseId', { courseId })
+      .getRawOne();
+    return Number(row?.full_preview_eligible || 0) === 1;
+  }
+
   async listJobs(cursor = 0, limit = 20) {
     const safeCursor = Number.isInteger(cursor) && cursor > 0 ? cursor : 0;
     const safeLimit = Number.isInteger(limit) ? Math.min(100, Math.max(1, limit)) : 20;
@@ -48,6 +104,10 @@ export class PreviewWorkerService {
         'file.file_page_count_key AS file_page_count_key',
         'course.trial_preview_page_count AS trial_preview_page_count',
       ])
+      .addSelect(
+        `CASE WHEN ${this.getFullPreviewDemandSql('course')} THEN 1 ELSE 0 END`,
+        'full_preview_eligible',
+      )
       .where('file.id > :cursor', { cursor: safeCursor })
       .andWhere('file.status = 1')
       .andWhere('course.status = 1')
@@ -98,6 +158,7 @@ export class PreviewWorkerService {
         cachedPageCountVersion: String(row.file_page_count_key || ''),
         pageCountVersion: versions.pageCount,
         trialPages,
+        fullPreviewEligible: Number(row.full_preview_eligible || 0) === 1,
         cacheComplete,
         fullCacheComplete,
         trialCacheComplete,
@@ -142,6 +203,9 @@ export class PreviewWorkerService {
       50,
       Math.max(0, Number(course.trial_preview_page_count ?? 3) || 0),
     );
+    if (pageNum > trialPages && !(await this.hasFullPreviewDemand(course.id))) {
+      throw new BadRequestException('该课程暂无完整预览生成需求');
+    }
     const keys = [
       `course-preview-cache/${file.course_id}/${file.id}/${versions.full}/${pageNum}.jpg`,
     ];

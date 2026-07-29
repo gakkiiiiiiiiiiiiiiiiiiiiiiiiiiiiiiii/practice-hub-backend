@@ -210,6 +210,9 @@ async function reportPageCount(job, pageCount) {
 }
 
 async function isModeComplete(job, mode) {
+  if (mode === 'full' && job.fullPreviewEligible === false) {
+    return true;
+  }
   const reported = mode === 'trial' ? job.trialCacheComplete : job.fullCacheComplete;
   if (typeof reported === 'boolean') return reported;
 
