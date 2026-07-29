@@ -194,6 +194,30 @@ describe('UploadService storage provider credentials', () => {
 		);
 	});
 
+	it('signs COS preview downloads with the public domain for cross-cloud workers', async () => {
+		const getObjectUrl = jest
+			.spyOn((service as any).cos, 'getObjectUrl')
+			.mockImplementation((_options: any, callback: any) => {
+				callback(null, {
+					Url: 'https://example-cos-bucket.cos.ap-shanghai.myqcloud.com/course-files/legacy.pdf?q-sign=test',
+				});
+			});
+
+		await expect(
+			service.getPreviewWorkerDownloadUrl(
+				'https://cdn.example.com/course-files/legacy.pdf',
+				'cos',
+				true,
+			),
+		).resolves.toContain('.cos.ap-shanghai.myqcloud.com/');
+		expect(getObjectUrl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				Domain: '{Bucket}.cos.{Region}.myqcloud.com',
+			}),
+			expect.any(Function),
+		);
+	});
+
 	it('signs generated preview cache URLs on the CDN domain', () => {
 		const now = jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
 		const key = 'course-preview-cache/4/2/full-version/19.jpg';

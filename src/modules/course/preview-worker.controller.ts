@@ -33,11 +33,13 @@ export class PreviewWorkerController {
     @Query('cursor') cursor?: string,
     @Query('limit') limit?: string,
     @Query('provider') provider?: string,
+    @Query('publicSource') publicSource?: string,
   ) {
     const result = await this.previewWorkerService.listJobs(
       Number(cursor || 0),
       Number(limit || 20),
       provider === 'cos' ? 'cos' : 'oss',
+      publicSource === '1' || publicSource === 'true',
     );
     return CommonResponseDto.success(result);
   }

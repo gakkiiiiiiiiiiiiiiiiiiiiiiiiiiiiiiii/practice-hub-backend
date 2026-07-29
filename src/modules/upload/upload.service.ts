@@ -783,6 +783,7 @@ export class UploadService {
 	async getPreviewWorkerDownloadUrl(
 		fileUrl: string,
 		sourceProvider: 'oss' | 'cos',
+		publicSource = false,
 	): Promise<string | null> {
 		if (!fileUrl || typeof fileUrl !== 'string') return null;
 		try {
@@ -816,7 +817,9 @@ export class UploadService {
 						Method: 'GET',
 						Expires: downloadUrlExpires,
 						Protocol: 'https:',
-						Domain: `{Bucket}.cos-internal.{Region}.tencentcos.cn`,
+						Domain: publicSource
+							? `{Bucket}.cos.{Region}.myqcloud.com`
+							: `{Bucket}.cos-internal.{Region}.tencentcos.cn`,
 					},
 					(error, result) => {
 						if (error) reject(error);

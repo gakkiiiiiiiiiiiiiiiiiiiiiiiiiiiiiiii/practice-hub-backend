@@ -151,6 +151,7 @@ export class PreviewWorkerService {
     cursor = 0,
     limit = 20,
     workerProvider: 'oss' | 'cos' = 'oss',
+    publicSource = false,
   ) {
     const safeCursor = Number.isInteger(cursor) && cursor > 0 ? cursor : 0;
     const safeLimit = Number.isInteger(limit) ? Math.min(100, Math.max(1, limit)) : 20;
@@ -290,6 +291,7 @@ export class PreviewWorkerService {
         sourceUrl: await this.uploadService.getPreviewWorkerDownloadUrl(
           fileUrl,
           sourceProvider,
+          publicSource,
         ),
       };
     }));

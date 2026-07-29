@@ -25,6 +25,7 @@ const trialOnly = String(env.PREVIEW_TRIAL_ONLY || '').toLowerCase() === 'true';
 const sourceProvider = String(env.PREVIEW_SOURCE_PROVIDER || 'oss').toLowerCase() === 'cos'
   ? 'cos'
   : 'oss';
+const publicSource = String(env.PREVIEW_PUBLIC_SOURCE || '').toLowerCase() === 'true';
 const pageWidth = Math.max(720, Number(env.PREVIEW_IMAGE_WIDTH || 1440));
 const jpegQuality = Math.min(95, Math.max(60, Number(env.PREVIEW_IMAGE_QUALITY || 90)));
 
@@ -308,7 +309,7 @@ async function runPass(state, mode, maxAttempts, initialCursor = 0) {
 
   while (pendingJobs.length < maxAttempts) {
     const page = await api(
-      `/api/internal/preview-worker/jobs?cursor=${cursor}&limit=50&provider=${sourceProvider}`,
+      `/api/internal/preview-worker/jobs?cursor=${cursor}&limit=50&provider=${sourceProvider}${publicSource ? '&publicSource=1' : ''}`,
     );
     const jobs = Array.isArray(page.jobs) ? page.jobs : [];
     if (jobs.length === 0) break;
@@ -390,7 +391,7 @@ async function run() {
   const trialResult = await runPass(state, 'trial', maxTrialJobsPerRun, startCursor);
   const result = trialOnly || trialResult.attempted > 0
     ? trialResult
-    : await runPass(state, 'full', maxJobsPerRun);
+    : await runPass(state, 'full', maxJobsPerRun, startCursor);
 
   console.log(
     JSON.stringify({
