@@ -34,6 +34,8 @@ env.example
 coverage/
 .nyc_output/
 test/
+test-files/
+test-files.*
 *.test.ts
 *.spec.ts
 
