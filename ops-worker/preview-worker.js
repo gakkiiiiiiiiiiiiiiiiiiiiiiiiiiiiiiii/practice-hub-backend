@@ -28,6 +28,7 @@ const sourceProvider = String(env.PREVIEW_SOURCE_PROVIDER || 'oss').toLowerCase(
 const publicSource = String(env.PREVIEW_PUBLIC_SOURCE || '').toLowerCase() === 'true';
 const pageWidth = Math.max(720, Number(env.PREVIEW_IMAGE_WIDTH || 1440));
 const jpegQuality = Math.min(95, Math.max(60, Number(env.PREVIEW_IMAGE_QUALITY || 90)));
+const ghostscriptDpi = Math.min(300, Math.max(96, Number(env.PREVIEW_GHOSTSCRIPT_DPI || 203)));
 
 class FatalWorkerError extends Error {}
 
@@ -145,31 +146,78 @@ async function normalizeSourceToPdf(job, sourcePath, tmpDir) {
   return pdfPath;
 }
 
-async function renderPage(pdfPath, pageNum, outputPrefix) {
+function hasPopplerFontWarning(stderr) {
+  return /Missing language pack|Unknown font tag|No font in show/iu.test(String(stderr || ''));
+}
+
+async function renderPageWithGhostscript(pdfPath, pageNum, outputPath) {
   await execFileAsync(
-    'pdftocairo',
+    'gs',
     [
-      '-jpeg',
-      '-singlefile',
-      '-f',
-      String(pageNum),
-      '-l',
-      String(pageNum),
-      '-scale-to-x',
-      String(pageWidth),
-      '-scale-to-y',
-      '-1',
-      '-jpegopt',
-      `quality=${jpegQuality}`,
+      '-q',
+      '-dSAFER',
+      '-dBATCH',
+      '-dNOPAUSE',
+      '-sDEVICE=jpeg',
+      `-r${ghostscriptDpi}`,
+      `-dFirstPage=${pageNum}`,
+      `-dLastPage=${pageNum}`,
+      `-dJPEGQ=${jpegQuality}`,
+      `-sOutputFile=${outputPath}`,
       pdfPath,
-      outputPrefix,
     ],
     {
-      maxBuffer: 8 * 1024 * 1024,
+      maxBuffer: 16 * 1024 * 1024,
       timeout: 5 * 60 * 1000,
     },
   );
+}
+
+async function renderPage(pdfPath, pageNum, outputPrefix, rendererState = {}) {
   const outputPath = `${outputPrefix}.jpg`;
+  const alreadyUsingGhostscript = rendererState.forceGhostscript === true;
+  let useGhostscript = alreadyUsingGhostscript;
+  if (!useGhostscript) {
+    try {
+      const { stderr } = await execFileAsync(
+        'pdftocairo',
+        [
+          '-jpeg',
+          '-singlefile',
+          '-f',
+          String(pageNum),
+          '-l',
+          String(pageNum),
+          '-scale-to-x',
+          String(pageWidth),
+          '-scale-to-y',
+          '-1',
+          '-jpegopt',
+          `quality=${jpegQuality}`,
+          pdfPath,
+          outputPrefix,
+        ],
+        {
+          maxBuffer: 8 * 1024 * 1024,
+          timeout: 5 * 60 * 1000,
+        },
+      );
+      useGhostscript = hasPopplerFontWarning(stderr);
+    } catch (error) {
+      console.warn(`[渲染] pdftocairo 第 ${pageNum} 页失败，改用 Ghostscript: ${error.message}`);
+      useGhostscript = true;
+    }
+  }
+
+  if (useGhostscript) {
+    rendererState.forceGhostscript = true;
+    if (!alreadyUsingGhostscript) {
+      console.warn(`[渲染] 第 ${pageNum} 页检测到字体兼容问题，后续页面改用 Ghostscript`);
+    }
+    fs.rmSync(outputPath, { force: true });
+    await renderPageWithGhostscript(pdfPath, pageNum, outputPath);
+  }
+
   const stat = fs.statSync(outputPath);
   if (stat.size < 1024) throw new Error(`第 ${pageNum} 页转图结果异常`);
   return outputPath;
@@ -264,6 +312,7 @@ async function processJob(job, state, mode = 'full') {
         : 1;
     let generated = 0;
     let skipped = 0;
+    const rendererState = { forceGhostscript: false };
     for (let pageNum = startPage; pageNum <= lastPage; pageNum += 1) {
       const signed = await getUploadTargets(job, pageNum);
       const missingTargets = (signed.uploads || []).filter((upload) => {
@@ -275,7 +324,12 @@ async function processJob(job, state, mode = 'full') {
       if (missingTargets.length === 0) {
         skipped += 1;
       } else {
-        const outputPath = await renderPage(pdfPath, pageNum, path.join(tmpDir, `page-${pageNum}`));
+        const outputPath = await renderPage(
+          pdfPath,
+          pageNum,
+          path.join(tmpDir, `page-${pageNum}`),
+          rendererState,
+        );
         await uploadPreviewPage(missingTargets, outputPath);
         generated += 1;
         fs.rmSync(outputPath, { force: true });
