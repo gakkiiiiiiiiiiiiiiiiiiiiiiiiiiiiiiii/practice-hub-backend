@@ -50,3 +50,30 @@ describe('AdminCourseService batchUpdateContent', () => {
 		);
 	});
 });
+
+describe('AdminCourseService getCourseFileDownloadUrl', () => {
+	it('returns a signed URL only after resolving the file under the requested course', async () => {
+		const service = Object.create(AdminCourseService.prototype) as AdminCourseService;
+		const file = {
+			id: 180,
+			course_id: 186,
+			file_url: 'https://cdn.example.com/course-files/material.pdf',
+			file_name: '材料科学基础.pdf',
+			display_name: '材料科学基础',
+		};
+		(service as any).courseFileService = {
+			resolve: jest.fn().mockResolvedValue(file),
+		};
+		(service as any).courseService = {
+			getAuthorizedCourseFileUrl: jest
+				.fn()
+				.mockReturnValue(`${file.file_url}?auth_key=signed`),
+		};
+
+		await expect(service.getCourseFileDownloadUrl(186, 180)).resolves.toEqual({
+			url: `${file.file_url}?auth_key=signed`,
+			fileName: file.file_name,
+		});
+		expect((service as any).courseFileService.resolve).toHaveBeenCalledWith(186, 180);
+	});
+});

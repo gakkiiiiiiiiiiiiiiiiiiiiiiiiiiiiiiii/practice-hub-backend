@@ -204,6 +204,14 @@ export class AdminCourseService {
     return files.map((file) => this.courseFileService.formatFileListItem(file));
   }
 
+  async getCourseFileDownloadUrl(courseId: number, fileId: number) {
+    const file = await this.courseFileService.resolve(courseId, fileId);
+    return {
+      url: this.courseService.getAuthorizedCourseFileUrl(file.file_url),
+      fileName: file.file_name || file.display_name,
+    };
+  }
+
   async createCourseFile(courseId: number, input: CourseFileInput) {
     const saved = await this.courseFileService.create(courseId, input);
     return this.courseFileService.formatFileListItem(saved);

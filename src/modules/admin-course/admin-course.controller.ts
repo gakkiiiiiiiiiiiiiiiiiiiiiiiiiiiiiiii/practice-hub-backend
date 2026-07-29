@@ -361,6 +361,17 @@ export class AdminCourseController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Get(':id/files/:fileId/download-url')
+	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+	@ApiOperation({ summary: '获取课程文件临时下载地址' })
+	async getCourseFileDownloadUrl(
+		@Param('id') id: number,
+		@Param('fileId') fileId: number,
+	) {
+		const result = await this.adminCourseService.getCourseFileDownloadUrl(+id, +fileId);
+		return CommonResponseDto.success(result);
+	}
+
 	@Post(':id/files')
 	@Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
 	@ApiOperation({ summary: '新增课程文件' })
