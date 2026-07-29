@@ -19,6 +19,7 @@ const maxTrialJobsPerRun = Math.max(
   maxJobsPerRun,
   Number(env.PREVIEW_MAX_TRIAL_JOBS_PER_RUN || 20),
 );
+const concurrency = Math.min(4, Math.max(1, Number(env.PREVIEW_CONCURRENCY || 1)));
 const startCursor = Math.max(0, Number(env.PREVIEW_START_CURSOR || 0));
 const trialOnly = String(env.PREVIEW_TRIAL_ONLY || '').toLowerCase() === 'true';
 const pageWidth = Math.max(720, Number(env.PREVIEW_IMAGE_WIDTH || 1440));
@@ -295,12 +296,10 @@ async function processJob(job, state, mode = 'full') {
 
 async function runPass(state, mode, maxAttempts, initialCursor = 0) {
   let cursor = initialCursor;
-  let processed = 0;
-  let attempted = 0;
   let scanned = 0;
-  const failures = [];
+  const pendingJobs = [];
 
-  while (attempted < maxAttempts) {
+  while (pendingJobs.length < maxAttempts) {
     const page = await api(
       `/api/internal/preview-worker/jobs?cursor=${cursor}&limit=50`,
     );
@@ -313,12 +312,27 @@ async function runPass(state, mode, maxAttempts, initialCursor = 0) {
       const progressSignature = mode === 'trial' ? `${signature}:trial` : signature;
       const modeComplete = await isModeComplete(job, mode);
       if (modeComplete) continue;
-      if (state.completed[progressSignature] && !modeComplete) {
+      if (state.completed[progressSignature]) {
         delete state.completed[progressSignature];
         delete state.inProgress[progressSignature];
         saveState(state);
       }
-      attempted += 1;
+      pendingJobs.push(job);
+      if (pendingJobs.length >= maxAttempts) break;
+    }
+    if (!page.hasMore) break;
+  }
+
+  let processed = 0;
+  let nextJobIndex = 0;
+  const failures = [];
+
+  const runNextJob = async () => {
+    while (nextJobIndex < pendingJobs.length) {
+      const job = pendingJobs[nextJobIndex];
+      nextJobIndex += 1;
+      const signature = `${job.fileId}:${job.pageCountVersion}`;
+      const progressSignature = mode === 'trial' ? `${signature}:trial` : signature;
       try {
         const result = await processJob(job, state, mode);
         if (result.skipped) {
@@ -341,12 +355,24 @@ async function runPass(state, mode, maxAttempts, initialCursor = 0) {
         failures.push({ fileId: job.fileId, message });
         console.error(`[失败] file=${job.fileId}: ${message}`);
       }
-      if (attempted >= maxAttempts) break;
     }
-    if (!page.hasMore) break;
-  }
+  };
 
-  return { mode, scanned, attempted, processed, failures };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, pendingJobs.length) },
+      () => runNextJob(),
+    ),
+  );
+
+  return {
+    mode,
+    concurrency,
+    scanned,
+    attempted: pendingJobs.length,
+    processed,
+    failures,
+  };
 }
 
 async function run() {
