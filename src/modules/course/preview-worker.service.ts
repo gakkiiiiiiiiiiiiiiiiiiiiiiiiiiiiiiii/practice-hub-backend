@@ -42,6 +42,7 @@ export class PreviewWorkerService {
         'file.course_id AS course_id',
         'file.display_name AS display_name',
         'file.file_url AS file_url',
+        'file.file_type AS file_type',
         'file.file_size AS file_size',
         'file.file_page_count AS file_page_count',
         'file.file_page_count_key AS file_page_count_key',
@@ -50,7 +51,9 @@ export class PreviewWorkerService {
       .where('file.id > :cursor', { cursor: safeCursor })
       .andWhere('file.status = 1')
       .andWhere('course.status = 1')
-      .andWhere('LOWER(file.file_type) = :fileType', { fileType: 'pdf' })
+      .andWhere('LOWER(file.file_type) IN (:...fileTypes)', {
+        fileTypes: ['pdf', 'doc', 'docx'],
+      })
       .orderBy('file.id', 'ASC')
       .limit(safeLimit + 1)
       .getRawMany();
@@ -89,6 +92,7 @@ export class PreviewWorkerService {
         courseId,
         displayName: String(row.display_name || ''),
         fileUrl,
+        fileType: String(row.file_type || '').toLowerCase(),
         fileSize: Number(row.file_size || 0),
         cachedPageCount,
         cachedPageCountVersion: String(row.file_page_count_key || ''),

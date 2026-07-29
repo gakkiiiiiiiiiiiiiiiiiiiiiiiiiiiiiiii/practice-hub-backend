@@ -99,6 +99,45 @@ async function readPdfPageCount(pdfPath) {
   return count;
 }
 
+async function normalizeSourceToPdf(job, sourcePath, tmpDir) {
+  const fileType = String(job.fileType || 'pdf').toLowerCase();
+  if (fileType === 'pdf') return sourcePath;
+  if (!['doc', 'docx'].includes(fileType)) {
+    throw new Error(`不支持的资料格式: ${fileType || 'unknown'}`);
+  }
+  await execFileAsync(
+    'libreoffice',
+    [
+      '--headless',
+      '--nologo',
+      '--nodefault',
+      '--nolockcheck',
+      '--nofirststartwizard',
+      '--convert-to',
+      'pdf',
+      '--outdir',
+      tmpDir,
+      sourcePath,
+    ],
+    {
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: 10 * 60 * 1000,
+      env: {
+        ...process.env,
+        HOME: tmpDir,
+      },
+    },
+  );
+  const pdfPath = path.join(
+    tmpDir,
+    `${path.basename(sourcePath, path.extname(sourcePath))}.pdf`,
+  );
+  if (!fs.existsSync(pdfPath) || fs.statSync(pdfPath).size < 1024) {
+    throw new Error(`${fileType.toUpperCase()} 转 PDF 失败`);
+  }
+  return pdfPath;
+}
+
 async function renderPage(pdfPath, pageNum, outputPrefix) {
   await execFileAsync(
     'pdftocairo',
@@ -190,11 +229,15 @@ async function processJob(job, state, mode = 'full') {
   const signature = `${job.fileId}:${job.pageCountVersion}`;
   const progressSignature = mode === 'trial' ? `${signature}:trial` : signature;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `preview-worker-${job.fileId}-`));
-  const pdfPath = path.join(tmpDir, 'source.pdf');
+  const fileType = ['pdf', 'doc', 'docx'].includes(String(job.fileType || '').toLowerCase())
+    ? String(job.fileType).toLowerCase()
+    : 'pdf';
+  const sourcePath = path.join(tmpDir, `source.${fileType}`);
   try {
-    const source = await downloadSource(job, pdfPath);
+    const source = await downloadSource(job, sourcePath);
     if (source.skipped) return { signature, skipped: true, reason: source.reason };
 
+    const pdfPath = await normalizeSourceToPdf(job, sourcePath, tmpDir);
     const pageCount = await readPdfPageCount(pdfPath);
     await reportPageCount(job, pageCount);
     const lastPage = mode === 'trial'
