@@ -15,6 +15,10 @@ const apiBase = required(env, 'WORKER_API_BASE_URL').replace(/\/$/, '');
 const workerToken = required(env, 'PREVIEW_WORKER_TOKEN');
 const stateFile = env.WORKER_STATE_FILE || '/var/lib/practice-hub-worker/preview-state.json';
 const maxJobsPerRun = Math.max(1, Number(env.PREVIEW_MAX_JOBS_PER_RUN || 1));
+const maxTrialJobsPerRun = Math.max(
+  maxJobsPerRun,
+  Number(env.PREVIEW_MAX_TRIAL_JOBS_PER_RUN || 20),
+);
 const pageWidth = Math.max(720, Number(env.PREVIEW_IMAGE_WIDTH || 1440));
 const jpegQuality = Math.min(95, Math.max(60, Number(env.PREVIEW_IMAGE_QUALITY || 90)));
 
@@ -244,14 +248,14 @@ async function processJob(job, state, mode = 'full') {
   }
 }
 
-async function runPass(state, mode) {
+async function runPass(state, mode, maxAttempts) {
   let cursor = 0;
   let processed = 0;
   let attempted = 0;
   let scanned = 0;
   const failures = [];
 
-  while (attempted < maxJobsPerRun) {
+  while (attempted < maxAttempts) {
     const page = await api(
       `/api/internal/preview-worker/jobs?cursor=${cursor}&limit=50`,
     );
@@ -292,7 +296,7 @@ async function runPass(state, mode) {
         failures.push({ fileId: job.fileId, message });
         console.error(`[失败] file=${job.fileId}: ${message}`);
       }
-      if (attempted >= maxJobsPerRun) break;
+      if (attempted >= maxAttempts) break;
     }
     if (!page.hasMore) break;
   }
@@ -305,10 +309,10 @@ async function run() {
   const state = loadState();
   // 先让所有付费资料尽快具备前几页试读能力，再继续生成耗时较长的完整缓存。
   // 避免一个数百页 PDF 阻塞后续所有课程的试读。
-  const trialResult = await runPass(state, 'trial');
+  const trialResult = await runPass(state, 'trial', maxTrialJobsPerRun);
   const result = trialResult.attempted > 0
     ? trialResult
-    : await runPass(state, 'full');
+    : await runPass(state, 'full', maxJobsPerRun);
 
   console.log(
     JSON.stringify({

@@ -18,3 +18,4 @@
 - `PREVIEW_WORKER_TOKEN`
 
 可通过 `PREVIEW_MAX_JOBS_PER_RUN` 控制每轮处理文件数，2C2G 实例建议保持为 `1`。
+试读补齐阶段默认每轮串行处理 20 份资料，可通过 `PREVIEW_MAX_TRIAL_JOBS_PER_RUN` 调整。
