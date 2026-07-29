@@ -163,6 +163,25 @@ async function reportPageCount(job, pageCount) {
   });
 }
 
+async function isModeComplete(job, mode) {
+  const reported = mode === 'trial' ? job.trialCacheComplete : job.fullCacheComplete;
+  if (typeof reported === 'boolean') return reported;
+
+  // 兼容尚未升级的业务后端：直接通过单页上传接口检查目标对象是否存在。
+  const pageNum = mode === 'trial'
+    ? Math.min(Math.max(0, Number(job.trialPages) || 0), Math.max(0, Number(job.cachedPageCount) || 0))
+    : Math.max(0, Number(job.cachedPageCount) || 0);
+  if (pageNum < 1 || String(job.cachedPageCountVersion || '') !== String(job.pageCountVersion || '')) {
+    return false;
+  }
+  const signed = await getUploadTargets(job, pageNum);
+  const expectedPrefix = mode === 'trial' ? job.trialCachePrefix : job.fullCachePrefix;
+  const target = (signed.uploads || []).find((upload) =>
+    String(upload.path || '').startsWith(`${expectedPrefix}/`),
+  );
+  return Boolean(target?.exists);
+}
+
 async function processJob(job, state, mode = 'full') {
   const signature = `${job.fileId}:${job.pageCountVersion}`;
   const progressSignature = mode === 'trial' ? `${signature}:trial` : signature;
@@ -243,7 +262,7 @@ async function runPass(state, mode) {
       scanned += 1;
       const signature = `${job.fileId}:${job.pageCountVersion}`;
       const progressSignature = mode === 'trial' ? `${signature}:trial` : signature;
-      const modeComplete = mode === 'trial' ? job.trialCacheComplete : job.fullCacheComplete;
+      const modeComplete = await isModeComplete(job, mode);
       if (modeComplete) continue;
       if (state.completed[progressSignature] && !modeComplete) {
         delete state.completed[progressSignature];
