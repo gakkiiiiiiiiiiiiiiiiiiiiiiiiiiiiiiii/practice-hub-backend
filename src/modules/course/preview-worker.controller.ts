@@ -32,10 +32,12 @@ export class PreviewWorkerController {
   async listJobs(
     @Query('cursor') cursor?: string,
     @Query('limit') limit?: string,
+    @Query('provider') provider?: string,
   ) {
     const result = await this.previewWorkerService.listJobs(
       Number(cursor || 0),
       Number(limit || 20),
+      provider === 'cos' ? 'cos' : 'oss',
     );
     return CommonResponseDto.success(result);
   }

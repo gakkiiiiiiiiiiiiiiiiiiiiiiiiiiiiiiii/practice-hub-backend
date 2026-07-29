@@ -22,6 +22,9 @@ const maxTrialJobsPerRun = Math.max(
 const concurrency = Math.min(4, Math.max(1, Number(env.PREVIEW_CONCURRENCY || 1)));
 const startCursor = Math.max(0, Number(env.PREVIEW_START_CURSOR || 0));
 const trialOnly = String(env.PREVIEW_TRIAL_ONLY || '').toLowerCase() === 'true';
+const sourceProvider = String(env.PREVIEW_SOURCE_PROVIDER || 'oss').toLowerCase() === 'cos'
+  ? 'cos'
+  : 'oss';
 const pageWidth = Math.max(720, Number(env.PREVIEW_IMAGE_WIDTH || 1440));
 const jpegQuality = Math.min(95, Math.max(60, Number(env.PREVIEW_IMAGE_QUALITY || 90)));
 
@@ -179,6 +182,7 @@ async function getUploadTargets(job, pageNum) {
       fileUrl: job.fileUrl,
       pageCountVersion: job.pageCountVersion,
       pageNum,
+      workerProvider: sourceProvider,
     }),
   });
 }
@@ -304,7 +308,7 @@ async function runPass(state, mode, maxAttempts, initialCursor = 0) {
 
   while (pendingJobs.length < maxAttempts) {
     const page = await api(
-      `/api/internal/preview-worker/jobs?cursor=${cursor}&limit=50`,
+      `/api/internal/preview-worker/jobs?cursor=${cursor}&limit=50&provider=${sourceProvider}`,
     );
     const jobs = Array.isArray(page.jobs) ? page.jobs : [];
     if (jobs.length === 0) break;
@@ -394,10 +398,18 @@ async function run() {
       ...result,
     }),
   );
-  if (result.failures.length > 0) process.exitCode = 2;
+  return result;
 }
 
-run().catch((error) => {
-  console.error(`[工作节点终止] ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  run()
+    .then((result) => {
+      if (result.failures.length > 0) process.exitCode = 2;
+    })
+    .catch((error) => {
+      console.error(`[工作节点终止] ${error instanceof Error ? error.message : String(error)}`);
+      process.exit(1);
+    });
+}
+
+module.exports = { run };

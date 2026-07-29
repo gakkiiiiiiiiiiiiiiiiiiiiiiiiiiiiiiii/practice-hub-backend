@@ -691,6 +691,7 @@ export class UploadService {
 	getPreviewWorkerUploadUrl(
 		cloudPath: string,
 		contentType = 'image/jpeg',
+		network: 'internal' | 'public' = 'internal',
 	): {
 		url: string;
 		method: 'PUT';
@@ -703,14 +704,17 @@ export class UploadService {
 		if (!safeKey.startsWith('course-preview-cache/')) {
 			throw new BadRequestException('工作节点仅允许写入课程预览缓存');
 		}
-		if (!this.ossInternal) {
-			throw new BadRequestException('阿里云 OSS 内网配置不完整');
+		const oss = network === 'internal' ? this.ossInternal : this.oss;
+		if (!oss) {
+			throw new BadRequestException(
+				network === 'internal' ? '阿里云 OSS 内网配置不完整' : '阿里云 OSS 配置不完整',
+			);
 		}
 		const headers = {
 			'Content-Type': contentType,
 			'Cache-Control': 'public, max-age=31536000, immutable',
 		};
-		const url = this.ossInternal.signatureUrl(safeKey, {
+		const url = oss.signatureUrl(safeKey, {
 			expires: 15 * 60,
 			method: 'PUT',
 			'Content-Type': contentType,
@@ -742,28 +746,64 @@ export class UploadService {
 		}
 	}
 
-	/**
-	 * 为同地域异步工作节点签发短期 OSS 内网下载地址。
-	 * 旧 COS 地址返回 null，等待资源迁移并完成数据库地址切换后再处理。
-	 */
-	getPreviewWorkerDownloadUrl(fileUrl: string): string | null {
-		if (!this.ossInternal || !fileUrl || typeof fileUrl !== 'string') return null;
+	async resolvePreviewWorkerSource(fileUrl: string): Promise<'oss' | 'cos' | null> {
+		if (!fileUrl || typeof fileUrl !== 'string') return null;
+		const key = this.extractKeyFromUrl(fileUrl);
+		if (!key) return null;
+		if (this.isTencentStorageUrl(fileUrl)) return 'cos';
 		try {
-			const parsed = new URL(fileUrl);
-			const publicHost = new URL(this.publicBaseUrl).hostname;
-			const originHost = new URL(this.originBaseUrl).hostname;
-			const allowedOssHosts = new Set([
-				publicHost,
-				originHost,
-				`${this.bucket}.${this.region}.aliyuncs.com`,
-				`${this.bucket}.oss-accelerate.aliyuncs.com`,
-			]);
-			if (!allowedOssHosts.has(parsed.hostname)) return null;
-			const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+			await this.requireOss().head(this.normalizeObjectKey(key));
+			return 'oss';
+		} catch {}
+		try {
+			await this.cos.headObject({
+				Bucket: this.legacyCosBucket,
+				Region: this.cosRegion,
+				Key: this.normalizeObjectKey(key),
+			});
+			return 'cos';
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * 为异步工作节点签发短期源文件下载地址。
+	 * OSS 节点走上海内网 Endpoint；COS 节点走腾讯云上海内网域名。
+	 */
+	async getPreviewWorkerDownloadUrl(
+		fileUrl: string,
+		sourceProvider: 'oss' | 'cos',
+	): Promise<string | null> {
+		if (!fileUrl || typeof fileUrl !== 'string') return null;
+		try {
+			const key = this.extractKeyFromUrl(fileUrl);
 			if (!key || key.includes('..') || key.includes('\\')) return null;
-			return this.ossInternal.signatureUrl(this.normalizeObjectKey(key), {
-				expires: 15 * 60,
-				method: 'GET',
+			const safeKey = this.normalizeObjectKey(key);
+			if (sourceProvider === 'oss') {
+				if (!this.ossInternal) return null;
+				return this.ossInternal.signatureUrl(safeKey, {
+					expires: 15 * 60,
+					method: 'GET',
+				});
+			}
+			return await new Promise<string | null>((resolve, reject) => {
+				this.cos.getObjectUrl(
+					{
+						Bucket: this.legacyCosBucket,
+						Region: this.cosRegion,
+						Key: safeKey,
+						Sign: true,
+						Method: 'GET',
+						Expires: 15 * 60,
+						Protocol: 'https:',
+						Domain: `{Bucket}.cos-internal.{Region}.tencentcos.cn`,
+					},
+					(error, result) => {
+						if (error) reject(error);
+						else resolve(result?.Url || null);
+					},
+				);
 			});
 		} catch {
 			return null;

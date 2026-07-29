@@ -118,6 +118,61 @@ describe('UploadService storage provider credentials', () => {
 		now.mockRestore();
 	});
 
+	it('routes migrated preview sources to the OSS worker', async () => {
+		const ossHead = jest.spyOn((service as any).oss, 'head').mockResolvedValue({});
+		const cosHead = jest.spyOn((service as any).cos, 'headObject');
+
+		await expect(
+			service.resolvePreviewWorkerSource(
+				'https://cdn.example.com/course-files/source.pdf',
+			),
+		).resolves.toBe('oss');
+		expect(ossHead).toHaveBeenCalledWith('course-files/source.pdf');
+		expect(cosHead).not.toHaveBeenCalled();
+	});
+
+	it('routes CDN paths missing from OSS to the COS worker', async () => {
+		jest.spyOn((service as any).oss, 'head').mockRejectedValue(new Error('NoSuchKey'));
+		const cosHead = jest.spyOn((service as any).cos, 'headObject').mockResolvedValue({});
+
+		await expect(
+			service.resolvePreviewWorkerSource(
+				'https://cdn.example.com/course-files/legacy.pdf',
+			),
+		).resolves.toBe('cos');
+		expect(cosHead).toHaveBeenCalledWith({
+			Bucket: 'example-cos-bucket',
+			Region: 'ap-shanghai',
+			Key: 'course-files/legacy.pdf',
+		});
+	});
+
+	it('signs COS preview downloads with the Tencent internal domain', async () => {
+		const getObjectUrl = jest
+			.spyOn((service as any).cos, 'getObjectUrl')
+			.mockImplementation((_options: any, callback: any) => {
+				callback(null, {
+					Url: 'https://example-cos-bucket.cos-internal.ap-shanghai.tencentcos.cn/course-files/legacy.pdf?q-sign=test',
+				});
+			});
+
+		await expect(
+			service.getPreviewWorkerDownloadUrl(
+				'https://cdn.example.com/course-files/legacy.pdf',
+				'cos',
+			),
+		).resolves.toContain('.cos-internal.ap-shanghai.tencentcos.cn/');
+		expect(getObjectUrl).toHaveBeenCalledWith(
+			expect.objectContaining({
+				Bucket: 'example-cos-bucket',
+				Region: 'ap-shanghai',
+				Key: 'course-files/legacy.pdf',
+				Domain: '{Bucket}.cos-internal.{Region}.tencentcos.cn',
+			}),
+			expect.any(Function),
+		);
+	});
+
 	it('signs generated preview cache URLs on the CDN domain', () => {
 		const now = jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
 		const key = 'course-preview-cache/4/2/full-version/19.jpg';

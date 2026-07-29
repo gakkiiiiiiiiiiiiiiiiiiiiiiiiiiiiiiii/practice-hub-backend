@@ -25,3 +25,10 @@
 完整预览只会为已有有效课程授权、有效套餐权限或免费课程生成；其他启用课程仅生成试读页。
 需要立即补齐指定资料时，可将 `PREVIEW_START_CURSOR` 设置为目标文件 ID 减 1，
 并将 `PREVIEW_TRIAL_ONLY=true`、`PREVIEW_MAX_TRIAL_JOBS_PER_RUN=1`，只生成该资料的试读页。
+
+`PREVIEW_SOURCE_PROVIDER` 用于按源文件位置分流：
+
+- `oss`：阿里云上海节点，只读取 OSS 源文件并通过 OSS 内网上传预览图；
+- `cos`：腾讯云上海节点，只读取仍在 COS 的源文件，并通过公网 PUT 将预览图写入 OSS。
+
+腾讯云节点使用同地域 COS 源站域名，域名会在腾讯云上海环境解析为内网地址。

@@ -19,10 +19,16 @@ export interface PreviewWorkerUploadRequest {
   fileUrl: string;
   pageCountVersion: string;
   pageNum: number;
+  workerProvider?: 'oss' | 'cos';
 }
 
 @Injectable()
 export class PreviewWorkerService {
+  private readonly sourceProviderCache = new Map<
+    string,
+    { provider: 'oss' | 'cos' | null; expiresAt: number }
+  >();
+
   constructor(
     @InjectRepository(CourseFile)
     private readonly courseFileRepository: Repository<CourseFile>,
@@ -87,40 +93,94 @@ export class PreviewWorkerService {
     return Number(row?.full_preview_eligible || 0) === 1;
   }
 
-  async listJobs(cursor = 0, limit = 20) {
+  private async resolveSourceProvider(fileUrl: string) {
+    const cacheKey = String(fileUrl || '');
+    const cached = this.sourceProviderCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.provider;
+    const provider = await this.uploadService.resolvePreviewWorkerSource(fileUrl);
+    if (this.sourceProviderCache.size >= 10_000) {
+      this.sourceProviderCache.clear();
+    }
+    this.sourceProviderCache.set(cacheKey, {
+      provider,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    });
+    return provider;
+  }
+
+  async listJobs(
+    cursor = 0,
+    limit = 20,
+    workerProvider: 'oss' | 'cos' = 'oss',
+  ) {
     const safeCursor = Number.isInteger(cursor) && cursor > 0 ? cursor : 0;
     const safeLimit = Number.isInteger(limit) ? Math.min(100, Math.max(1, limit)) : 20;
-    const rows = await this.courseFileRepository
-      .createQueryBuilder('file')
-      .innerJoin(Course, 'course', 'course.id = file.course_id')
-      .select([
-        'file.id AS file_id',
-        'file.course_id AS course_id',
-        'file.display_name AS display_name',
-        'file.file_url AS file_url',
-        'file.file_type AS file_type',
-        'file.file_size AS file_size',
-        'file.file_page_count AS file_page_count',
-        'file.file_page_count_key AS file_page_count_key',
-        'course.trial_preview_page_count AS trial_preview_page_count',
-      ])
-      .addSelect(
-        `CASE WHEN ${this.getFullPreviewDemandSql('course')} THEN 1 ELSE 0 END`,
-        'full_preview_eligible',
-      )
-      .where('file.id > :cursor', { cursor: safeCursor })
-      .andWhere('file.status = 1')
-      .andWhere('course.status = 1')
-      .andWhere('LOWER(file.file_type) IN (:...fileTypes)', {
-        fileTypes: ['pdf', 'doc', 'docx'],
-      })
-      .orderBy('file.id', 'ASC')
-      .limit(safeLimit + 1)
-      .getRawMany();
+    const targetProvider = workerProvider === 'cos' ? 'cos' : 'oss';
+    const batchSize = Math.max(50, safeLimit);
+    const page: Array<{ row: any; sourceProvider: 'oss' | 'cos' }> = [];
+    let scanCursor = safeCursor;
+    let hasMore = true;
 
-    const hasMore = rows.length > safeLimit;
-    const page = rows.slice(0, safeLimit);
-    const jobs = await Promise.all(page.map(async (row) => {
+    while (page.length < safeLimit && hasMore) {
+      const rows = await this.courseFileRepository
+        .createQueryBuilder('file')
+        .innerJoin(Course, 'course', 'course.id = file.course_id')
+        .select([
+          'file.id AS file_id',
+          'file.course_id AS course_id',
+          'file.display_name AS display_name',
+          'file.file_url AS file_url',
+          'file.file_type AS file_type',
+          'file.file_size AS file_size',
+          'file.file_page_count AS file_page_count',
+          'file.file_page_count_key AS file_page_count_key',
+          'course.trial_preview_page_count AS trial_preview_page_count',
+        ])
+        .addSelect(
+          `CASE WHEN ${this.getFullPreviewDemandSql('course')} THEN 1 ELSE 0 END`,
+          'full_preview_eligible',
+        )
+        .where('file.id > :cursor', { cursor: scanCursor })
+        .andWhere('file.status = 1')
+        .andWhere('course.status = 1')
+        .andWhere('LOWER(file.file_type) IN (:...fileTypes)', {
+          fileTypes: ['pdf', 'doc', 'docx'],
+        })
+        .orderBy('file.id', 'ASC')
+        .limit(batchSize)
+        .getRawMany();
+
+      if (rows.length === 0) {
+        hasMore = false;
+        break;
+      }
+      const resolvedProviders: Array<'oss' | 'cos' | null> = [];
+      for (let index = 0; index < rows.length; index += 10) {
+        resolvedProviders.push(
+          ...(await Promise.all(
+            rows
+              .slice(index, index + 10)
+              .map((row) => this.resolveSourceProvider(String(row.file_url || ''))),
+          )),
+        );
+      }
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        scanCursor = Number(row.file_id) || scanCursor;
+        const sourceProvider = resolvedProviders[index];
+        if (sourceProvider === targetProvider) {
+          page.push({ row, sourceProvider });
+          if (page.length >= safeLimit) break;
+        }
+      }
+      if (page.length >= safeLimit) {
+        hasMore = true;
+      } else {
+        hasMore = rows.length === batchSize;
+      }
+    }
+
+    const jobs = await Promise.all(page.map(async ({ row, sourceProvider }) => {
       const fileUrl = String(row.file_url || '');
       const versions = this.courseService.getPreviewWorkerCacheVersions(fileUrl);
       const fileId = Number(row.file_id);
@@ -158,20 +218,25 @@ export class PreviewWorkerService {
         cachedPageCountVersion: String(row.file_page_count_key || ''),
         pageCountVersion: versions.pageCount,
         trialPages,
+        sourceProvider,
         fullPreviewEligible: Number(row.full_preview_eligible || 0) === 1,
         cacheComplete,
         fullCacheComplete,
         trialCacheComplete,
         fullCachePrefix: `course-preview-cache/${courseId}/${fileId}/${versions.full}`,
         trialCachePrefix: `course-preview-cache/${courseId}/${fileId}/${versions.trial}`,
-        sourceUrl: this.uploadService.getPreviewWorkerDownloadUrl(fileUrl),
+        sourceUrl: await this.uploadService.getPreviewWorkerDownloadUrl(
+          fileUrl,
+          sourceProvider,
+        ),
       };
     }));
 
     return {
       jobs,
-      nextCursor: jobs.length > 0 ? jobs[jobs.length - 1].fileId : safeCursor,
+      nextCursor: jobs.length > 0 ? jobs[jobs.length - 1].fileId : scanCursor,
       hasMore,
+      workerProvider: targetProvider,
     };
   }
 
@@ -219,7 +284,11 @@ export class PreviewWorkerService {
       pageNum,
       uploads: await Promise.all(
         keys.map(async (key) => ({
-          ...this.uploadService.getPreviewWorkerUploadUrl(key, 'image/jpeg'),
+          ...this.uploadService.getPreviewWorkerUploadUrl(
+            key,
+            'image/jpeg',
+            input.workerProvider === 'cos' ? 'public' : 'internal',
+          ),
           exists: await this.uploadService.previewCacheObjectExists(key),
         })),
       ),

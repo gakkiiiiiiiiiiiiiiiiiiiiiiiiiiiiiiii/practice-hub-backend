@@ -1,0 +1,31 @@
+FROM node:20-alpine
+
+RUN apk add --no-cache \
+      poppler-utils \
+      libreoffice-writer \
+      font-wqy-zenhei \
+      fontconfig \
+    && fc-cache -f \
+    && rm -rf /var/cache/apk/* /usr/share/man /usr/share/doc
+
+WORKDIR /app
+
+COPY ops-worker/env.js ./
+COPY ops-worker/preview-worker.js ./
+COPY ops-worker/worker-server.js ./
+
+RUN mkdir -p /var/lib/practice-hub-worker \
+    && chown -R node:node /app /var/lib/practice-hub-worker
+
+USER node
+
+ENV NODE_ENV=production
+ENV PORT=8080
+ENV PREVIEW_SOURCE_PROVIDER=cos
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+  CMD node -e "require('http').get('http://127.0.0.1:8080/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+
+CMD ["node", "worker-server.js"]
