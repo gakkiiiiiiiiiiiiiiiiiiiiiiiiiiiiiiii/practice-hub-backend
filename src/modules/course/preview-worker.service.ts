@@ -126,11 +126,17 @@ export class PreviewWorkerService {
     return Number(row?.full_preview_eligible || 0) === 1;
   }
 
-  private async resolveSourceProvider(fileUrl: string) {
-    const cacheKey = String(fileUrl || '');
+  private async resolveSourceProvider(fileUrl: string, fileId: number) {
+    // 阿里云节点保持 2 并发、腾讯云节点提升至 8 并发，因此对双端均有副本的
+    // 历史文件按 2:8 稳定分流。单端文件会自动回退到实际存在的存储服务。
+    const preferredProvider: 'oss' | 'cos' = fileId % 5 === 0 ? 'oss' : 'cos';
+    const cacheKey = `${fileId}:${String(fileUrl || '')}`;
     const cached = this.sourceProviderCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.provider;
-    const provider = await this.uploadService.resolvePreviewWorkerSource(fileUrl);
+    const provider = await this.uploadService.resolvePreviewWorkerSource(
+      fileUrl,
+      preferredProvider,
+    );
     if (this.sourceProviderCache.size >= 10_000) {
       this.sourceProviderCache.clear();
     }
@@ -201,7 +207,12 @@ export class PreviewWorkerService {
           ...(await Promise.all(
             rows
               .slice(index, index + 10)
-              .map((row) => this.resolveSourceProvider(String(row.file_url || ''))),
+              .map((row) =>
+                this.resolveSourceProvider(
+                  String(row.file_url || ''),
+                  Number(row.file_id),
+                ),
+              ),
           )),
         );
       }

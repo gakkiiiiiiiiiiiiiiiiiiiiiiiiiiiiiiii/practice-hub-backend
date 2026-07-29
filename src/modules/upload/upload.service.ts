@@ -746,23 +746,33 @@ export class UploadService {
 		}
 	}
 
-	async resolvePreviewWorkerSource(fileUrl: string): Promise<'oss' | 'cos' | null> {
+	async resolvePreviewWorkerSource(
+		fileUrl: string,
+		preferredProvider: 'oss' | 'cos' = 'cos',
+	): Promise<'oss' | 'cos' | null> {
 		if (!fileUrl || typeof fileUrl !== 'string') return null;
 		const key = this.extractKeyFromUrl(fileUrl);
 		if (!key) return null;
-		if (this.isTencentStorageUrl(fileUrl)) return 'cos';
-		try {
-			await this.cos.headObject({
-				Bucket: this.legacyCosBucket,
-				Region: this.cosRegion,
-				Key: this.normalizeObjectKey(key),
-			});
-			return 'cos';
-		} catch {}
-		try {
-			await this.requireOss().head(this.normalizeObjectKey(key));
-			return 'oss';
-		} catch {}
+		const safeKey = this.normalizeObjectKey(key);
+		const exists = async (provider: 'oss' | 'cos') => {
+			try {
+				if (provider === 'oss') {
+					await this.requireOss().head(safeKey);
+				} else {
+					await this.cos.headObject({
+						Bucket: this.legacyCosBucket,
+						Region: this.cosRegion,
+						Key: safeKey,
+					});
+				}
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		const fallbackProvider = preferredProvider === 'oss' ? 'cos' : 'oss';
+		if (await exists(preferredProvider)) return preferredProvider;
+		if (await exists(fallbackProvider)) return fallbackProvider;
 		return null;
 	}
 

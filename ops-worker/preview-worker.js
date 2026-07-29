@@ -19,7 +19,7 @@ const maxTrialJobsPerRun = Math.max(
   maxJobsPerRun,
   Number(env.PREVIEW_MAX_TRIAL_JOBS_PER_RUN || 20),
 );
-const concurrency = Math.min(4, Math.max(1, Number(env.PREVIEW_CONCURRENCY || 1)));
+const concurrency = Math.min(8, Math.max(1, Number(env.PREVIEW_CONCURRENCY || 1)));
 const startCursor = Math.max(0, Number(env.PREVIEW_START_CURSOR || 0));
 const trialOnly = String(env.PREVIEW_TRIAL_ONLY || '').toLowerCase() === 'true';
 const sourceProvider = String(env.PREVIEW_SOURCE_PROVIDER || 'oss').toLowerCase() === 'cos'

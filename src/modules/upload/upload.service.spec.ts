@@ -135,6 +135,20 @@ describe('UploadService storage provider credentials', () => {
 		expect(ossHead).not.toHaveBeenCalled();
 	});
 
+	it('routes a migrated legacy source to the OSS worker when OSS is preferred', async () => {
+		const ossHead = jest.spyOn((service as any).oss, 'head').mockResolvedValue({});
+		const cosHead = jest.spyOn((service as any).cos, 'headObject').mockResolvedValue({});
+
+		await expect(
+			service.resolvePreviewWorkerSource(
+				'https://example-cos-bucket.tcb.qcloud.la/course-files/migrated.pdf',
+				'oss',
+			),
+		).resolves.toBe('oss');
+		expect(ossHead).toHaveBeenCalledWith('course-files/migrated.pdf');
+		expect(cosHead).not.toHaveBeenCalled();
+	});
+
 	it('routes COS-missing preview sources to the OSS worker', async () => {
 		const cosHead = jest
 			.spyOn((service as any).cos, 'headObject')
