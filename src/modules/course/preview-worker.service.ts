@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
 import { CourseFile } from '../../database/entities/course-file.entity';
+import { SystemConfig } from '../../database/entities/system-config.entity';
 import { CourseFileService } from './course-file.service';
 import { CourseService } from './course.service';
 import { UploadService } from '../upload/upload.service';
@@ -24,6 +25,7 @@ export interface PreviewWorkerUploadRequest {
 
 @Injectable()
 export class PreviewWorkerService {
+  private skippedFileIdsCache: { ids: number[]; expiresAt: number } | null = null;
   private readonly sourceProviderCache = new Map<
     string,
     { provider: 'oss' | 'cos' | null; expiresAt: number }
@@ -32,10 +34,41 @@ export class PreviewWorkerService {
   constructor(
     @InjectRepository(CourseFile)
     private readonly courseFileRepository: Repository<CourseFile>,
+    @InjectRepository(SystemConfig)
+    private readonly systemConfigRepository: Repository<SystemConfig>,
     private readonly courseFileService: CourseFileService,
     private readonly courseService: CourseService,
     private readonly uploadService: UploadService,
   ) {}
+
+  private async getSkippedFileIds() {
+    if (this.skippedFileIdsCache && this.skippedFileIdsCache.expiresAt > Date.now()) {
+      return this.skippedFileIdsCache.ids;
+    }
+    const config = await this.systemConfigRepository.findOne({
+      where: { configKey: 'preview_worker_skipped_files' },
+      select: ['configValue'],
+    });
+    let ids: number[] = [];
+    try {
+      const parsed = JSON.parse(config?.configValue || '{}');
+      const files = Array.isArray(parsed) ? parsed : parsed?.files;
+      if (Array.isArray(files)) {
+        ids = Array.from(
+          new Set(
+            files
+              .map((item) => Number(typeof item === 'object' ? item?.fileId : item))
+              .filter((fileId) => Number.isInteger(fileId) && fileId > 0),
+          ),
+        );
+      }
+    } catch {}
+    this.skippedFileIdsCache = {
+      ids,
+      expiresAt: Date.now() + 30_000,
+    };
+    return ids;
+  }
 
   private getFullPreviewDemandSql(courseAlias = 'course') {
     return `(
@@ -116,6 +149,7 @@ export class PreviewWorkerService {
     const safeCursor = Number.isInteger(cursor) && cursor > 0 ? cursor : 0;
     const safeLimit = Number.isInteger(limit) ? Math.min(100, Math.max(1, limit)) : 20;
     const targetProvider = workerProvider === 'cos' ? 'cos' : 'oss';
+    const skippedFileIds = await this.getSkippedFileIds();
     const batchSize = Math.max(50, safeLimit);
     const page: Array<{ row: any; sourceProvider: 'oss' | 'cos' }> = [];
     let scanCursor = safeCursor;
@@ -144,6 +178,12 @@ export class PreviewWorkerService {
         .where('file.id > :cursor', { cursor: scanCursor })
         .andWhere('file.status = 1')
         .andWhere('course.status = 1')
+        .andWhere(
+          skippedFileIds.length > 0
+            ? 'file.id NOT IN (:...skippedFileIds)'
+            : '1 = 1',
+          skippedFileIds.length > 0 ? { skippedFileIds } : {},
+        )
         .andWhere('LOWER(file.file_type) IN (:...fileTypes)', {
           fileTypes: ['pdf', 'doc', 'docx'],
         })
