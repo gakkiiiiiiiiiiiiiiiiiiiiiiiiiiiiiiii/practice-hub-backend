@@ -752,19 +752,18 @@ export class UploadService {
 		if (!key) return null;
 		if (this.isTencentStorageUrl(fileUrl)) return 'cos';
 		try {
-			await this.requireOss().head(this.normalizeObjectKey(key));
-			return 'oss';
-		} catch {}
-		try {
 			await this.cos.headObject({
 				Bucket: this.legacyCosBucket,
 				Region: this.cosRegion,
 				Key: this.normalizeObjectKey(key),
 			});
 			return 'cos';
-		} catch {
-			return null;
-		}
+		} catch {}
+		try {
+			await this.requireOss().head(this.normalizeObjectKey(key));
+			return 'oss';
+		} catch {}
+		return null;
 	}
 
 	/**

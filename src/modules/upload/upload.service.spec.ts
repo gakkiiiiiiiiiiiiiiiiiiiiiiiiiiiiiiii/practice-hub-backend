@@ -118,33 +118,40 @@ describe('UploadService storage provider credentials', () => {
 		now.mockRestore();
 	});
 
-	it('routes migrated preview sources to the OSS worker', async () => {
+	it('routes preview sources to the COS worker whenever COS still has the object', async () => {
 		const ossHead = jest.spyOn((service as any).oss, 'head').mockResolvedValue({});
-		const cosHead = jest.spyOn((service as any).cos, 'headObject');
+		const cosHead = jest.spyOn((service as any).cos, 'headObject').mockResolvedValue({});
 
 		await expect(
 			service.resolvePreviewWorkerSource(
 				'https://cdn.example.com/course-files/source.pdf',
 			),
-		).resolves.toBe('oss');
-		expect(ossHead).toHaveBeenCalledWith('course-files/source.pdf');
-		expect(cosHead).not.toHaveBeenCalled();
-	});
-
-	it('routes CDN paths missing from OSS to the COS worker', async () => {
-		jest.spyOn((service as any).oss, 'head').mockRejectedValue(new Error('NoSuchKey'));
-		const cosHead = jest.spyOn((service as any).cos, 'headObject').mockResolvedValue({});
-
-		await expect(
-			service.resolvePreviewWorkerSource(
-				'https://cdn.example.com/course-files/legacy.pdf',
-			),
 		).resolves.toBe('cos');
 		expect(cosHead).toHaveBeenCalledWith({
 			Bucket: 'example-cos-bucket',
 			Region: 'ap-shanghai',
-			Key: 'course-files/legacy.pdf',
+			Key: 'course-files/source.pdf',
 		});
+		expect(ossHead).not.toHaveBeenCalled();
+	});
+
+	it('routes COS-missing preview sources to the OSS worker', async () => {
+		const cosHead = jest
+			.spyOn((service as any).cos, 'headObject')
+			.mockRejectedValue(new Error('NoSuchKey'));
+		const ossHead = jest.spyOn((service as any).oss, 'head').mockResolvedValue({});
+
+		await expect(
+			service.resolvePreviewWorkerSource(
+				'https://cdn.example.com/course-files/migrated.pdf',
+			),
+		).resolves.toBe('oss');
+		expect(cosHead).toHaveBeenCalledWith({
+			Bucket: 'example-cos-bucket',
+			Region: 'ap-shanghai',
+			Key: 'course-files/migrated.pdf',
+		});
+		expect(ossHead).toHaveBeenCalledWith('course-files/migrated.pdf');
 	});
 
 	it('signs COS preview downloads with the Tencent internal domain', async () => {
