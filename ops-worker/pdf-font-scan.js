@@ -13,6 +13,8 @@ const maxBytes = Math.max(1, Number(process.argv[3] || 10 * 1024 * 1024));
 const concurrency = Math.min(16, Math.max(1, Number(process.argv[4] || 6)));
 const fontWarningPattern =
   /Missing language pack|Unknown font tag|No font in show/iu;
+const incompatibleFontPattern =
+  /FzBookMaker|GBK-EUC-H\s+no\s+(?:no|yes)\s+no/iu;
 
 if (!inventoryPath) {
   throw new Error('用法: node pdf-font-scan.js <inventory.json> [maxBytes] [concurrency]');
@@ -57,6 +59,24 @@ async function inspect(item, rootDir) {
   const outputBase = path.join(workDir, 'page');
   try {
     await client.get(key, sourcePath);
+    let fontStructureWarning = '';
+    try {
+      const fonts = await execFileAsync(
+        'pdffonts',
+        [sourcePath],
+        { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
+      );
+      const fontOutput = `${fonts.stdout || ''}\n${fonts.stderr || ''}`;
+      if (incompatibleFontPattern.test(fontOutput)) {
+        fontStructureWarning = fontOutput
+          .split(/\r?\n/)
+          .filter((line) => incompatibleFontPattern.test(line))
+          .slice(0, 20)
+          .join('\n');
+      }
+    } catch (_) {
+      // 渲染测试会继续检查无法被 pdffonts 解析的文件。
+    }
     try {
       const result = await execFileAsync(
         'pdftocairo',
@@ -76,16 +96,22 @@ async function inspect(item, rootDir) {
       );
       const stderr = String(result.stderr || '');
       return {
-        outcome: fontWarningPattern.test(stderr) ? 'suspect' : 'ok',
+        outcome:
+          fontStructureWarning || fontWarningPattern.test(stderr)
+            ? 'suspect'
+            : 'ok',
         size,
-        warning: stderr.trim().slice(0, 1_000),
+        warning: (fontStructureWarning || stderr).trim().slice(0, 2_000),
       };
     } catch (error) {
       const stderr = String(error.stderr || error.message || '');
       return {
-        outcome: fontWarningPattern.test(stderr) ? 'suspect' : 'render_error',
+        outcome:
+          fontStructureWarning || fontWarningPattern.test(stderr)
+            ? 'suspect'
+            : 'render_error',
         size,
-        warning: stderr.trim().slice(0, 1_000),
+        warning: (fontStructureWarning || stderr).trim().slice(0, 2_000),
       };
     }
   } finally {
