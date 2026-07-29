@@ -787,6 +787,16 @@ export class UploadService {
 				});
 			}
 			return await new Promise<string | null>((resolve, reject) => {
+				const configuredExpires = Number(
+					this.configService.get<string>(
+						'PREVIEW_COS_DOWNLOAD_URL_EXPIRES_SECONDS',
+						String(24 * 60 * 60),
+					),
+				);
+				const downloadUrlExpires = Math.min(
+					36 * 60 * 60,
+					Math.max(15 * 60, Number.isFinite(configuredExpires) ? configuredExpires : 24 * 60 * 60),
+				);
 				this.cos.getObjectUrl(
 					{
 						Bucket: this.legacyCosBucket,
@@ -794,7 +804,7 @@ export class UploadService {
 						Key: safeKey,
 						Sign: true,
 						Method: 'GET',
-						Expires: 15 * 60,
+						Expires: downloadUrlExpires,
 						Protocol: 'https:',
 						Domain: `{Bucket}.cos-internal.{Region}.tencentcos.cn`,
 					},
