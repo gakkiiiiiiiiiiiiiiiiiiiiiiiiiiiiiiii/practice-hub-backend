@@ -10,7 +10,16 @@ export enum ActivationCodeStatus {
 export enum ActivationCodeTargetType {
 	COURSE = 'course',
 	PACKAGE = 'package',
+	POINTS = 'points',
+	COUPON = 'coupon',
 }
+
+export type ActivationCodeRewardPayload = {
+	points_amount?: number;
+	coupon_amount?: number;
+	coupon_min_amount?: number;
+	coupon_valid_days?: number | null;
+};
 
 export enum ActivationCodeSourceType {
 	ADMIN = 'admin', // 管理后台超级管理员生成
@@ -58,6 +67,9 @@ export class ActivationCode {
 
 	@Column({ nullable: true })
 	target_id: number;
+
+	@Column({ type: 'json', nullable: true })
+	reward_payload: ActivationCodeRewardPayload | null;
 
 	@Column({
 		type: 'tinyint',

@@ -11,6 +11,9 @@ export class CourseType {
 	@Column({ name: 'match_keyword', length: 100 })
 	match_keyword: string;
 
+	@Column({ type: 'json', nullable: true })
+	category_ids: number[] | null;
+
 	@Column({ type: 'tinyint', default: 1 })
 	status: number;
 

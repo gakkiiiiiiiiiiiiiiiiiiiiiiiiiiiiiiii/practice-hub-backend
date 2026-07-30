@@ -250,6 +250,12 @@ export class AdminActivationCodeService {
       if (code.status !== ActivationCodeStatus.USED || !code.used_by_uid) {
         throw new BadRequestException('只能禁用已激活的激活码');
       }
+      if (
+        code.target_type === ActivationCodeTargetType.POINTS ||
+        code.target_type === ActivationCodeTargetType.COUPON
+      ) {
+        throw new BadRequestException('积分或优惠券激活码使用后不可撤销');
+      }
 
       code.status = ActivationCodeStatus.INVALID;
       await queryRunner.manager.save(ActivationCode, code);
@@ -447,11 +453,22 @@ export class AdminActivationCodeService {
         : null;
       return plan ? `${plan.section?.name || '套餐'} - ${plan.name}` : '套餐/VIP';
     }
+    if (targetType === ActivationCodeTargetType.POINTS) {
+      return `${Number(code.reward_payload?.points_amount || 0)}积分`;
+    }
+    if (targetType === ActivationCodeTargetType.COUPON) {
+      const amount = Number(code.reward_payload?.coupon_amount || 0);
+      const minAmount = Number(code.reward_payload?.coupon_min_amount || 0);
+      return `${amount}元${minAmount > 0 ? `满${minAmount}元可用` : '无门槛'}优惠券`;
+    }
     return code.course?.name || '-';
   }
 
   private getTargetTypeText(type: ActivationCodeTargetType) {
-    return type === ActivationCodeTargetType.PACKAGE ? '套餐/VIP' : '课程';
+    if (type === ActivationCodeTargetType.PACKAGE) return '套餐/VIP';
+    if (type === ActivationCodeTargetType.POINTS) return '积分';
+    if (type === ActivationCodeTargetType.COUPON) return '优惠券';
+    return '课程';
   }
 
   private async revokeCodeCourseAuth(manager: any, code: ActivationCode) {

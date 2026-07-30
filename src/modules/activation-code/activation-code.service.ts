@@ -6,6 +6,8 @@ import { AppUser } from '../../database/entities/app-user.entity';
 import { PackagePlan } from '../../database/entities/package-plan.entity';
 import { UserPackageSubscription } from '../../database/entities/user-package-subscription.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
+import { UserPointsLog, UserPointsLogType } from '../../database/entities/user-points-log.entity';
+import { UserCoupon, UserCouponStatus } from '../../database/entities/user-coupon.entity';
 
 @Injectable()
 export class ActivationCodeService {
@@ -64,6 +66,30 @@ export class ActivationCodeService {
             duration_days: plan.duration_days,
           },
         },
+      };
+    }
+    if (targetType === ActivationCodeTargetType.POINTS) {
+      const pointsAmount = this.getPointsAmount(activationCode);
+      return {
+        code: activationCode.code,
+        target_type: targetType,
+        target_id: null,
+        points_amount: pointsAmount,
+        course_id: null,
+        course_name: '',
+      };
+    }
+    if (targetType === ActivationCodeTargetType.COUPON) {
+      const coupon = this.getCouponReward(activationCode);
+      return {
+        code: activationCode.code,
+        target_type: targetType,
+        target_id: null,
+        coupon_amount: coupon.amount,
+        coupon_min_amount: coupon.minAmount,
+        coupon_valid_days: coupon.validDays,
+        course_id: null,
+        course_name: '',
       };
     }
 
@@ -128,6 +154,10 @@ export class ActivationCodeService {
       const targetType = activationCode.target_type || ActivationCodeTargetType.COURSE;
       if (targetType === ActivationCodeTargetType.PACKAGE) {
         await this.grantPackageByCode(queryRunner.manager, userId, activationCode);
+      } else if (targetType === ActivationCodeTargetType.POINTS) {
+        await this.grantPointsByCode(queryRunner.manager, userId, activationCode);
+      } else if (targetType === ActivationCodeTargetType.COUPON) {
+        await this.grantCouponByCode(queryRunner.manager, userId, activationCode);
       } else {
         await this.grantCourseByCode(queryRunner.manager, userId, activationCode);
       }
@@ -139,6 +169,16 @@ export class ActivationCodeService {
         target_type: targetType,
         course_id: activationCode.course_id,
         course_name: activationCode.course?.name || '',
+        ...(targetType === ActivationCodeTargetType.POINTS
+          ? { points_amount: this.getPointsAmount(activationCode) }
+          : {}),
+        ...(targetType === ActivationCodeTargetType.COUPON
+          ? {
+              coupon_amount: this.getCouponReward(activationCode).amount,
+              coupon_min_amount: this.getCouponReward(activationCode).minAmount,
+              coupon_valid_days: this.getCouponReward(activationCode).validDays,
+            }
+          : {}),
       };
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -201,6 +241,74 @@ export class ActivationCodeService {
     }
     await manager.save(UserPackageSubscription, subscription);
     await this.syncUserPackageExpireTime(manager, userId);
+  }
+
+  private async grantPointsByCode(manager: any, userId: number, activationCode: ActivationCode) {
+    const amount = this.getPointsAmount(activationCode);
+    const user = await manager.findOne(AppUser, {
+      where: { id: userId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!user) throw new NotFoundException('用户不存在');
+
+    user.points_balance = Math.max(0, Number(user.points_balance || 0)) + amount;
+    await manager.save(AppUser, user);
+    await manager.save(
+      UserPointsLog,
+      manager.create(UserPointsLog, {
+        userId,
+        changeAmount: amount,
+        balanceAfter: user.points_balance,
+        type: UserPointsLogType.ADJUST,
+        remark: '积分激活码兑换',
+      }),
+    );
+  }
+
+  private async grantCouponByCode(manager: any, userId: number, activationCode: ActivationCode) {
+    const reward = this.getCouponReward(activationCode);
+    let expireTime: Date | null = null;
+    if (reward.validDays !== null) {
+      expireTime = new Date();
+      expireTime.setDate(expireTime.getDate() + reward.validDays);
+    }
+    await manager.save(
+      UserCoupon,
+      manager.create(UserCoupon, {
+        user_id: userId,
+        amount: reward.amount,
+        min_amount: reward.minAmount,
+        status: UserCouponStatus.UNUSED,
+        source: 'activation_code',
+        used_order_id: null,
+        expire_time: expireTime,
+      }),
+    );
+  }
+
+  private getPointsAmount(activationCode: ActivationCode) {
+    const amount = Number(activationCode.reward_payload?.points_amount);
+    if (!Number.isInteger(amount) || amount < 1 || amount > 1000000) {
+      throw new BadRequestException('激活码积分配置无效');
+    }
+    return amount;
+  }
+
+  private getCouponReward(activationCode: ActivationCode) {
+    const amount = Number(activationCode.reward_payload?.coupon_amount);
+    const minAmount = Number(activationCode.reward_payload?.coupon_min_amount || 0);
+    const rawValidDays = activationCode.reward_payload?.coupon_valid_days;
+    const validDays = rawValidDays === null || rawValidDays === undefined ? null : Number(rawValidDays);
+    if (!Number.isFinite(amount) || amount < 1 || amount > 1000000) {
+      throw new BadRequestException('激活码优惠券面额无效');
+    }
+    if (!Number.isFinite(minAmount) || minAmount < 0 || minAmount > 100000000) {
+      throw new BadRequestException('激活码优惠券门槛无效');
+    }
+    if (validDays !== null && (!Number.isInteger(validDays) || validDays < 1 || validDays > 3650)) {
+      throw new BadRequestException('激活码优惠券有效期无效');
+    }
+    return { amount, minAmount, validDays };
   }
 
   private async syncUserPackageExpireTime(manager: any, userId: number) {

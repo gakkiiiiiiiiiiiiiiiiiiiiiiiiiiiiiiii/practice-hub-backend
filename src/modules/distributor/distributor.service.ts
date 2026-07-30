@@ -12,6 +12,7 @@ import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import {
 	ActivationCode,
+	ActivationCodeRewardPayload,
 	ActivationCodeSourceType,
 	ActivationCodeStatus,
 	ActivationCodeTargetType,
@@ -956,7 +957,9 @@ export class DistributorService {
 			list: codes.map((code) => {
 				const targetType = code.target_type || ActivationCodeTargetType.COURSE;
 				const plan = targetType === ActivationCodeTargetType.PACKAGE && code.target_id ? packagePlanMap.get(code.target_id) : null;
-				const targetName = plan ? `${plan.section?.name || '套餐/VIP'} - ${plan.name}` : code.course?.name || '-';
+				const targetName = plan
+					? `${plan.section?.name || '套餐/VIP'} - ${plan.name}`
+					: this.getActivationRewardTargetName(code) || code.course?.name || '-';
 				return {
 					id: code.id,
 					code: code.code,
@@ -965,7 +968,7 @@ export class DistributorService {
 					source_type: code.source_type,
 					source_text: this.getSourceText(code),
 					target_type: targetType,
-					target_type_text: targetType === ActivationCodeTargetType.PACKAGE ? '套餐/VIP' : '课程',
+					target_type_text: this.getActivationTargetTypeText(targetType),
 					target_id: code.target_id || code.course_id,
 					target_name: targetName,
 					course_id: code.course_id,
@@ -1003,6 +1006,7 @@ export class DistributorService {
 						count: number;
 						target_type?: ActivationCodeTargetType;
 						target_id?: number;
+						reward_payload?: ActivationCodeRewardPayload;
 				  }
 				| number,
 			legacyCount?: number,
@@ -1031,6 +1035,7 @@ export class DistributorService {
 					course_id: target.courseId,
 					target_type: target.type,
 					target_id: target.id,
+					reward_payload: target.rewardPayload,
 					batch_id: batchId,
 					batch_prefix: batchPrefix,
 					agent_id: null,
@@ -1058,8 +1063,48 @@ export class DistributorService {
 			course_id?: number;
 			target_type?: ActivationCodeTargetType;
 			target_id?: number;
+			reward_payload?: ActivationCodeRewardPayload;
 		}) {
 			const type = input.target_type || ActivationCodeTargetType.COURSE;
+			if (type === ActivationCodeTargetType.POINTS) {
+				const amount = Number(input.reward_payload?.points_amount);
+				if (!Number.isInteger(amount) || amount < 1 || amount > 1000000) {
+					throw new BadRequestException('请输入 1 至 1000000 的积分数量');
+				}
+				return {
+					type,
+					id: null,
+					courseId: null,
+					name: `${amount}积分`,
+					rewardPayload: { points_amount: amount },
+				};
+			}
+			if (type === ActivationCodeTargetType.COUPON) {
+				const amount = Number(input.reward_payload?.coupon_amount);
+				const minAmount = Number(input.reward_payload?.coupon_min_amount || 0);
+				const rawValidDays = input.reward_payload?.coupon_valid_days;
+				const validDays = rawValidDays === null || rawValidDays === undefined ? null : Number(rawValidDays);
+				if (!Number.isFinite(amount) || amount < 1 || amount > 1000000) {
+					throw new BadRequestException('请输入有效的优惠券面额');
+				}
+				if (!Number.isFinite(minAmount) || minAmount < 0 || minAmount > 100000000) {
+					throw new BadRequestException('请输入有效的使用门槛');
+				}
+				if (validDays !== null && (!Number.isInteger(validDays) || validDays < 1 || validDays > 3650)) {
+					throw new BadRequestException('有效期需为 1 至 3650 天');
+				}
+				return {
+					type,
+					id: null,
+					courseId: null,
+					name: `${amount}元${minAmount > 0 ? `满${minAmount}元可用` : '无门槛'}优惠券`,
+					rewardPayload: {
+						coupon_amount: amount,
+						coupon_min_amount: minAmount,
+						coupon_valid_days: validDays,
+					},
+				};
+			}
 			const id = Number(input.target_id || input.course_id);
 			if (!Number.isInteger(id) || id <= 0) {
 				throw new BadRequestException(type === ActivationCodeTargetType.PACKAGE ? '请选择套餐/VIP计划' : '请选择课程');
@@ -1078,6 +1123,7 @@ export class DistributorService {
 					id: plan.id,
 					courseId: null,
 					name: `${plan.section.name} - ${plan.name}`,
+					rewardPayload: null,
 				};
 			}
 
@@ -1090,6 +1136,7 @@ export class DistributorService {
 				id: course.id,
 				courseId: course.id,
 				name: course.name,
+				rewardPayload: null,
 			};
 		}
 
@@ -1127,6 +1174,12 @@ export class DistributorService {
 				if (code.status !== ActivationCodeStatus.USED || !code.used_by_uid) {
 					throw new BadRequestException('只能禁用已激活的激活码');
 				}
+				if (
+					code.target_type === ActivationCodeTargetType.POINTS ||
+					code.target_type === ActivationCodeTargetType.COUPON
+				) {
+					throw new BadRequestException('积分或优惠券激活码使用后不可撤销');
+				}
 
 				code.status = ActivationCodeStatus.INVALID;
 				await queryRunner.manager.save(ActivationCode, code);
@@ -1161,6 +1214,27 @@ export class DistributorService {
 			const timestamp = Date.now();
 			const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
 			return `AC${timestamp}${random}`;
+		}
+
+		private getActivationTargetTypeText(type: ActivationCodeTargetType) {
+			if (type === ActivationCodeTargetType.PACKAGE) return '套餐/VIP';
+			if (type === ActivationCodeTargetType.POINTS) return '积分';
+			if (type === ActivationCodeTargetType.COUPON) return '优惠券';
+			return '课程';
+		}
+
+		private getActivationRewardTargetName(code: ActivationCode) {
+			if (code.target_type === ActivationCodeTargetType.POINTS) {
+				const amount = Number(code.reward_payload?.points_amount || 0);
+				return amount > 0 ? `${amount}积分` : '积分';
+			}
+			if (code.target_type === ActivationCodeTargetType.COUPON) {
+				const amount = Number(code.reward_payload?.coupon_amount || 0);
+				const minAmount = Number(code.reward_payload?.coupon_min_amount || 0);
+				if (amount <= 0) return '优惠券';
+				return `${amount}元${minAmount > 0 ? `满${minAmount}元可用` : '无门槛'}优惠券`;
+			}
+			return '';
 		}
 
 		private async revokeCodeCourseAuth(manager: any, code: ActivationCode) {

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -14,8 +14,15 @@ export class CourseTypeController {
 
 	@Get('app/course-types')
 	@ApiOperation({ summary: '小程序课程类型列表' })
-	async getAppCourseTypes() {
-		return CommonResponseDto.success(await this.courseTypeService.list({ onlyEnabled: true }));
+	async getAppCourseTypes(@Query('categoryId') categoryId?: string) {
+		const parsedCategoryId = Number(categoryId);
+		return CommonResponseDto.success(
+			await this.courseTypeService.list({
+				onlyEnabled: true,
+				filterByCategory: true,
+				categoryId: Number.isInteger(parsedCategoryId) && parsedCategoryId > 0 ? parsedCategoryId : undefined,
+			}),
+		);
 	}
 
 	@Get('admin/course-types')
