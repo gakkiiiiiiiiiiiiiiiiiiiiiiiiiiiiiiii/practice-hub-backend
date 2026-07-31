@@ -8,6 +8,7 @@ import { UserPackageSubscription } from '../../database/entities/user-package-su
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { UserPointsLog, UserPointsLogType } from '../../database/entities/user-points-log.entity';
 import { UserCoupon, UserCouponStatus } from '../../database/entities/user-coupon.entity';
+import { requestUserPreviewDemand } from '../course/preview-demand.util';
 
 @Injectable()
 export class ActivationCodeService {
@@ -160,6 +161,13 @@ export class ActivationCodeService {
         await this.grantCouponByCode(queryRunner.manager, userId, activationCode);
       } else {
         await this.grantCourseByCode(queryRunner.manager, userId, activationCode);
+      }
+
+      if (
+        targetType === ActivationCodeTargetType.COURSE ||
+        targetType === ActivationCodeTargetType.PACKAGE
+      ) {
+        await requestUserPreviewDemand(queryRunner.manager, userId);
       }
 
       await queryRunner.commitTransaction();

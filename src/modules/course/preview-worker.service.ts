@@ -145,9 +145,8 @@ export class PreviewWorkerService {
   }
 
   private async resolveSourceProvider(fileUrl: string, fileId: number) {
-    // 阿里云节点保持 2 并发、腾讯云节点提升至 8 并发，因此对双端均有副本的
-    // 历史文件按 2:8 稳定分流。单端文件会自动回退到实际存在的存储服务。
-    const preferredProvider: 'oss' | 'cos' = fileId % 5 === 0 ? 'oss' : 'cos';
+    // COS 业务文件已清理，所有待生成资料统一从 OSS 读取。
+    const preferredProvider: 'oss' | 'cos' = 'oss';
     const cacheKey = `${fileId}:${String(fileUrl || '')}`;
     const cached = this.sourceProviderCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.provider;
@@ -203,6 +202,7 @@ export class PreviewWorkerService {
         .where('file.id > :cursor', { cursor: scanCursor })
         .andWhere('file.status = 1')
         .andWhere('course.status = 1')
+        .andWhere('file.full_preview_requested = 1')
         .andWhere(
           skippedFileIds.length > 0
             ? 'file.id NOT IN (:...skippedFileIds)'

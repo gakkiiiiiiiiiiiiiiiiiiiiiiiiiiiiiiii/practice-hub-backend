@@ -17,6 +17,9 @@ describe('OrderService category bundle access', () => {
     service.orderRepository = {
       findOne: jest.fn().mockResolvedValue(order),
       save: jest.fn(async (value) => value),
+      manager: {
+        query: jest.fn().mockResolvedValue({ affectedRows: 2 }),
+      },
     };
     service.categoryBundleAccessService = {
       grantOrderAccess: jest.fn().mockResolvedValue(undefined),

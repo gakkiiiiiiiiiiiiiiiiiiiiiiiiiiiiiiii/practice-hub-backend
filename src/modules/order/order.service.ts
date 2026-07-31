@@ -23,6 +23,7 @@ import { PackageService } from '../package/package.service';
 import { CoinService } from './coin.service';
 import { normalizePayAmountYuan, assertIntegerYuanPrice } from '../../common/utils/price.util';
 import { CategoryBundleAccessService } from '../category-bundle-access/category-bundle-access.service';
+import { requestUserPreviewDemand } from '../course/preview-demand.util';
 
 type ShipOrderActor = {
   operatorType: 'admin' | 'app_admin';
@@ -1459,6 +1460,7 @@ export class OrderService {
       if (order.order_type === 'category') {
         await this.categoryBundleAccessService.grantOrderAccess(order);
       }
+      await requestUserPreviewDemand(this.orderRepository.manager, order.user_id);
       return { message: '订单已支付' };
     }
 
@@ -1473,6 +1475,7 @@ export class OrderService {
 
     if (order.order_type === 'package') {
       await this.packageService.fulfillPackageOrder(order);
+      await requestUserPreviewDemand(this.orderRepository.manager, order.user_id);
       if (order.coupon_id) {
         await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
       }
@@ -1481,6 +1484,7 @@ export class OrderService {
 
     if (order.order_type === 'category') {
       await this.categoryBundleAccessService.grantOrderAccess(order);
+      await requestUserPreviewDemand(this.orderRepository.manager, order.user_id);
       if (order.coupon_id) {
         await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
       }
@@ -1495,6 +1499,7 @@ export class OrderService {
           await this.grantCourseAccess(order.user_id, courseId);
         }
       }
+      await requestUserPreviewDemand(this.orderRepository.manager, order.user_id);
       if (order.coupon_id) {
         await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
       }
@@ -1515,6 +1520,7 @@ export class OrderService {
     }
 
     await this.grantCourseAccess(order.user_id, order.course_id);
+    await requestUserPreviewDemand(this.orderRepository.manager, order.user_id);
 
     if (order.coupon_id) {
       await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
