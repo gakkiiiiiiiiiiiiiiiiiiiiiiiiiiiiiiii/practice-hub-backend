@@ -35,8 +35,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
       method: request.method,
       url: request.url,
       path: request.path,
-      query: request.query,
-      body: request.body,
+      query: this.sanitizeRecord(request.query),
+      body: this.sanitizeRecord(request.body),
       headers: {
         authorization: request.headers.authorization ? 'Bearer ***' : '未提供',
       },
@@ -189,9 +189,19 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
 
     const sensitiveKeys = ['password', 'token', 'authorization', 'secret', 'cookie', 'openid', 'session'];
+    const sensitiveCodeKeys = new Set([
+      'code',
+      'logincode',
+      'phonecode',
+      'js_code',
+      'jscode',
+      'verificationcode',
+      'verification_code',
+    ]);
     return Object.entries(value as Record<string, unknown>).reduce<Record<string, unknown>>((result, [key, val]) => {
       const lowerKey = key.toLowerCase();
-      result[key] = sensitiveKeys.some((sensitiveKey) => lowerKey.includes(sensitiveKey))
+      result[key] = sensitiveKeys.some((sensitiveKey) => lowerKey.includes(sensitiveKey)) ||
+        sensitiveCodeKeys.has(lowerKey)
         ? '***'
         : this.sanitizeValue(val);
       return result;

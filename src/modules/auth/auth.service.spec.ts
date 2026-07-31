@@ -1,4 +1,4 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import axios from 'axios';
 import { AuthService } from './auth.service';
 
@@ -91,6 +91,42 @@ describe('AuthService 微信手机号快捷登录', () => {
 
 		await expect((service as any).getPhoneNumberByCode('phone-code')).rejects.toEqual(
 			new UnauthorizedException('微信服务配置异常，请联系管理员'),
+		);
+	});
+
+	it('云托管拦截稳定版 token 接口时返回可操作的配置提示', async () => {
+		jest.spyOn(axios, 'post').mockRejectedValueOnce({
+			message: 'Request failed with status code 502',
+			response: {
+				status: 502,
+				data: {
+					error_message: 'URL不在白名单内，请前往「微信云托管控制台-服务管理-云调用-微信令牌」配置',
+				},
+			},
+		});
+
+		await expect((service as any).getPhoneNumberByCode('phone-code')).rejects.toEqual(
+			new ServiceUnavailableException(
+				'微信云托管未放行 /cgi-bin/stable_token，请在微信令牌白名单中配置后重新发布服务',
+			),
+		);
+	});
+
+	it('手机号登录保留云托管配置错误的 503 状态', async () => {
+		jest.spyOn(service as any, 'getWechatSessionByCode').mockResolvedValue({
+			openid: 'openid',
+			session_key: 'session-key',
+		});
+		jest
+			.spyOn(service as any, 'getPhoneNumberByCode')
+			.mockRejectedValue(
+				new ServiceUnavailableException(
+					'微信云托管未放行 /cgi-bin/stable_token，请在微信令牌白名单中配置后重新发布服务',
+				),
+			);
+
+		await expect(service.appPhoneLogin('login-code', 'phone-code')).rejects.toBeInstanceOf(
+			ServiceUnavailableException,
 		);
 	});
 });

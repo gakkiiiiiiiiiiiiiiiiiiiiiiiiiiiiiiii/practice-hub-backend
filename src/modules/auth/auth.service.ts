@@ -1,4 +1,11 @@
-import { Injectable, UnauthorizedException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
+import {
+	Injectable,
+	UnauthorizedException,
+	BadRequestException,
+	ServiceUnavailableException,
+	Inject,
+	forwardRef,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -161,7 +168,11 @@ export class AuthService {
 			};
 		} catch (error) {
 			// 如果是已定义的异常，直接抛出
-			if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
+			if (
+				error instanceof UnauthorizedException ||
+				error instanceof BadRequestException ||
+				error instanceof ServiceUnavailableException
+			) {
 				throw error;
 			}
 
@@ -266,7 +277,11 @@ export class AuthService {
 				user: this.buildAppUserResponse(user),
 			};
 		} catch (error) {
-			if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
+			if (
+				error instanceof UnauthorizedException ||
+				error instanceof BadRequestException ||
+				error instanceof ServiceUnavailableException
+			) {
 				throw error;
 			}
 			console.error('手机号快捷登录异常:', {
@@ -339,16 +354,26 @@ export class AuthService {
 		const httpsAgent = new https.Agent({
 			rejectUnauthorized: false,
 		});
-		const response = await axios.post(
-			'https://api.weixin.qq.com/cgi-bin/stable_token',
-			{
-				grant_type: 'client_credential',
-				appid,
-				secret,
-				force_refresh: false,
-			},
-			{ httpsAgent },
-		);
+		let response;
+		try {
+			response = await axios.post(
+				'https://api.weixin.qq.com/cgi-bin/stable_token',
+				{
+					grant_type: 'client_credential',
+					appid,
+					secret,
+					force_refresh: false,
+				},
+				{ httpsAgent },
+			);
+		} catch (error) {
+			if (this.isWechatCloudTokenWhitelistError(error)) {
+				throw new ServiceUnavailableException(
+					'微信云托管未放行 /cgi-bin/stable_token，请在微信令牌白名单中配置后重新发布服务',
+				);
+			}
+			throw error;
+		}
 		const { access_token, expires_in, errcode, errmsg } = response.data;
 		if (errcode || !access_token) {
 			throw new UnauthorizedException(errmsg || `获取微信 access_token 失败 (${errcode || 'unknown'})`);
@@ -395,6 +420,18 @@ export class AuthService {
 
 	private isWechatAccessTokenError(errcode: number) {
 		return [40001, 40014, 42001].includes(Number(errcode));
+	}
+
+	private isWechatCloudTokenWhitelistError(error: any) {
+		const status = Number(error?.response?.status || 0);
+		const message = String(
+			error?.response?.data?.error_message ||
+				error?.response?.data?.errmsg ||
+				error?.response?.data?.message ||
+				error?.message ||
+				'',
+		);
+		return status === 502 && message.includes('URL不在白名单内') && message.includes('微信令牌');
 	}
 
 	private normalizeDistributorCode(distributorCode?: string): string {
