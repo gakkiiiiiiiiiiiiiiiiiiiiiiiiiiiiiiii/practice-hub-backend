@@ -12,6 +12,7 @@ import { UserCourseAuth } from '../../database/entities/user-course-auth.entity'
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UploadService } from '../upload/upload.service';
+import { CategoryBundleAccessService } from '../category-bundle-access/category-bundle-access.service';
 
 type ProfessionalScope = {
   category: string;
@@ -40,6 +41,7 @@ export class AppRecommendController {
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     private dataSource: DataSource,
     private uploadService: UploadService,
+    private categoryBundleAccessService: CategoryBundleAccessService,
   ) {}
 
   @Get('categories')
@@ -135,6 +137,9 @@ export class AppRecommendController {
       );
 
       const authMap = new Map<number, Date | null>();
+      const categoryAccessMap = user?.userId
+        ? await this.categoryBundleAccessService.batchUserHasCourseAccess(user.userId, courses)
+        : new Map<number, true>();
       if (user?.userId && courseIds.length > 0) {
         const auths = await this.userCourseAuthRepository.find({
           where: {
@@ -198,7 +203,7 @@ export class AppRecommendController {
             const price = Number(course.price) || 0;
             const isFree = course.is_free === 1;
             const expireTime = authMap.get(course.id) || null;
-            const hasAuth = price === 0 || isFree || authMap.has(course.id);
+            const hasAuth = price === 0 || isFree || authMap.has(course.id) || categoryAccessMap.has(course.id);
 
             return {
               ...course,

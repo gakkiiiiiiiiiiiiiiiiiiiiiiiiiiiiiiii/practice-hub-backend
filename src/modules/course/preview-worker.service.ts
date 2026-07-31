@@ -110,6 +110,24 @@ export class PreviewWorkerService {
             )
           )
       )
+      OR EXISTS (
+        SELECT 1
+        FROM user_category_bundle_access category_access
+        INNER JOIN course_category bundle_category
+          ON bundle_category.id = category_access.category_id
+        LEFT JOIN course_category parent_category
+          ON parent_category.id = bundle_category.parent_id
+        WHERE TRIM(COALESCE(${courseAlias}.category, '')) COLLATE utf8mb4_unicode_ci
+          = TRIM(CASE
+              WHEN bundle_category.parent_id IS NULL THEN bundle_category.name
+              ELSE COALESCE(parent_category.name, '')
+            END) COLLATE utf8mb4_unicode_ci
+          AND (
+            bundle_category.parent_id IS NULL
+            OR TRIM(COALESCE(${courseAlias}.sub_category, '')) COLLATE utf8mb4_unicode_ci
+              = TRIM(bundle_category.name) COLLATE utf8mb4_unicode_ci
+          )
+      )
     )`;
   }
 

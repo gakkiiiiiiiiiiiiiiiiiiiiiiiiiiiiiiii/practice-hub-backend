@@ -46,6 +46,7 @@ import { PackagePlan } from './entities/package-plan.entity';
 import { UserPackageSubscription } from './entities/user-package-subscription.entity';
 import { CoinTransaction } from './entities/coin-transaction.entity';
 import { StorageDeleteJob } from './entities/storage-delete-job.entity';
+import { UserCategoryBundleAccess } from './entities/user-category-bundle-access.entity';
 
 @Module({
 	imports: [
@@ -96,6 +97,7 @@ import { StorageDeleteJob } from './entities/storage-delete-job.entity';
 			UserPackageSubscription,
 			CoinTransaction,
 			StorageDeleteJob,
+			UserCategoryBundleAccess,
 		]),
 	],
 	exports: [TypeOrmModule],

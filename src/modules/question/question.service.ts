@@ -10,6 +10,7 @@ import { UserCourseAuth } from '../../database/entities/user-course-auth.entity'
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
 import { BatchSubmitDto } from './dto/batch-submit.dto';
 import { PackageService } from '../package/package.service';
+import { CategoryBundleAccessService } from '../category-bundle-access/category-bundle-access.service';
 
 @Injectable()
 export class QuestionService {
@@ -29,6 +30,7 @@ export class QuestionService {
 		private userCourseAuthRepository: Repository<UserCourseAuth>,
 		private dataSource: DataSource,
 		private packageService: PackageService,
+		private categoryBundleAccessService: CategoryBundleAccessService,
 	) {}
 
 	/**
@@ -262,6 +264,12 @@ export class QuestionService {
 						},
 					});
 					hasPermission = !!userAuth && (!userAuth.expire_time || userAuth.expire_time > new Date());
+					if (!hasPermission) {
+						hasPermission = await this.categoryBundleAccessService.userHasCourseAccess(userId, course);
+					}
+					if (!hasPermission) {
+						hasPermission = await this.packageService.userHasCourseAccessViaPackage(userId, course);
+					}
 				} catch (error) {
 					hasPermission = false;
 				}
@@ -637,6 +645,10 @@ export class QuestionService {
 		});
 
 		if (!auth) {
+			const hasCategoryAccess = await this.categoryBundleAccessService.userHasCourseAccess(userId, course);
+			if (hasCategoryAccess) {
+				return;
+			}
 			const hasPackageAccess = await this.packageService.userHasCourseAccessViaPackage(userId, course);
 			if (!hasPackageAccess) {
 				throw new ForbiddenException('请先购买课程、购买套餐或使用激活码');
@@ -646,7 +658,13 @@ export class QuestionService {
 
 		// 检查是否过期
 		if (auth.expire_time && auth.expire_time <= new Date()) {
-			throw new ForbiddenException('课程权限已过期，请重新购买');
+			const [hasCategoryAccess, hasPackageAccess] = await Promise.all([
+				this.categoryBundleAccessService.userHasCourseAccess(userId, course),
+				this.packageService.userHasCourseAccessViaPackage(userId, course),
+			]);
+			if (!hasCategoryAccess && !hasPackageAccess) {
+				throw new ForbiddenException('课程权限已过期，请重新购买');
+			}
 		}
 	}
 

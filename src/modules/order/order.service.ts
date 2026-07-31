@@ -22,6 +22,7 @@ import { ReferralCouponService } from '../marketing/referral-coupon.service';
 import { PackageService } from '../package/package.service';
 import { CoinService } from './coin.service';
 import { normalizePayAmountYuan, assertIntegerYuanPrice } from '../../common/utils/price.util';
+import { CategoryBundleAccessService } from '../category-bundle-access/category-bundle-access.service';
 
 type ShipOrderActor = {
   operatorType: 'admin' | 'app_admin';
@@ -92,6 +93,7 @@ export class OrderService {
     private xpayService: XpayService,
     private referralCouponService: ReferralCouponService,
     private packageService: PackageService,
+    private categoryBundleAccessService: CategoryBundleAccessService,
     private coinService: CoinService,
     private configService: ConfigService,
   ) {}
@@ -151,6 +153,10 @@ export class OrderService {
         const hasPackageAccess = await this.packageService.userHasCourseAccessViaPackage(userId, course);
         if (hasPackageAccess) {
           throw new BadRequestException(`套餐已包含《${course.name}》`);
+        }
+        const hasCategoryAccess = await this.categoryBundleAccessService.userHasCourseAccess(userId, course);
+        if (hasCategoryAccess) {
+          throw new BadRequestException(`类目套餐已包含《${course.name}》`);
         }
       }
 
@@ -379,6 +385,9 @@ export class OrderService {
     if (Number(category.bundle_enabled ?? 1) !== 1) {
       throw new BadRequestException('该分类未开启整类购买');
     }
+    if (await this.categoryBundleAccessService.userHasCategoryAccess(userId, category.id)) {
+      throw new BadRequestException('您已购买该分类套餐，后续新增资料将自动同步');
+    }
 
     const parentCategory = category.parent_id
       ? await this.courseCategoryRepository.findOne({ where: { id: category.parent_id } })
@@ -402,7 +411,7 @@ export class OrderService {
     }
 
     const courseIds = courses.map((course) => course.id);
-    const [auths, packageAccessMap] = await Promise.all([
+    const [auths, packageAccessMap, categoryAccessMap] = await Promise.all([
       this.userCourseAuthRepository.find({
         where: {
           user_id: userId,
@@ -410,6 +419,7 @@ export class OrderService {
         },
       }),
       this.packageService.batchUserHasCourseAccessViaPackage(userId, courses),
+      this.categoryBundleAccessService.batchUserHasCourseAccess(userId, courses),
     ]);
     const now = Date.now();
     const authMap = new Map(
@@ -420,6 +430,7 @@ export class OrderService {
     const unownedCourses = courses.filter((course) => {
       if (Number(course.price || 0) === 0 || course.is_free === 1) return false;
       if (authMap.has(course.id)) return false;
+      if (categoryAccessMap.has(course.id)) return false;
       return packageAccessMap.get(course.id)?.hasAccess !== true;
     });
     if (unownedCourses.length === 0) {
@@ -1445,6 +1456,9 @@ export class OrderService {
     }
 
     if (order.status === OrderStatus.PAID) {
+      if (order.order_type === 'category') {
+        await this.categoryBundleAccessService.grantOrderAccess(order);
+      }
       return { message: '订单已支付' };
     }
 
@@ -1466,13 +1480,7 @@ export class OrderService {
     }
 
     if (order.order_type === 'category') {
-      const categoryBundle = order.pay_payload?.category_bundle || {};
-      const courseIds = Array.isArray(categoryBundle.course_ids)
-        ? categoryBundle.course_ids.map((id: unknown) => Number(id)).filter((id: number) => id > 0)
-        : [];
-      for (const courseId of courseIds) {
-        await this.grantCourseAccess(order.user_id, courseId);
-      }
+      await this.categoryBundleAccessService.grantOrderAccess(order);
       if (order.coupon_id) {
         await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
       }
@@ -1626,6 +1634,11 @@ export class OrderService {
   private async revokeOrderAccess(order: Order) {
     if (order.order_type === 'package') {
       await this.packageService.revokePackageOrder(order);
+      return;
+    }
+
+    if (order.order_type === 'category') {
+      await this.categoryBundleAccessService.revokeOrderAccess(order.id);
       return;
     }
 

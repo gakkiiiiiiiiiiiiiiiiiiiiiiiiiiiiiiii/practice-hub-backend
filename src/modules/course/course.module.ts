@@ -12,6 +12,7 @@ import { StorageCleanupModule } from '../storage-cleanup/storage-cleanup.module'
 import { PreviewWorkerController } from './preview-worker.controller';
 import { PreviewWorkerGuard } from './preview-worker.guard';
 import { PreviewWorkerService } from './preview-worker.service';
+import { CategoryBundleAccessModule } from '../category-bundle-access/category-bundle-access.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { PreviewWorkerService } from './preview-worker.service';
     UploadModule,
     ConfigModule,
     PackageModule,
+    CategoryBundleAccessModule,
     StorageCleanupModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

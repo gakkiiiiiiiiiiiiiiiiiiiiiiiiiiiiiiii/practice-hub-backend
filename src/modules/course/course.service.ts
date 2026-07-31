@@ -29,6 +29,7 @@ import { UserFileCourseProgress } from '../../database/entities/user-file-course
 import { UploadService } from '../upload/upload.service';
 import { PackageService } from '../package/package.service';
 import { CourseListPageDto } from './dto/course-list-page.dto';
+import { CategoryBundleAccessService } from '../category-bundle-access/category-bundle-access.service';
 
 const execFileAsync = promisify(execFile);
 const PREVIEW_IMAGE_WIDTH = 1440;
@@ -133,6 +134,7 @@ export class CourseService {
     private uploadService: UploadService,
     private courseFileService: CourseFileService,
     private packageService: PackageService,
+    private categoryBundleAccessService: CategoryBundleAccessService,
   ) {}
 
   private isMissingCourseTypeTableError(error: unknown) {
@@ -353,7 +355,10 @@ export class CourseService {
         .filter((auth) => !auth.expire_time || new Date(auth.expire_time).getTime() > now)
         .map((auth) => [auth.course_id, auth]),
     );
-    const packageAccessMap = await this.packageService.batchUserHasCourseAccessViaPackage(userId, courses);
+    const [packageAccessMap, categoryAccessMap] = await Promise.all([
+      this.packageService.batchUserHasCourseAccessViaPackage(userId, courses),
+      this.categoryBundleAccessService.batchUserHasCourseAccess(userId, courses),
+    ]);
 
     const list = courses.map((course) => ({
       ...attachCourseType(course),
@@ -361,6 +366,7 @@ export class CourseService {
         Number(course.price) === 0 ||
         course.is_free === 1 ||
         authMap.has(course.id) ||
+        categoryAccessMap.has(course.id) ||
         packageAccessMap.get(course.id)?.hasAccess === true,
       expireTime: authMap.get(course.id)?.expire_time || packageAccessMap.get(course.id)?.expireTime || null,
     }));
@@ -410,6 +416,7 @@ export class CourseService {
     const courseIds = courses.map((course) => course.id);
     let authMap = new Map<number, UserCourseAuth>();
     let packageAccessMap = new Map<number, { hasAccess: boolean; expireTime: Date | null }>();
+    let categoryAccessMap = new Map<number, true>();
     if (userId && courseIds.length > 0) {
       const auths = await this.userCourseAuthRepository.find({
         where: {
@@ -423,7 +430,10 @@ export class CourseService {
           .filter((auth) => !auth.expire_time || new Date(auth.expire_time).getTime() > now)
           .map((auth) => [auth.course_id, auth]),
       );
-      packageAccessMap = await this.packageService.batchUserHasCourseAccessViaPackage(userId, courses);
+      [packageAccessMap, categoryAccessMap] = await Promise.all([
+        this.packageService.batchUserHasCourseAccessViaPackage(userId, courses),
+        this.categoryBundleAccessService.batchUserHasCourseAccess(userId, courses),
+      ]);
     }
 
     const purchasedCount = courses.filter(
@@ -431,6 +441,7 @@ export class CourseService {
         Number(course.price || 0) === 0 ||
         course.is_free === 1 ||
         authMap.has(course.id) ||
+        categoryAccessMap.has(course.id) ||
         packageAccessMap.get(course.id)?.hasAccess === true,
     ).length;
 
@@ -632,6 +643,12 @@ export class CourseService {
       if (auth) {
         hasAuth = !auth.expire_time || auth.expire_time > new Date();
         expireTime = auth.expire_time;
+      }
+      if (!hasAuth) {
+        hasAuth = await this.categoryBundleAccessService.userHasCourseAccess(userId, course);
+        if (hasAuth) {
+          expireTime = null;
+        }
       }
       if (!hasAuth) {
         const packageAccess = await this.packageService.userCoursePackageAccess(userId, course);

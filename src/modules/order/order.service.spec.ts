@@ -2,6 +2,46 @@ import { BadRequestException } from '@nestjs/common';
 import { OrderService } from './order.service';
 import { OrderStatus } from '../../database/entities/order.entity';
 
+describe('OrderService category bundle access', () => {
+  it('grants a permanent category entitlement instead of snapshot course permissions', async () => {
+    const order: any = {
+      id: 88,
+      order_no: 'CATEGORY88',
+      user_id: 7,
+      order_type: 'category',
+      status: OrderStatus.PENDING,
+      coupon_id: null,
+      pay_payload: { category_bundle: { category_id: 12, course_ids: [101, 102] } },
+    };
+    const service = Object.create(OrderService.prototype) as any;
+    service.orderRepository = {
+      findOne: jest.fn().mockResolvedValue(order),
+      save: jest.fn(async (value) => value),
+    };
+    service.categoryBundleAccessService = {
+      grantOrderAccess: jest.fn().mockResolvedValue(undefined),
+    };
+    service.grantCourseAccess = jest.fn();
+
+    await service.handlePaymentSuccess(order.id);
+
+    expect(service.categoryBundleAccessService.grantOrderAccess).toHaveBeenCalledWith(order);
+    expect(service.grantCourseAccess).not.toHaveBeenCalled();
+    expect(order.status).toBe(OrderStatus.PAID);
+  });
+
+  it('revokes the entitlement for a refunded category order', async () => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.categoryBundleAccessService = {
+      revokeOrderAccess: jest.fn().mockResolvedValue(undefined),
+    };
+
+    await service.revokeOrderAccess({ id: 88, order_type: 'category' } as any);
+
+    expect(service.categoryBundleAccessService.revokeOrderAccess).toHaveBeenCalledWith(88);
+  });
+});
+
 describe('OrderService WeChat Pay refund', () => {
   const createService = () => {
     const service = Object.create(OrderService.prototype) as any;
@@ -267,6 +307,9 @@ describe('OrderService paper exam checkout', () => {
     };
     service.packageService = {
       userHasCourseAccessViaPackage: jest.fn().mockResolvedValue(false),
+    };
+    service.categoryBundleAccessService = {
+      userHasCourseAccess: jest.fn().mockResolvedValue(false),
     };
     service.referralCouponService = {
       validateCouponForOrder: jest.fn(),
