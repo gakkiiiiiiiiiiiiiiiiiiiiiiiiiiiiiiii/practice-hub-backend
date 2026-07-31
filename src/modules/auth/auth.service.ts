@@ -332,51 +332,69 @@ export class AuthService {
 
 	private async getWechatAccessToken() {
 		const now = Date.now();
-		if (this.wechatAccessTokenCache && this.wechatAccessTokenCache.expiresAt > now + 60_000) {
+		if (this.wechatAccessTokenCache && this.wechatAccessTokenCache.expiresAt > now) {
 			return this.wechatAccessTokenCache.token;
 		}
 		const { appid, secret } = this.getWechatConfig();
 		const httpsAgent = new https.Agent({
 			rejectUnauthorized: false,
 		});
-		const response = await axios.get('https://api.weixin.qq.com/cgi-bin/token', {
-			params: {
+		const response = await axios.post(
+			'https://api.weixin.qq.com/cgi-bin/stable_token',
+			{
 				grant_type: 'client_credential',
 				appid,
 				secret,
+				force_refresh: false,
 			},
-			httpsAgent,
-		});
+			{ httpsAgent },
+		);
 		const { access_token, expires_in, errcode, errmsg } = response.data;
 		if (errcode || !access_token) {
 			throw new UnauthorizedException(errmsg || `获取微信 access_token 失败 (${errcode || 'unknown'})`);
 		}
 		this.wechatAccessTokenCache = {
 			token: access_token,
-			expiresAt: now + Math.max(300, Number(expires_in) || 7200) * 1000,
+			expiresAt: now + Math.max(60, (Number(expires_in) || 7200) - 300) * 1000,
 		};
 		return access_token;
 	}
 
 	private async getPhoneNumberByCode(phoneCode: string) {
-		const accessToken = await this.getWechatAccessToken();
 		const httpsAgent = new https.Agent({
 			rejectUnauthorized: false,
 		});
-		const response = await axios.post(
-			`https://api.weixin.qq.com/wxa/business/getuserphonenumber?access_token=${accessToken}`,
-			{ code: phoneCode },
-			{ httpsAgent },
-		);
-		const { errcode, errmsg, phone_info } = response.data;
-		if (errcode) {
-			throw new UnauthorizedException(errmsg || `获取手机号失败 (${errcode})`);
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			const accessToken = await this.getWechatAccessToken();
+			const response = await axios.post(
+				`https://api.weixin.qq.com/wxa/business/getuserphonenumber?access_token=${accessToken}`,
+				{ code: phoneCode },
+				{ httpsAgent },
+			);
+			const { errcode, errmsg, phone_info } = response.data;
+			if (errcode) {
+				if (attempt === 0 && this.isWechatAccessTokenError(errcode)) {
+					this.wechatAccessTokenCache = null;
+					console.warn('微信 access_token 已失效，重新获取最新凭据后重试手机号接口:', { errcode, errmsg });
+					continue;
+				}
+				if (this.isWechatAccessTokenError(errcode)) {
+					console.error('重新获取微信 access_token 后仍无法获取手机号:', { errcode, errmsg });
+					throw new UnauthorizedException('微信服务配置异常，请联系管理员');
+				}
+				throw new UnauthorizedException(errmsg || `获取手机号失败 (${errcode})`);
+			}
+			const phone = phone_info?.phoneNumber || phone_info?.purePhoneNumber;
+			if (!phone) {
+				throw new UnauthorizedException('获取手机号失败：微信未返回手机号');
+			}
+			return phone;
 		}
-		const phone = phone_info?.phoneNumber || phone_info?.purePhoneNumber;
-		if (!phone) {
-			throw new UnauthorizedException('获取手机号失败：微信未返回手机号');
-		}
-		return phone;
+		throw new UnauthorizedException('获取手机号失败，请重试');
+	}
+
+	private isWechatAccessTokenError(errcode: number) {
+		return [40001, 40014, 42001].includes(Number(errcode));
 	}
 
 	private normalizeDistributorCode(distributorCode?: string): string {
