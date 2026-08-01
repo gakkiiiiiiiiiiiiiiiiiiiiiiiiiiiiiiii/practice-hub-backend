@@ -23,39 +23,46 @@ RUN apk add --no-cache \
     && rm -rf /usr/lib/libreoffice/share/template \
     && rm -rf /usr/lib/libreoffice/share/wizards
 
-# 构建阶段：单次 npm ci → 编译 → prune 生产依赖（避免 prod-deps 二次安装）
+# 编译阶段：源码变化时只重编译，不再改写最终镜像使用的 node_modules
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
 COPY package*.json .npmrc ./
 
-RUN --mount=type=cache,target=/root/.npm \
+RUN --mount=type=cache,id=practice-hub-npm,target=/root/.npm,sharing=shared \
     npm ci --legacy-peer-deps --prefer-offline
 
 COPY nest-cli.json tsconfig.json tsconfig.build.json ./
 COPY src ./src
 
-RUN npm run build \
-    && npm prune --omit=dev \
-    && npm cache clean --force
+RUN npm run build
+
+# 生产依赖独立分层：仅 package-lock.json 变化时才重新安装。
+# 该阶段可与源码编译、系统依赖安装并行执行。
+FROM node:20-alpine AS production-deps
+
+WORKDIR /app
+
+COPY package*.json .npmrc ./
+
+RUN --mount=type=cache,id=practice-hub-npm,target=/root/.npm,sharing=shared \
+    npm ci --omit=dev --legacy-peer-deps --prefer-offline
 
 # 生产阶段
 FROM runtime-base AS production
 
 WORKDIR /app
 
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nestjs -u 1001
+RUN addgroup -g 1001 -S nodejs \
+    && adduser -S nestjs -u 1001 \
+    && mkdir -p /app/uploads/temp /app/uploads/pdf \
+    && chown -R nestjs:nodejs /app/uploads
 
-COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nestjs:nodejs /app/package*.json ./
+COPY --from=production-deps --chown=nestjs:nodejs /app/node_modules ./node_modules
+COPY --from=production-deps --chown=nestjs:nodejs /app/package*.json ./
 COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nestjs:nodejs /app/src/assets ./src/assets
-
-# nestjs 用户需对 /app 有写权限（multer 临时文件、分片上传等）
-RUN mkdir -p /app/uploads/temp /app/uploads/pdf \
-    && chown -R nestjs:nodejs /app
 
 USER nestjs
 
