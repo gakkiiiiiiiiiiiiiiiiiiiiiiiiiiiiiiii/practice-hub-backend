@@ -9,6 +9,7 @@ import { Order } from '../../database/entities/order.entity';
 import { ActivationCode } from '../../database/entities/activation-code.entity';
 import { Course } from '../../database/entities/course.entity';
 import { PackagePlan } from '../../database/entities/package-plan.entity';
+import { CourseCategory } from '../../database/entities/course-category.entity';
 import { DistributorService } from './distributor.service';
 import { DistributorController } from './distributor.controller';
 import { AdminDistributorController } from './admin-distributor.controller';
@@ -29,6 +30,7 @@ import { AppAdminRewardService } from './app-admin-reward.service';
 			ActivationCode,
 			Course,
 			PackagePlan,
+			CourseCategory,
 		]),
 		forwardRef(() => OrderModule),
 		forwardRef(() => UploadModule),

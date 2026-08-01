@@ -8,6 +8,8 @@ import { UserPackageSubscription } from '../../database/entities/user-package-su
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { UserPointsLog, UserPointsLogType } from '../../database/entities/user-points-log.entity';
 import { UserCoupon, UserCouponStatus } from '../../database/entities/user-coupon.entity';
+import { CourseCategory } from '../../database/entities/course-category.entity';
+import { UserCategoryBundleAccess } from '../../database/entities/user-category-bundle-access.entity';
 import { requestUserPreviewDemand } from '../course/preview-demand.util';
 
 @Injectable()
@@ -23,6 +25,8 @@ export class ActivationCodeService {
     private userPackageSubscriptionRepository: Repository<UserPackageSubscription>,
     @InjectRepository(AppUser)
     private appUserRepository: Repository<AppUser>,
+    @InjectRepository(CourseCategory)
+    private courseCategoryRepository: Repository<CourseCategory>,
     private dataSource: DataSource,
   ) {}
 
@@ -67,6 +71,28 @@ export class ActivationCodeService {
             duration_days: plan.duration_days,
           },
         },
+      };
+    }
+    if (targetType === ActivationCodeTargetType.CATEGORY_BUNDLE) {
+      const category = activationCode.target_id
+        ? await this.courseCategoryRepository.findOne({ where: { id: activationCode.target_id } })
+        : null;
+      if (!category || category.status === 0 || Number(category.bundle_enabled ?? 1) !== 1) {
+        throw new NotFoundException('激活码对应类目套餐不存在或已关闭');
+      }
+      const parent = category.parent_id
+        ? await this.courseCategoryRepository.findOne({ where: { id: category.parent_id } })
+        : null;
+      return {
+        code: activationCode.code,
+        target_type: targetType,
+        target_id: category.id,
+        category_id: category.id,
+        category_name: category.name,
+        primary_category_name: parent?.name || category.name,
+        category_bundle_name: parent ? `${parent.name} / ${category.name}` : category.name,
+        course_id: null,
+        course_name: '',
       };
     }
     if (targetType === ActivationCodeTargetType.POINTS) {
@@ -155,6 +181,8 @@ export class ActivationCodeService {
       const targetType = activationCode.target_type || ActivationCodeTargetType.COURSE;
       if (targetType === ActivationCodeTargetType.PACKAGE) {
         await this.grantPackageByCode(queryRunner.manager, userId, activationCode);
+      } else if (targetType === ActivationCodeTargetType.CATEGORY_BUNDLE) {
+        await this.grantCategoryBundleByCode(queryRunner.manager, userId, activationCode);
       } else if (targetType === ActivationCodeTargetType.POINTS) {
         await this.grantPointsByCode(queryRunner.manager, userId, activationCode);
       } else if (targetType === ActivationCodeTargetType.COUPON) {
@@ -165,7 +193,8 @@ export class ActivationCodeService {
 
       if (
         targetType === ActivationCodeTargetType.COURSE ||
-        targetType === ActivationCodeTargetType.PACKAGE
+        targetType === ActivationCodeTargetType.PACKAGE ||
+        targetType === ActivationCodeTargetType.CATEGORY_BUNDLE
       ) {
         await requestUserPreviewDemand(queryRunner.manager, userId);
       }
@@ -177,6 +206,9 @@ export class ActivationCodeService {
         target_type: targetType,
         course_id: activationCode.course_id,
         course_name: activationCode.course?.name || '',
+        ...(targetType === ActivationCodeTargetType.CATEGORY_BUNDLE
+          ? { category_id: activationCode.target_id }
+          : {}),
         ...(targetType === ActivationCodeTargetType.POINTS
           ? { points_amount: this.getPointsAmount(activationCode) }
           : {}),
@@ -249,6 +281,33 @@ export class ActivationCodeService {
     }
     await manager.save(UserPackageSubscription, subscription);
     await this.syncUserPackageExpireTime(manager, userId);
+  }
+
+  private async grantCategoryBundleByCode(manager: any, userId: number, activationCode: ActivationCode) {
+    if (!activationCode.target_id) {
+      throw new BadRequestException('激活码类目套餐信息缺失');
+    }
+    const category = await manager.findOne(CourseCategory, {
+      where: { id: activationCode.target_id },
+    });
+    if (!category || category.status === 0 || Number(category.bundle_enabled ?? 1) !== 1) {
+      throw new BadRequestException('类目套餐不存在或已关闭');
+    }
+    const existingAccess = await manager.findOne(UserCategoryBundleAccess, {
+      where: { user_id: userId, category_id: category.id },
+    });
+    if (existingAccess) {
+      throw new BadRequestException('您已拥有该类目套餐，无需重复激活');
+    }
+    await manager.save(
+      UserCategoryBundleAccess,
+      manager.create(UserCategoryBundleAccess, {
+        user_id: userId,
+        category_id: category.id,
+        order_id: null,
+        activation_code_id: activationCode.id,
+      }),
+    );
   }
 
   private async grantPointsByCode(manager: any, userId: number, activationCode: ActivationCode) {

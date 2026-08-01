@@ -10,6 +10,7 @@ export enum ActivationCodeStatus {
 export enum ActivationCodeTargetType {
 	COURSE = 'course',
 	PACKAGE = 'package',
+	CATEGORY_BUNDLE = 'category_bundle',
 	POINTS = 'points',
 	COUPON = 'coupon',
 }

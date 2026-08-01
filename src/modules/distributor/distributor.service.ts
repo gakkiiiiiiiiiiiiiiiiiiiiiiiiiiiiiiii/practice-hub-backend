@@ -19,6 +19,8 @@ import {
 } from '../../database/entities/activation-code.entity';
 import { Course } from '../../database/entities/course.entity';
 import { PackagePlan } from '../../database/entities/package-plan.entity';
+import { CourseCategory } from '../../database/entities/course-category.entity';
+import { UserCategoryBundleAccess } from '../../database/entities/user-category-bundle-access.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
@@ -48,6 +50,8 @@ export class DistributorService {
 		private courseRepository: Repository<Course>,
 		@InjectRepository(PackagePlan)
 		private packagePlanRepository: Repository<PackagePlan>,
+		@InjectRepository(CourseCategory)
+		private courseCategoryRepository: Repository<CourseCategory>,
 		private configService: ConfigService,
 		@Inject(forwardRef(() => OrderService))
 		private orderService: OrderService,
@@ -951,15 +955,40 @@ export class DistributorService {
 				? await this.packagePlanRepository.find({ where: { id: In(packagePlanIds) }, relations: ['section'] })
 				: [];
 		const packagePlanMap = new Map(packagePlans.map((plan) => [plan.id, plan]));
+		const categoryIds = Array.from(
+			new Set(
+				codes
+					.filter((code) => code.target_type === ActivationCodeTargetType.CATEGORY_BUNDLE && code.target_id)
+					.map((code) => code.target_id),
+			),
+		);
+		const categories = categoryIds.length
+			? await this.courseCategoryRepository.find({ where: { id: In(categoryIds) } })
+			: [];
+		const parentIds = Array.from(
+			new Set(categories.map((item) => item.parent_id).filter((id): id is number => id !== null)),
+		);
+		const categoryParents = parentIds.length
+			? await this.courseCategoryRepository.find({ where: { id: In(parentIds) } })
+			: [];
+		const categoryMap = new Map(categories.map((item) => [item.id, item]));
+		const categoryParentMap = new Map(categoryParents.map((item) => [item.id, item]));
 
 		// 格式化返回数据
 		return {
 			list: codes.map((code) => {
 				const targetType = code.target_type || ActivationCodeTargetType.COURSE;
 				const plan = targetType === ActivationCodeTargetType.PACKAGE && code.target_id ? packagePlanMap.get(code.target_id) : null;
+				const category =
+					targetType === ActivationCodeTargetType.CATEGORY_BUNDLE && code.target_id
+						? categoryMap.get(code.target_id)
+						: null;
+				const categoryParent = category?.parent_id ? categoryParentMap.get(category.parent_id) : null;
 				const targetName = plan
 					? `${plan.section?.name || '套餐/VIP'} - ${plan.name}`
-					: this.getActivationRewardTargetName(code) || code.course?.name || '-';
+					: category
+						? `${categoryParent ? `${categoryParent.name} / ` : ''}${category.name}`
+						: this.getActivationRewardTargetName(code) || code.course?.name || '-';
 				return {
 					id: code.id,
 					code: code.code,
@@ -1105,6 +1134,37 @@ export class DistributorService {
 					},
 				};
 			}
+			if (type === ActivationCodeTargetType.CATEGORY_BUNDLE) {
+				const categoryId = Number(input.target_id);
+				if (!Number.isInteger(categoryId) || categoryId <= 0) {
+					throw new BadRequestException('请选择类目套餐');
+				}
+				const category = await this.courseCategoryRepository.findOne({ where: { id: categoryId } });
+				if (!category || category.status === 0 || Number(category.bundle_enabled ?? 1) !== 1) {
+					throw new NotFoundException('类目套餐不存在或已关闭');
+				}
+				const parent = category.parent_id
+					? await this.courseCategoryRepository.findOne({ where: { id: category.parent_id } })
+					: null;
+				if (category.parent_id && (!parent || parent.status === 0)) {
+					throw new NotFoundException('类目套餐所属一级分类不存在或已关闭');
+				}
+				const courseCount = await this.courseRepository.count({
+					where: parent
+						? { category: parent.name, sub_category: category.name, status: 1 }
+						: { category: category.name, status: 1 },
+				});
+				if (courseCount === 0) {
+					throw new BadRequestException('该类目下暂无可激活资料');
+				}
+				return {
+					type,
+					id: category.id,
+					courseId: null,
+					name: `${parent ? `${parent.name} / ` : ''}${category.name}`,
+					rewardPayload: null,
+				};
+			}
 			const id = Number(input.target_id || input.course_id);
 			if (!Number.isInteger(id) || id <= 0) {
 				throw new BadRequestException(type === ActivationCodeTargetType.PACKAGE ? '请选择套餐/VIP计划' : '请选择课程');
@@ -1183,7 +1243,11 @@ export class DistributorService {
 
 				code.status = ActivationCodeStatus.INVALID;
 				await queryRunner.manager.save(ActivationCode, code);
-				await this.revokeCodeCourseAuth(queryRunner.manager, code);
+				if (code.target_type === ActivationCodeTargetType.CATEGORY_BUNDLE) {
+					await queryRunner.manager.delete(UserCategoryBundleAccess, { activation_code_id: code.id });
+				} else {
+					await this.revokeCodeCourseAuth(queryRunner.manager, code);
+				}
 				await queryRunner.commitTransaction();
 
 				return { success: true };
@@ -1218,6 +1282,7 @@ export class DistributorService {
 
 		private getActivationTargetTypeText(type: ActivationCodeTargetType) {
 			if (type === ActivationCodeTargetType.PACKAGE) return '套餐/VIP';
+			if (type === ActivationCodeTargetType.CATEGORY_BUNDLE) return '类目套餐';
 			if (type === ActivationCodeTargetType.POINTS) return '积分';
 			if (type === ActivationCodeTargetType.COUPON) return '优惠券';
 			return '课程';

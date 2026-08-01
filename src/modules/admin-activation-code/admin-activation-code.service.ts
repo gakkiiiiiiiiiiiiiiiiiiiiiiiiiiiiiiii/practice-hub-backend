@@ -17,6 +17,8 @@ import { UserPackageSubscription } from '../../database/entities/user-package-su
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { GenerateCodeDto } from './dto/generate-code.dto';
+import { CourseCategory } from '../../database/entities/course-category.entity';
+import { UserCategoryBundleAccess } from '../../database/entities/user-category-bundle-access.entity';
 
 @Injectable()
 export class AdminActivationCodeService {
@@ -37,6 +39,8 @@ export class AdminActivationCodeService {
     private userCourseAuthRepository: Repository<UserCourseAuth>,
     @InjectRepository(Order)
     private orderRepository: Repository<Order>,
+    @InjectRepository(CourseCategory)
+    private courseCategoryRepository: Repository<CourseCategory>,
     private dataSource: DataSource,
   ) {}
 
@@ -262,6 +266,8 @@ export class AdminActivationCodeService {
 
       if ((code.target_type || ActivationCodeTargetType.COURSE) === ActivationCodeTargetType.PACKAGE) {
         await this.revokeCodePackageAuth(queryRunner.manager, code);
+      } else if (code.target_type === ActivationCodeTargetType.CATEGORY_BUNDLE) {
+        await queryRunner.manager.delete(UserCategoryBundleAccess, { activation_code_id: code.id });
       } else {
         await this.revokeCodeCourseAuth(queryRunner.manager, code);
       }
@@ -453,6 +459,16 @@ export class AdminActivationCodeService {
         : null;
       return plan ? `${plan.section?.name || '套餐'} - ${plan.name}` : '套餐/VIP';
     }
+    if (targetType === ActivationCodeTargetType.CATEGORY_BUNDLE) {
+      const category = code.target_id
+        ? await this.courseCategoryRepository.findOne({ where: { id: code.target_id } })
+        : null;
+      if (!category) return '类目套餐';
+      const parent = category.parent_id
+        ? await this.courseCategoryRepository.findOne({ where: { id: category.parent_id } })
+        : null;
+      return `${parent ? `${parent.name} / ` : ''}${category.name}`;
+    }
     if (targetType === ActivationCodeTargetType.POINTS) {
       return `${Number(code.reward_payload?.points_amount || 0)}积分`;
     }
@@ -466,6 +482,7 @@ export class AdminActivationCodeService {
 
   private getTargetTypeText(type: ActivationCodeTargetType) {
     if (type === ActivationCodeTargetType.PACKAGE) return '套餐/VIP';
+    if (type === ActivationCodeTargetType.CATEGORY_BUNDLE) return '类目套餐';
     if (type === ActivationCodeTargetType.POINTS) return '积分';
     if (type === ActivationCodeTargetType.COUPON) return '优惠券';
     return '课程';

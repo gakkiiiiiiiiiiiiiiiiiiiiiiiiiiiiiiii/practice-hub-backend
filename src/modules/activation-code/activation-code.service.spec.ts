@@ -10,6 +10,7 @@ describe('ActivationCodeService', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
     );
 
   it('previews points activation codes', async () => {
@@ -43,6 +44,36 @@ describe('ActivationCodeService', () => {
       coupon_amount: 5,
       coupon_min_amount: 0,
       coupon_valid_days: 30,
+    });
+  });
+
+  it('previews category bundle activation codes', async () => {
+    const service = new ActivationCodeService(
+      {
+        findOne: jest.fn().mockResolvedValue({
+          code: 'ABCD-EFGH-JKLM',
+          status: ActivationCodeStatus.PENDING,
+          target_type: ActivationCodeTargetType.CATEGORY_BUNDLE,
+          target_id: 12,
+        }),
+      } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce({ id: 12, name: '内科护理', parent_id: 3, status: 1, bundle_enabled: 1 })
+          .mockResolvedValueOnce({ id: 3, name: '护理学' }),
+      } as any,
+      {} as any,
+    );
+
+    await expect(service.previewCode('ABCD-EFGH-JKLM')).resolves.toMatchObject({
+      target_type: ActivationCodeTargetType.CATEGORY_BUNDLE,
+      category_id: 12,
+      category_bundle_name: '护理学 / 内科护理',
     });
   });
 });
