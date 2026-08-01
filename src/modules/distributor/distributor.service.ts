@@ -554,7 +554,7 @@ export class DistributorService {
 			if (isAppAdmin) {
 				distributor = await this.createApprovedDistributorForUser(userId);
 			} else {
-				throw new NotFoundException('您还不是分销用户');
+				return null;
 			}
 		}
 
