@@ -1,4 +1,4 @@
-import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import axios from 'axios';
 import { AuthService } from './auth.service';
 
@@ -128,5 +128,35 @@ describe('AuthService 微信手机号快捷登录', () => {
 		await expect(service.appPhoneLogin('login-code', 'phone-code')).rejects.toBeInstanceOf(
 			ServiceUnavailableException,
 		);
+	});
+
+	it('openid账号与手机号账号不一致时拒绝覆盖绑定', async () => {
+		const appUserRepository = {
+			findOne: jest
+				.fn()
+				.mockResolvedValueOnce({ id: 597, openid: 'openid-new', phone: null })
+				.mockResolvedValueOnce({ id: 579, openid: 'openid-old', phone: '15700006418' }),
+			save: jest.fn(),
+		};
+		const guardedService = new AuthService(
+			appUserRepository as any,
+			null,
+			null,
+			{ get: jest.fn() } as any,
+			null,
+			null,
+			null,
+			null,
+		);
+		jest.spyOn(guardedService as any, 'getWechatSessionByCode').mockResolvedValue({
+			openid: 'openid-new',
+			session_key: 'session-key',
+		});
+		jest.spyOn(guardedService as any, 'getPhoneNumberByCode').mockResolvedValue('15700006418');
+
+		await expect(guardedService.appPhoneLogin('login-code', 'phone-code')).rejects.toEqual(
+			new ConflictException('该手机号已绑定其他微信账号，请联系客服合并账号'),
+		);
+		expect(appUserRepository.save).not.toHaveBeenCalled();
 	});
 });

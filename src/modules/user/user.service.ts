@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
@@ -89,6 +89,11 @@ export class UserService {
 
     if (!user) {
       throw new NotFoundException('用户不存在');
+    }
+
+    const phoneOwner = await this.appUserRepository.findOne({ where: { phone: dto.phone } });
+    if (phoneOwner && phoneOwner.id !== user.id) {
+      throw new ConflictException('该手机号已绑定其他账号');
     }
 
     user.phone = dto.phone;

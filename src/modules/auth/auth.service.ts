@@ -3,6 +3,7 @@ import {
 	UnauthorizedException,
 	BadRequestException,
 	ServiceUnavailableException,
+	ConflictException,
 	Inject,
 	forwardRef,
 } from '@nestjs/common';
@@ -171,6 +172,7 @@ export class AuthService {
 			if (
 				error instanceof UnauthorizedException ||
 				error instanceof BadRequestException ||
+				error instanceof ConflictException ||
 				error instanceof ServiceUnavailableException
 			) {
 				throw error;
@@ -217,10 +219,14 @@ export class AuthService {
 			const { openid, session_key } = await this.getWechatSessionByCode(loginCode);
 			const phone = await this.getPhoneNumberByCode(phoneCode);
 
-			let user = await this.appUserRepository.findOne({ where: { openid } });
-			if (!user && phone) {
-				user = await this.appUserRepository.findOne({ where: { phone } });
+			const [openidUser, phoneUser] = await Promise.all([
+				this.appUserRepository.findOne({ where: { openid } }),
+				this.appUserRepository.findOne({ where: { phone } }),
+			]);
+			if (openidUser && phoneUser && openidUser.id !== phoneUser.id) {
+				throw new ConflictException('该手机号已绑定其他微信账号，请联系客服合并账号');
 			}
+			let user = openidUser || phoneUser;
 			const isNewUser = !user;
 
 			if (!user) {
@@ -280,6 +286,7 @@ export class AuthService {
 			if (
 				error instanceof UnauthorizedException ||
 				error instanceof BadRequestException ||
+				error instanceof ConflictException ||
 				error instanceof ServiceUnavailableException
 			) {
 				throw error;
