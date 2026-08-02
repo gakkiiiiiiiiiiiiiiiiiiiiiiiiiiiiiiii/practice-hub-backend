@@ -46,11 +46,13 @@ const DEFAULT_POINTS_CONFIG: PointsConfig = {
 	exchange_items: [],
 };
 
-const createExchangeItemId = () =>
-	`ex_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+const getLegacyExchangeItemId = (index: number) =>
+	index === 0 ? 'legacy' : `legacy_${index + 1}`;
 
 const normalizeExchangeItem = (item: Partial<PointsExchangeItem>, index: number): PointsExchangeItem => ({
-	id: String(item.id || createExchangeItemId()),
+	// 旧版配置没有 exchange_items/id。必须使用稳定 ID，否则读取配置和提交兑换时
+	// 会生成两个不同的随机 ID，导致接口误判为“兑换项不存在或已下架”。
+	id: String(item.id || getLegacyExchangeItemId(index)),
 	name: String(item.name || '').trim(),
 	points: Math.max(1, Number(item.points) || 500),
 	coupon_amount: Math.max(0.01, Number(item.coupon_amount) || 5),
