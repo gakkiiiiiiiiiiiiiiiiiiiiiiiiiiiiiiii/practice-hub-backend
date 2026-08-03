@@ -57,7 +57,7 @@ export class ActivationCode {
 	batch_prefix: string;
 
 	@Column({ nullable: true })
-	course_id: number; // 从 subject_id 改为 course_id
+	course_id: number | null; // 从 subject_id 改为 course_id
 
 	@Column({
 		type: 'varchar',

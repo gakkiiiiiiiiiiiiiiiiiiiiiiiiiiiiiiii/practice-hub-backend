@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, IsNull, Equal } from 'typeorm';
+import { DataSource, EntityManager, Repository, In, IsNull, Equal } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
 import { Chapter } from '../../database/entities/chapter.entity';
 import { Question } from '../../database/entities/question.entity';
@@ -9,6 +9,14 @@ import { ExamRecord } from '../../database/entities/exam-record.entity';
 import { UserWrongBook } from '../../database/entities/user-wrong-book.entity';
 import { UserAnswerLog } from '../../database/entities/user-answer-log.entity';
 import { UserCollection } from '../../database/entities/user-collection.entity';
+import { UserNote } from '../../database/entities/user-note.entity';
+import { UserCourseAuth } from '../../database/entities/user-course-auth.entity';
+import { UserFileCourseProgress } from '../../database/entities/user-file-course-progress.entity';
+import { HomeRecommendItem } from '../../database/entities/home-recommend-item.entity';
+import {
+  ActivationCode,
+  ActivationCodeStatus,
+} from '../../database/entities/activation-code.entity';
 import { CourseRecommendation } from '../../database/entities/course-recommendation.entity';
 import { PreviewCacheTask, PreviewCacheTaskStatus } from '../../database/entities/preview-cache-task.entity';
 import { CreateCourseDto } from './dto/create-course.dto';
@@ -1418,44 +1426,64 @@ export class AdminCourseService {
    * 删除课程（级联删除关联数据）
    */
   async deleteCourse(id: number) {
-    return this.dataSource.transaction(async (manager) => {
-      const courseRepository = manager.getRepository(Course);
-      const chapterRepository = manager.getRepository(Chapter);
-      const questionRepository = manager.getRepository(Question);
-      const userCollectionRepository = manager.getRepository(UserCollection);
-      const userWrongBookRepository = manager.getRepository(UserWrongBook);
-      const userAnswerLogRepository = manager.getRepository(UserAnswerLog);
-      const examConfigRepository = manager.getRepository(ExamConfig);
-      const examRecordRepository = manager.getRepository(ExamRecord);
-      const course = await courseRepository.findOne({ where: { id } });
-      if (!course) throw new NotFoundException('课程不存在');
+    return this.dataSource.transaction((manager) => this.deleteCourseInTransaction(id, manager));
+  }
 
-      const chapters = await chapterRepository.find({ where: { course_id: id } });
-      const chapterIds = chapters.map((chapter) => chapter.id);
-      const questions = chapterIds.length
-        ? await questionRepository.find({ where: { chapter_id: In(chapterIds) } })
-        : [];
-      const questionIds = questions.map((question) => question.id);
+  private async deleteCourseInTransaction(id: number, manager: EntityManager) {
+    const courseRepository = manager.getRepository(Course);
+    const chapterRepository = manager.getRepository(Chapter);
+    const questionRepository = manager.getRepository(Question);
+    const userCollectionRepository = manager.getRepository(UserCollection);
+    const userNoteRepository = manager.getRepository(UserNote);
+    const userWrongBookRepository = manager.getRepository(UserWrongBook);
+    const userAnswerLogRepository = manager.getRepository(UserAnswerLog);
+    const userCourseAuthRepository = manager.getRepository(UserCourseAuth);
+    const userFileCourseProgressRepository = manager.getRepository(UserFileCourseProgress);
+    const homeRecommendItemRepository = manager.getRepository(HomeRecommendItem);
+    const activationCodeRepository = manager.getRepository(ActivationCode);
+    const examConfigRepository = manager.getRepository(ExamConfig);
+    const examRecordRepository = manager.getRepository(ExamRecord);
+    const course = await courseRepository.findOne({ where: { id } });
+    if (!course) throw new NotFoundException('课程不存在');
 
-      if (questionIds.length) await userCollectionRepository.delete({ question_id: In(questionIds) });
-      await userWrongBookRepository.delete({ course_id: id });
-      if (chapterIds.length) {
-        await userAnswerLogRepository.delete({ chapter_id: In(chapterIds) });
-        await questionRepository.delete({ chapter_id: In(chapterIds) });
-        await chapterRepository.delete({ course_id: id });
-      }
+    const chapters = await chapterRepository.find({ where: { course_id: id } });
+    const chapterIds = chapters.map((chapter) => chapter.id);
+    const questions = chapterIds.length
+      ? await questionRepository.find({ where: { chapter_id: In(chapterIds) } })
+      : [];
+    const questionIds = questions.map((question) => question.id);
 
-      const examConfigs = await examConfigRepository.find({ where: { course_id: id } });
-      const examConfigIds = examConfigs.map((config) => config.id);
-      if (examConfigIds.length) {
-        await examRecordRepository.delete({ exam_config_id: In(examConfigIds) });
-      }
-      await examConfigRepository.delete({ course_id: id });
+    if (questionIds.length) {
+      await userCollectionRepository.delete({ question_id: In(questionIds) });
+      await userNoteRepository.delete({ question_id: In(questionIds) });
+    }
+    await userWrongBookRepository.delete({ course_id: id });
+    if (chapterIds.length) {
+      await userAnswerLogRepository.delete({ chapter_id: In(chapterIds) });
+      await questionRepository.delete({ chapter_id: In(chapterIds) });
+      await chapterRepository.delete({ course_id: id });
+    }
 
-      await this.courseFileService.removeAllForCourse(id, manager, course.file_url);
-      await courseRepository.remove(course);
-      return { success: true };
-    });
+    const examConfigs = await examConfigRepository.find({ where: { course_id: id } });
+    const examConfigIds = examConfigs.map((config) => config.id);
+    if (examConfigIds.length) {
+      await examRecordRepository.delete({ exam_config_id: In(examConfigIds) });
+    }
+    await examConfigRepository.delete({ course_id: id });
+
+    // 保留已核销激活码的审计记录；未使用的课程激活码随课程删除一并作废。
+    await activationCodeRepository.update(
+      { course_id: id, status: ActivationCodeStatus.PENDING },
+      { status: ActivationCodeStatus.INVALID },
+    );
+    await activationCodeRepository.update({ course_id: id }, { course_id: null });
+    await userCourseAuthRepository.delete({ course_id: id });
+    await userFileCourseProgressRepository.delete({ course_id: id });
+    await homeRecommendItemRepository.delete({ course_id: id });
+
+    await this.courseFileService.removeAllForCourse(id, manager, course.file_url);
+    await courseRepository.remove(course);
+    return { success: true };
   }
 
   /**
@@ -1566,26 +1594,22 @@ export class AdminCourseService {
    */
   async batchDeleteCourses(dto: BatchDeleteCoursesDto) {
     if (!dto.ids || dto.ids.length === 0) {
-      throw new Error('课程ID列表不能为空');
+      throw new BadRequestException('课程ID列表不能为空');
     }
+    const ids = Array.from(new Set(dto.ids.map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+    if (ids.length === 0) throw new BadRequestException('课程ID列表无效');
 
-    const courses = await this.courseRepository.find({
-      where: { id: In(dto.ids) },
+    return this.dataSource.transaction(async (manager) => {
+      const courses = await manager.getRepository(Course).find({ where: { id: In(ids) } });
+      if (courses.length === 0) throw new NotFoundException('未找到要删除的课程');
+
+      // 整批课程共用一个事务，任何一门失败都会完整回滚，避免只删除一部分。
+      for (const course of courses) {
+        await this.deleteCourseInTransaction(course.id, manager);
+      }
+
+      return { success: true, count: courses.length };
     });
-
-    if (courses.length === 0) {
-      throw new NotFoundException('未找到要删除的课程');
-    }
-
-    // 批量删除每个课程的关联数据
-    for (const course of courses) {
-      await this.deleteCourse(course.id);
-    }
-
-    return {
-      success: true,
-      count: courses.length,
-    };
   }
 
   /**
