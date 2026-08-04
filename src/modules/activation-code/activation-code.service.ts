@@ -10,6 +10,7 @@ import { UserPointsLog, UserPointsLogType } from '../../database/entities/user-p
 import { UserCoupon, UserCouponStatus } from '../../database/entities/user-coupon.entity';
 import { CourseCategory } from '../../database/entities/course-category.entity';
 import { UserCategoryBundleAccess } from '../../database/entities/user-category-bundle-access.entity';
+import { Distributor } from '../../database/entities/distributor.entity';
 import { requestUserPreviewDemand } from '../course/preview-demand.util';
 
 @Injectable()
@@ -43,6 +44,17 @@ export class ActivationCodeService {
       throw new BadRequestException('激活码无效或已使用');
     }
     const targetType = activationCode.target_type || ActivationCodeTargetType.COURSE;
+    if (targetType === ActivationCodeTargetType.AGENT) {
+      return {
+        code: activationCode.code,
+        target_type: targetType,
+        target_id: null,
+        course_id: null,
+        course_name: '',
+        identity_name: '代理商',
+        benefits: ['按代理商价格购买课程激活码', '管理已购买的激活码', '使用分销推广功能'],
+      };
+    }
     if (targetType === ActivationCodeTargetType.PACKAGE) {
       const plan = activationCode.target_id
         ? await this.packagePlanRepository.findOne({ where: { id: activationCode.target_id }, relations: ['section'] })
@@ -179,7 +191,10 @@ export class ActivationCodeService {
       }
 
       const targetType = activationCode.target_type || ActivationCodeTargetType.COURSE;
-      if (targetType === ActivationCodeTargetType.PACKAGE) {
+      let agentIdentity: Distributor | null = null;
+      if (targetType === ActivationCodeTargetType.AGENT) {
+        agentIdentity = await this.grantAgentByCode(queryRunner.manager, userId);
+      } else if (targetType === ActivationCodeTargetType.PACKAGE) {
         await this.grantPackageByCode(queryRunner.manager, userId, activationCode);
       } else if (targetType === ActivationCodeTargetType.CATEGORY_BUNDLE) {
         await this.grantCategoryBundleByCode(queryRunner.manager, userId, activationCode);
@@ -206,6 +221,13 @@ export class ActivationCodeService {
         target_type: targetType,
         course_id: activationCode.course_id,
         course_name: activationCode.course?.name || '',
+        ...(targetType === ActivationCodeTargetType.AGENT
+          ? {
+              is_agent: true,
+              distributor_code: agentIdentity?.distributor_code || '',
+              message: '代理商身份激活成功',
+            }
+          : {}),
         ...(targetType === ActivationCodeTargetType.CATEGORY_BUNDLE
           ? { category_id: activationCode.target_id }
           : {}),
@@ -247,6 +269,33 @@ export class ActivationCodeService {
         expire_time: null,
       });
     }
+  }
+
+  private async grantAgentByCode(manager: any, userId: number): Promise<Distributor> {
+    const existing = await manager.findOne(Distributor, {
+      where: { user_id: userId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (existing?.status === 1) {
+      throw new BadRequestException('您已经是代理商，无需重复激活');
+    }
+    if (existing) {
+      existing.status = 1;
+      existing.reject_reason = null;
+      return manager.save(Distributor, existing);
+    }
+    const distributor = manager.create(Distributor, {
+      user_id: userId,
+      distributor_code: this.generateDistributorCode(userId),
+      status: 1,
+    });
+    return manager.save(Distributor, distributor);
+  }
+
+  private generateDistributorCode(userId: number): string {
+    const timestamp = Date.now().toString().slice(-8);
+    const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+    return `D${userId}${timestamp}${random}`;
   }
 
   private async grantPackageByCode(manager: any, userId: number, activationCode: ActivationCode) {

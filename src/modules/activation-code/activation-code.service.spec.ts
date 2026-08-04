@@ -76,4 +76,33 @@ describe('ActivationCodeService', () => {
       category_bundle_name: '护理学 / 内科护理',
     });
   });
+
+  it('previews agent identity activation codes', async () => {
+    const service = createService({
+      code: 'AGNT-EFGH-JKLM',
+      status: ActivationCodeStatus.PENDING,
+      target_type: ActivationCodeTargetType.AGENT,
+    });
+
+    await expect(service.previewCode('AGNT-EFGH-JKLM')).resolves.toMatchObject({
+      target_type: ActivationCodeTargetType.AGENT,
+      identity_name: '代理商',
+      benefits: expect.arrayContaining(['按代理商价格购买课程激活码']),
+    });
+  });
+
+  it('creates an approved distributor when an agent code is redeemed', async () => {
+    const service = createService(null);
+    const manager = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((_entity, payload) => payload),
+      save: jest.fn((_entity, payload) => Promise.resolve({ id: 9, ...payload })),
+    };
+
+    await expect((service as any).grantAgentByCode(manager, 607)).resolves.toMatchObject({
+      user_id: 607,
+      status: 1,
+      distributor_code: expect.stringMatching(/^D607/),
+    });
+  });
 });

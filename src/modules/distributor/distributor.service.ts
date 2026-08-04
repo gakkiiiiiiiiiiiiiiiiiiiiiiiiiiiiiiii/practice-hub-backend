@@ -572,6 +572,7 @@ export class DistributorService {
 			subordinate_count: distributor.subordinate_count,
 			total_orders: distributor.total_orders,
 			is_app_admin: isAppAdmin,
+			is_agent: distributor.status === 1,
 		};
 	}
 
@@ -1095,6 +1096,15 @@ export class DistributorService {
 			reward_payload?: ActivationCodeRewardPayload;
 		}) {
 			const type = input.target_type || ActivationCodeTargetType.COURSE;
+			if (type === ActivationCodeTargetType.AGENT) {
+				return {
+					type,
+					id: null,
+					courseId: null,
+					name: '代理商身份',
+					rewardPayload: null,
+				};
+			}
 			if (type === ActivationCodeTargetType.POINTS) {
 				const amount = Number(input.reward_payload?.points_amount);
 				if (!Number.isInteger(amount) || amount < 1 || amount > 1000000) {
@@ -1236,9 +1246,10 @@ export class DistributorService {
 				}
 				if (
 					code.target_type === ActivationCodeTargetType.POINTS ||
-					code.target_type === ActivationCodeTargetType.COUPON
+					code.target_type === ActivationCodeTargetType.COUPON ||
+					code.target_type === ActivationCodeTargetType.AGENT
 				) {
-					throw new BadRequestException('积分或优惠券激活码使用后不可撤销');
+					throw new BadRequestException('积分、优惠券或代理商身份激活码使用后不可撤销');
 				}
 
 				code.status = ActivationCodeStatus.INVALID;
@@ -1281,6 +1292,7 @@ export class DistributorService {
 		}
 
 		private getActivationTargetTypeText(type: ActivationCodeTargetType) {
+			if (type === ActivationCodeTargetType.AGENT) return '代理商身份';
 			if (type === ActivationCodeTargetType.PACKAGE) return '套餐/VIP';
 			if (type === ActivationCodeTargetType.CATEGORY_BUNDLE) return '类目套餐';
 			if (type === ActivationCodeTargetType.POINTS) return '积分';
@@ -1289,6 +1301,7 @@ export class DistributorService {
 		}
 
 		private getActivationRewardTargetName(code: ActivationCode) {
+			if (code.target_type === ActivationCodeTargetType.AGENT) return '代理商身份';
 			if (code.target_type === ActivationCodeTargetType.POINTS) {
 				const amount = Number(code.reward_payload?.points_amount || 0);
 				return amount > 0 ? `${amount}积分` : '积分';

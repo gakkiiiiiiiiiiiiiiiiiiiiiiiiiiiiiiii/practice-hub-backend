@@ -256,9 +256,10 @@ export class AdminActivationCodeService {
       }
       if (
         code.target_type === ActivationCodeTargetType.POINTS ||
-        code.target_type === ActivationCodeTargetType.COUPON
+        code.target_type === ActivationCodeTargetType.COUPON ||
+        code.target_type === ActivationCodeTargetType.AGENT
       ) {
-        throw new BadRequestException('积分或优惠券激活码使用后不可撤销');
+        throw new BadRequestException('积分、优惠券或代理商身份激活码使用后不可撤销');
       }
 
       code.status = ActivationCodeStatus.INVALID;
@@ -453,6 +454,7 @@ export class AdminActivationCodeService {
 
   private async getCodeTargetText(code: ActivationCode) {
     const targetType = code.target_type || ActivationCodeTargetType.COURSE;
+    if (targetType === ActivationCodeTargetType.AGENT) return '代理商身份';
     if (targetType === ActivationCodeTargetType.PACKAGE) {
       const plan = code.target_id
         ? await this.packagePlanRepository.findOne({ where: { id: code.target_id }, relations: ['section'] })
@@ -481,6 +483,7 @@ export class AdminActivationCodeService {
   }
 
   private getTargetTypeText(type: ActivationCodeTargetType) {
+    if (type === ActivationCodeTargetType.AGENT) return '代理商身份';
     if (type === ActivationCodeTargetType.PACKAGE) return '套餐/VIP';
     if (type === ActivationCodeTargetType.CATEGORY_BUNDLE) return '类目套餐';
     if (type === ActivationCodeTargetType.POINTS) return '积分';

@@ -4,16 +4,14 @@ import { DistributorService } from './distributor.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
-import {
-	ActivationCodeRewardPayload,
-	ActivationCodeTargetType,
-} from '../../database/entities/activation-code.entity';
 import { ApplyDistributorDto } from './dto/apply-distributor.dto';
 import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto';
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
 import { GrantAppUserPointsDto } from './dto/grant-app-user-points.dto';
 import { IssueCouponDto } from '../marketing/dto/issue-coupon.dto';
 import { AppAdminRewardService } from './app-admin-reward.service';
+import { BuyActivationCodesDto } from './dto/buy-activation-codes.dto';
+import { GenerateAppActivationCodesDto } from './dto/generate-app-activation-codes.dto';
 
 @ApiTags('分销')
 @Controller('app/distributor')
@@ -72,7 +70,7 @@ export class DistributorController {
 		@UseGuards(JwtAuthGuard)
 		@ApiBearerAuth()
 	@ApiOperation({ summary: '购买激活码（分销商）' })
-	async buyCodes(@CurrentUser() user: any, @Body() body: { course_id: number; count: number }) {
+	async buyCodes(@CurrentUser() user: any, @Body() body: BuyActivationCodesDto) {
 			const result = await this.distributorService.buyActivationCodes(user.userId, body.course_id, body.count);
 			return CommonResponseDto.success(result);
 		}
@@ -81,17 +79,7 @@ export class DistributorController {
 		@UseGuards(JwtAuthGuard)
 		@ApiBearerAuth()
 		@ApiOperation({ summary: '小程序管理员生成激活码' })
-		async generateAdminCodes(
-			@CurrentUser() user: any,
-			@Body()
-			body: {
-				course_id?: number;
-				count: number;
-				target_type?: ActivationCodeTargetType;
-				target_id?: number;
-				reward_payload?: ActivationCodeRewardPayload;
-			},
-		) {
+		async generateAdminCodes(@CurrentUser() user: any, @Body() body: GenerateAppActivationCodesDto) {
 			const result = await this.distributorService.generateAdminActivationCodes(user.userId, body);
 			return CommonResponseDto.success(result);
 		}

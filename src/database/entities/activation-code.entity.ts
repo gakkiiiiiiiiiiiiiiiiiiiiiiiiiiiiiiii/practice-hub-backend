@@ -13,6 +13,7 @@ export enum ActivationCodeTargetType {
 	CATEGORY_BUNDLE = 'category_bundle',
 	POINTS = 'points',
 	COUPON = 'coupon',
+	AGENT = 'agent',
 }
 
 export type ActivationCodeRewardPayload = {
