@@ -131,6 +131,23 @@ export class AdminCourseService {
     }
   }
 
+	async updateCourseAgentPrice(courseId: number, agentPrice: number) {
+		assertIntegerYuanPrice(agentPrice, '代理商售价');
+		const course = await this.courseRepository.findOne({ where: { id: courseId } });
+		if (!course) {
+			throw new NotFoundException('课程不存在');
+		}
+		course.agent_price = Number(agentPrice);
+		const saved = await this.courseRepository.save(course);
+		return {
+			id: saved.id,
+			name: saved.name,
+			price: Number(saved.price || 0),
+			agent_price: Number(saved.agent_price || 0),
+			effective_agent_price: Number(saved.agent_price || saved.price || 0),
+		};
+	}
+
   async getCourseDefaultParams() {
     return this.systemService.getCourseDefaultParams();
   }

@@ -39,6 +39,7 @@ import { SetCourseDefaultParamsDto } from '../system/dto/set-course-default-para
 import { SetCourseSimilarityConfigDto } from './dto/set-course-similarity-config.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
+import { UpdateAppCourseAgentPriceDto } from './dto/update-app-course-agent-price.dto';
 
 @ApiTags('管理后台-课程管理')
 @Controller('admin/courses')
@@ -492,6 +493,18 @@ export class AppCourseAdminController {
 		private readonly appUserRepository: Repository<AppUser>,
 	) {}
 
+	@Put(':id/agent-price')
+	@ApiOperation({ summary: '小程序超级管理员设置课程代理商售价' })
+	async updateAgentPrice(
+		@Param('id') id: number,
+		@Body() dto: UpdateAppCourseAgentPriceDto,
+		@CurrentUser() user: any,
+	) {
+		await this.assertAppSuperAdmin(user);
+		const result = await this.adminCourseService.updateCourseAgentPrice(+id, dto.agent_price);
+		return CommonResponseDto.success(result);
+	}
+
 	@Post('file-course')
 	@ApiOperation({ summary: '小程序管理员创建文件类课程' })
 	async createFileCourse(@Body() body: Record<string, any>, @CurrentUser() user: any) {
@@ -603,6 +616,17 @@ export class AppCourseAdminController {
 			return;
 		}
 		throw new ForbiddenException('仅小程序管理员可上传课程');
+	}
+
+	private async assertAppSuperAdmin(user: any) {
+		const userId = Number(user?.userId || user?.id);
+		if (!userId) {
+			throw new ForbiddenException('仅小程序超级管理员可设置代理商价格');
+		}
+		const dbUser = await this.appUserRepository.findOne({ where: { id: userId }, select: ['id', 'role'] });
+		if (dbUser?.role !== AppUserRole.ADMIN) {
+			throw new ForbiddenException('仅小程序超级管理员可设置代理商价格');
+		}
 	}
 
 	private optionalText(value: unknown): string | undefined {

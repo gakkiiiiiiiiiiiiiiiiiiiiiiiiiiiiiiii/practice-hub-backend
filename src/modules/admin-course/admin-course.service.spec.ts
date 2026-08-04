@@ -83,6 +83,33 @@ describe('AdminCourseService getCourseFileDownloadUrl', () => {
 	});
 });
 
+describe('AdminCourseService updateCourseAgentPrice', () => {
+	it('updates only the selected course agent price', async () => {
+		const course = { id: 12, name: '护理学', price: 20, agent_price: 6 };
+		const repository = {
+			findOne: jest.fn().mockResolvedValue(course),
+			save: jest.fn((value) => Promise.resolve(value)),
+		};
+		const service = Object.create(AdminCourseService.prototype) as AdminCourseService;
+		(service as any).courseRepository = repository;
+
+		await expect(service.updateCourseAgentPrice(12, 8)).resolves.toEqual({
+			id: 12,
+			name: '护理学',
+			price: 20,
+			agent_price: 8,
+			effective_agent_price: 8,
+		});
+		expect(repository.findOne).toHaveBeenCalledWith({ where: { id: 12 } });
+		expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({ id: 12, agent_price: 8 }));
+	});
+
+	it('rejects fractional agent prices', async () => {
+		const service = Object.create(AdminCourseService.prototype) as AdminCourseService;
+		await expect(service.updateCourseAgentPrice(12, 8.5)).rejects.toBeInstanceOf(BadRequestException);
+	});
+});
+
 describe('AdminCourseService batchDeleteCourses', () => {
 	it('invalidates pending activation codes and clears their course foreign key in one transaction', async () => {
 		const course = { id: 12, file_url: 'https://cdn.example.com/course.pdf' };
