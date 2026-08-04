@@ -59,6 +59,7 @@ describe('DistributorService agent identity activation codes', () => {
 			}),
 		).resolves.toMatchObject({
 			count: 2,
+			codes: [expect.any(String), expect.any(String)],
 			target_type: ActivationCodeTargetType.AGENT,
 			target_name: '代理商身份',
 		});

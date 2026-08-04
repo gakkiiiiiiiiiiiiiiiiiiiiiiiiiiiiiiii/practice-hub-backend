@@ -1081,6 +1081,7 @@ export class DistributorService {
 				batch_no: batchId,
 				batch_id: batchId,
 				count: codes.length,
+				codes: codes.map((item) => item.code),
 				target_type: target.type,
 				target_id: target.id,
 				course_id: target.courseId,
