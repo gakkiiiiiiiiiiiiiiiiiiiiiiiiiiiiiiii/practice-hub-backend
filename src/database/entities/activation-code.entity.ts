@@ -17,6 +17,7 @@ export enum ActivationCodeTargetType {
 }
 
 export type ActivationCodeRewardPayload = {
+	agent_level?: number;
 	points_amount?: number;
 	coupon_amount?: number;
 	coupon_min_amount?: number;

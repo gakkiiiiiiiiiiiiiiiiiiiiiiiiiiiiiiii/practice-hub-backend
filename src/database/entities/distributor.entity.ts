@@ -30,6 +30,9 @@ export class Distributor {
 	@Column({ type: 'tinyint', default: 0, comment: '状态：0-待审核, 1-已通过, 2-已拒绝, 3-已禁用' })
 	status: number;
 
+	@Column({ type: 'tinyint', default: 1, comment: '代理商等级：1-一级代理, 2-二级代理, 3-三级代理' })
+	agent_level: number;
+
 	@Column({ type: 'text', nullable: true, comment: '拒绝原因' })
 	reject_reason: string;
 
@@ -51,4 +54,3 @@ export class Distributor {
 	@UpdateDateColumn()
 	update_time: Date;
 }
-

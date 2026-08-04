@@ -573,6 +573,8 @@ export class DistributorService {
 			total_orders: distributor.total_orders,
 			is_app_admin: isAppAdmin,
 			is_agent: distributor.status === 1,
+			agent_level: this.normalizeAgentLevel(distributor.agent_level),
+			agent_level_name: this.getAgentLevelName(distributor.agent_level),
 		};
 	}
 
@@ -778,8 +780,8 @@ export class DistributorService {
 			throw new NotFoundException('课程不存在');
 		}
 
-		// 获取代理商价格（如果有），否则使用原价
-		const agentPrice = Number(course.agent_price || course.price || 0);
+		const agentLevel = this.normalizeAgentLevel(distributor.agent_level);
+		const agentPrice = this.getCourseAgentPrice(course, agentLevel);
 		const totalPrice = agentPrice * normalizedCount;
 		if (totalPrice <= 0) {
 			throw new BadRequestException('激活码购买金额异常，请检查课程代理商售价');
@@ -807,6 +809,7 @@ export class DistributorService {
 					course_name: course.name,
 					count: normalizedCount,
 					unit_price: agentPrice,
+					agent_level: agentLevel,
 					total_price: totalPrice,
 				},
 			},
@@ -825,6 +828,8 @@ export class DistributorService {
 			course_id: courseId,
 			course_name: course.name,
 			total_price: totalPrice,
+			agent_level: agentLevel,
+			agent_level_name: this.getAgentLevelName(agentLevel),
 			payment_params: payment.payment_params,
 		};
 	}
@@ -1098,12 +1103,13 @@ export class DistributorService {
 		}) {
 			const type = input.target_type || ActivationCodeTargetType.COURSE;
 			if (type === ActivationCodeTargetType.AGENT) {
+				const agentLevel = this.normalizeAgentLevel(input.reward_payload?.agent_level);
 				return {
 					type,
 					id: null,
 					courseId: null,
-					name: '代理商身份',
-					rewardPayload: null,
+					name: `${this.getAgentLevelName(agentLevel)}身份`,
+					rewardPayload: { agent_level: agentLevel },
 				};
 			}
 			if (type === ActivationCodeTargetType.POINTS) {
@@ -1365,5 +1371,19 @@ export class DistributorService {
 				[ActivationCodeSourceType.APP_ADMIN]: '小程序管理员生成',
 			};
 			return textMap[sourceType] || '未知来源';
+		}
+
+		private normalizeAgentLevel(value: unknown) {
+			const level = Number(value);
+			return Number.isInteger(level) && level >= 1 && level <= 3 ? level : 1;
+		}
+
+		private getAgentLevelName(value: unknown) {
+			return ['一级代理', '二级代理', '三级代理'][this.normalizeAgentLevel(value) - 1];
+		}
+
+		private getCourseAgentPrice(course: Course, agentLevel: number) {
+			const levelPrice = Number(course.agent_prices?.[String(agentLevel)] || 0);
+			return levelPrice || Number(course.agent_price || course.price || 0);
 		}
 	}

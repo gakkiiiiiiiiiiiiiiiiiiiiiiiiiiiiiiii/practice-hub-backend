@@ -131,21 +131,81 @@ export class AdminCourseService {
     }
   }
 
-	async updateCourseAgentPrice(courseId: number, agentPrice: number) {
+	async updateCourseAgentPrice(courseId: number, agentPrice: number, agentLevel = 1) {
 		assertIntegerYuanPrice(agentPrice, '代理商售价');
+		this.assertAgentLevel(agentLevel);
 		const course = await this.courseRepository.findOne({ where: { id: courseId } });
 		if (!course) {
 			throw new NotFoundException('课程不存在');
 		}
-		course.agent_price = Number(agentPrice);
+		course.agent_prices = { ...(course.agent_prices || {}), [String(agentLevel)]: Number(agentPrice) };
+		if (agentLevel === 1) course.agent_price = Number(agentPrice);
 		const saved = await this.courseRepository.save(course);
 		return {
 			id: saved.id,
 			name: saved.name,
 			price: Number(saved.price || 0),
 			agent_price: Number(saved.agent_price || 0),
-			effective_agent_price: Number(saved.agent_price || saved.price || 0),
+			agent_prices: saved.agent_prices || {},
+			agent_level: agentLevel,
+			effective_agent_price: this.getAgentPrice(saved, agentLevel),
 		};
+	}
+
+	async batchUpdateCourseAgentPricesByDiscount(courseIds: number[], discount: number, agentLevel: number) {
+		this.assertAgentLevel(agentLevel);
+		const uniqueIds = Array.from(
+			new Set((courseIds || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)),
+		);
+		if (uniqueIds.length === 0) {
+			throw new BadRequestException('请至少选择一份资料');
+		}
+		const normalizedDiscount = Number(discount);
+		if (
+			!Number.isFinite(normalizedDiscount) ||
+			normalizedDiscount < 0.1 ||
+			normalizedDiscount > 10 ||
+			Math.round(normalizedDiscount * 10) !== normalizedDiscount * 10
+		) {
+			throw new BadRequestException('折扣范围为 0.1 至 10 折，最多保留一位小数');
+		}
+
+		const courses = await this.courseRepository.find({ where: { id: In(uniqueIds) } });
+		if (courses.length === 0) {
+			throw new NotFoundException('未找到要设置代理商售价的资料');
+		}
+
+		for (const course of courses) {
+			const normalPrice = Number(course.price || 0);
+			const levelPrice = normalPrice > 0 ? ceilIntegerYuanPrice((normalPrice * normalizedDiscount) / 10) : 0;
+			course.agent_prices = { ...(course.agent_prices || {}), [String(agentLevel)]: levelPrice };
+			if (agentLevel === 1) course.agent_price = levelPrice;
+		}
+		const savedCourses = await this.courseRepository.save(courses, { chunk: 500 });
+
+		return {
+			count: savedCourses.length,
+			discount: normalizedDiscount,
+			agent_level: agentLevel,
+			missing_course_ids: uniqueIds.filter((id) => !savedCourses.some((course) => course.id === id)),
+			courses: savedCourses.map((course) => ({
+				id: course.id,
+				price: Number(course.price || 0),
+				agent_price: Number(course.agent_price || 0),
+				agent_prices: course.agent_prices || {},
+			})),
+		};
+	}
+
+	private assertAgentLevel(agentLevel: number) {
+		if (!Number.isInteger(Number(agentLevel)) || Number(agentLevel) < 1 || Number(agentLevel) > 3) {
+			throw new BadRequestException('代理商等级只能是 1、2 或 3');
+		}
+	}
+
+	private getAgentPrice(course: Course, agentLevel: number) {
+		const levelPrice = Number(course.agent_prices?.[String(agentLevel)] || 0);
+		return levelPrice || Number(course.agent_price || course.price || 0);
 	}
 
   async getCourseDefaultParams() {
@@ -1347,6 +1407,7 @@ export class AdminCourseService {
       'course.cover_img',
       'course.price',
       'course.agent_price',
+	  'course.agent_prices',
       'course.is_free',
       'course.validity_days',
       'course.student_count',

@@ -99,9 +99,10 @@ describe('ActivationCodeService', () => {
       save: jest.fn((_entity, payload) => Promise.resolve({ id: 9, ...payload })),
     };
 
-    await expect((service as any).grantAgentByCode(manager, 607)).resolves.toMatchObject({
+	await expect((service as any).grantAgentByCode(manager, 607, { reward_payload: { agent_level: 2 } })).resolves.toMatchObject({
       user_id: 607,
       status: 1,
+	  agent_level: 2,
       distributor_code: expect.stringMatching(/^D607/),
     });
   });

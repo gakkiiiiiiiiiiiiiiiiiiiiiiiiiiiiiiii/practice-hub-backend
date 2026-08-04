@@ -40,6 +40,7 @@ import { SetCourseSimilarityConfigDto } from './dto/set-course-similarity-config
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UpdateAppCourseAgentPriceDto } from './dto/update-app-course-agent-price.dto';
+import { BatchUpdateAppCourseAgentPriceDto } from './dto/batch-update-app-course-agent-price.dto';
 
 @ApiTags('管理后台-课程管理')
 @Controller('admin/courses')
@@ -493,6 +494,21 @@ export class AppCourseAdminController {
 		private readonly appUserRepository: Repository<AppUser>,
 	) {}
 
+	@Put('agent-prices/batch-discount')
+	@ApiOperation({ summary: '小程序超级管理员按折扣批量设置课程代理商售价' })
+	async batchUpdateAgentPrices(
+		@Body() dto: BatchUpdateAppCourseAgentPriceDto,
+		@CurrentUser() user: any,
+	) {
+		await this.assertAppSuperAdmin(user);
+		const result = await this.adminCourseService.batchUpdateCourseAgentPricesByDiscount(
+			dto.course_ids,
+			dto.discount,
+			dto.agent_level,
+		);
+		return CommonResponseDto.success(result);
+	}
+
 	@Put(':id/agent-price')
 	@ApiOperation({ summary: '小程序超级管理员设置课程代理商售价' })
 	async updateAgentPrice(
@@ -501,7 +517,7 @@ export class AppCourseAdminController {
 		@CurrentUser() user: any,
 	) {
 		await this.assertAppSuperAdmin(user);
-		const result = await this.adminCourseService.updateCourseAgentPrice(+id, dto.agent_price);
+		const result = await this.adminCourseService.updateCourseAgentPrice(+id, dto.agent_price, dto.agent_level);
 		return CommonResponseDto.success(result);
 	}
 

@@ -193,7 +193,7 @@ export class ActivationCodeService {
       const targetType = activationCode.target_type || ActivationCodeTargetType.COURSE;
       let agentIdentity: Distributor | null = null;
       if (targetType === ActivationCodeTargetType.AGENT) {
-        agentIdentity = await this.grantAgentByCode(queryRunner.manager, userId);
+        agentIdentity = await this.grantAgentByCode(queryRunner.manager, userId, activationCode);
       } else if (targetType === ActivationCodeTargetType.PACKAGE) {
         await this.grantPackageByCode(queryRunner.manager, userId, activationCode);
       } else if (targetType === ActivationCodeTargetType.CATEGORY_BUNDLE) {
@@ -225,7 +225,9 @@ export class ActivationCodeService {
           ? {
               is_agent: true,
               distributor_code: agentIdentity?.distributor_code || '',
-              message: '代理商身份激活成功',
+              agent_level: agentIdentity?.agent_level || 1,
+              agent_level_name: `${agentIdentity?.agent_level || 1}级代理`,
+              message: `${agentIdentity?.agent_level || 1}级代理身份激活成功`,
             }
           : {}),
         ...(targetType === ActivationCodeTargetType.CATEGORY_BUNDLE
@@ -271,16 +273,19 @@ export class ActivationCodeService {
     }
   }
 
-  private async grantAgentByCode(manager: any, userId: number): Promise<Distributor> {
+  private async grantAgentByCode(manager: any, userId: number, activationCode: ActivationCode): Promise<Distributor> {
+    const requestedLevel = Number(activationCode.reward_payload?.agent_level || 1);
+    const agentLevel = Number.isInteger(requestedLevel) && requestedLevel >= 1 && requestedLevel <= 3 ? requestedLevel : 1;
     const existing = await manager.findOne(Distributor, {
       where: { user_id: userId },
       lock: { mode: 'pessimistic_write' },
     });
-    if (existing?.status === 1) {
+    if (existing?.status === 1 && Number(existing.agent_level || 1) === agentLevel) {
       throw new BadRequestException('您已经是代理商，无需重复激活');
     }
     if (existing) {
       existing.status = 1;
+	  existing.agent_level = agentLevel;
       existing.reject_reason = null;
       return manager.save(Distributor, existing);
     }
@@ -288,6 +293,7 @@ export class ActivationCodeService {
       user_id: userId,
       distributor_code: this.generateDistributorCode(userId),
       status: 1,
+	  agent_level: agentLevel,
     });
     return manager.save(Distributor, distributor);
   }

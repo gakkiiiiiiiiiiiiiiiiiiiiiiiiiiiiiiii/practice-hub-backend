@@ -93,15 +93,46 @@ describe('AdminCourseService updateCourseAgentPrice', () => {
 		const service = Object.create(AdminCourseService.prototype) as AdminCourseService;
 		(service as any).courseRepository = repository;
 
-		await expect(service.updateCourseAgentPrice(12, 8)).resolves.toEqual({
+		await expect(service.updateCourseAgentPrice(12, 8, 1)).resolves.toEqual({
 			id: 12,
 			name: '护理学',
 			price: 20,
 			agent_price: 8,
+			agent_prices: { '1': 8 },
+			agent_level: 1,
 			effective_agent_price: 8,
 		});
 		expect(repository.findOne).toHaveBeenCalledWith({ where: { id: 12 } });
 		expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({ id: 12, agent_price: 8 }));
+	});
+
+	it('sets multiple agent prices from the normal price and a Chinese discount', async () => {
+		const courses = [
+			{ id: 12, name: '护理学', price: 20, agent_price: 6 },
+			{ id: 13, name: '内科学', price: 99, agent_price: 50 },
+		];
+		const repository = {
+			find: jest.fn().mockResolvedValue(courses),
+			save: jest.fn((values) => Promise.resolve(values)),
+		};
+		const service = Object.create(AdminCourseService.prototype) as AdminCourseService;
+		(service as any).courseRepository = repository;
+
+		await expect(service.batchUpdateCourseAgentPricesByDiscount([12, 13], 8.5, 2)).resolves.toMatchObject({
+			count: 2,
+			discount: 8.5,
+			courses: [
+				{ id: 12, price: 20, agent_price: 6, agent_prices: { '2': 17 } },
+				{ id: 13, price: 99, agent_price: 50, agent_prices: { '2': 85 } },
+			],
+		});
+		expect(repository.save).toHaveBeenCalledWith(
+			expect.arrayContaining([
+				expect.objectContaining({ id: 12, agent_prices: { '2': 17 } }),
+				expect.objectContaining({ id: 13, agent_prices: { '2': 85 } }),
+			]),
+			{ chunk: 500 },
+		);
 	});
 
 	it('rejects fractional agent prices', async () => {

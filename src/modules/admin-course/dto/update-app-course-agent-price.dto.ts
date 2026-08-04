@@ -1,9 +1,16 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsInt, Max, Min } from 'class-validator';
 import { IsIntegerYuanPrice } from '../../../common/validators/is-integer-yuan-price.validator';
 
 export class UpdateAppCourseAgentPriceDto {
+	@ApiPropertyOptional({ description: '代理商等级', minimum: 1, maximum: 3, default: 1 })
+	@Type(() => Number)
+	@IsInt()
+	@Min(1)
+	@Max(3)
+	agent_level: number = 1;
+
 	@ApiProperty({ description: '代理商售价（整数元）；0 表示按课程原价销售', example: 79 })
 	@Type(() => Number)
 	@IsInt({ message: '代理商售价必须为整数元' })

@@ -39,6 +39,9 @@ export class Course {
 	@Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
 	agent_price: number; // 代理商售价（整数元）
 
+	@Column({ type: 'json', nullable: true, comment: '各级代理商售价，键为代理等级' })
+	agent_prices: Record<string, number> | null;
+
 	@Column({ type: 'tinyint', default: 0 })
 	is_free: number; // 0-付费, 1-免费
 

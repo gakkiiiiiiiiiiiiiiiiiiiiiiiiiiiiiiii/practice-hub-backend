@@ -61,7 +61,7 @@ describe('DistributorService agent identity activation codes', () => {
 			count: 2,
 			codes: [expect.any(String), expect.any(String)],
 			target_type: ActivationCodeTargetType.AGENT,
-			target_name: '代理商身份',
+			target_name: '一级代理身份',
 		});
 		expect(service.activationCodeRepository.save).toHaveBeenCalledWith(
 			expect.arrayContaining([
