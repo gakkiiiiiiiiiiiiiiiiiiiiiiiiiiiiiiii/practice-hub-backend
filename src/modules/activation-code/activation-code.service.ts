@@ -45,13 +45,17 @@ export class ActivationCodeService {
     }
     const targetType = activationCode.target_type || ActivationCodeTargetType.COURSE;
     if (targetType === ActivationCodeTargetType.AGENT) {
+      const agentLevel = this.getAgentLevel(activationCode);
+      const agentLevelName = this.getAgentLevelName(agentLevel);
       return {
         code: activationCode.code,
         target_type: targetType,
         target_id: null,
         course_id: null,
         course_name: '',
-        identity_name: '代理商',
+        identity_name: agentLevelName,
+        agent_level: agentLevel,
+        agent_level_name: agentLevelName,
         benefits: ['按代理商价格购买课程激活码', '管理已购买的激活码', '使用分销推广功能'],
       };
     }
@@ -226,8 +230,8 @@ export class ActivationCodeService {
               is_agent: true,
               distributor_code: agentIdentity?.distributor_code || '',
               agent_level: agentIdentity?.agent_level || 1,
-              agent_level_name: `${agentIdentity?.agent_level || 1}级代理`,
-              message: `${agentIdentity?.agent_level || 1}级代理身份激活成功`,
+              agent_level_name: this.getAgentLevelName(agentIdentity?.agent_level),
+              message: `${this.getAgentLevelName(agentIdentity?.agent_level)}身份激活成功`,
             }
           : {}),
         ...(targetType === ActivationCodeTargetType.CATEGORY_BUNDLE
@@ -274,8 +278,7 @@ export class ActivationCodeService {
   }
 
   private async grantAgentByCode(manager: any, userId: number, activationCode: ActivationCode): Promise<Distributor> {
-    const requestedLevel = Number(activationCode.reward_payload?.agent_level || 1);
-    const agentLevel = Number.isInteger(requestedLevel) && requestedLevel >= 1 && requestedLevel <= 3 ? requestedLevel : 1;
+    const agentLevel = this.getAgentLevel(activationCode);
     const existing = await manager.findOne(Distributor, {
       where: { user_id: userId },
       lock: { mode: 'pessimistic_write' },
@@ -302,6 +305,17 @@ export class ActivationCodeService {
     const timestamp = Date.now().toString().slice(-8);
     const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
     return `D${userId}${timestamp}${random}`;
+  }
+
+  private getAgentLevel(activationCode: ActivationCode): number {
+    const requestedLevel = Number(activationCode.reward_payload?.agent_level || 1);
+    return Number.isInteger(requestedLevel) && requestedLevel >= 1 && requestedLevel <= 3 ? requestedLevel : 1;
+  }
+
+  private getAgentLevelName(value: unknown): string {
+    const level = Number(value);
+    const normalizedLevel = Number.isInteger(level) && level >= 1 && level <= 3 ? level : 1;
+    return ['一级代理', '二级代理', '三级代理'][normalizedLevel - 1];
   }
 
   private async grantPackageByCode(manager: any, userId: number, activationCode: ActivationCode) {

@@ -56,18 +56,20 @@ describe('DistributorService agent identity activation codes', () => {
 			service.generateAdminActivationCodes(607, {
 				target_type: ActivationCodeTargetType.AGENT,
 				count: 2,
+				reward_payload: { agent_level: 3 },
 			}),
 		).resolves.toMatchObject({
 			count: 2,
 			codes: [expect.any(String), expect.any(String)],
 			target_type: ActivationCodeTargetType.AGENT,
-			target_name: '一级代理身份',
+			target_name: '三级代理身份',
 		});
 		expect(service.activationCodeRepository.save).toHaveBeenCalledWith(
 			expect.arrayContaining([
-				expect.objectContaining({
-					target_type: ActivationCodeTargetType.AGENT,
-					course_id: null,
+					expect.objectContaining({
+						target_type: ActivationCodeTargetType.AGENT,
+						course_id: null,
+						reward_payload: { agent_level: 3 },
 				}),
 			]),
 		);
@@ -76,10 +78,16 @@ describe('DistributorService agent identity activation codes', () => {
 	it('charges an approved agent using the course agent price', async () => {
 		const service = Object.create(DistributorService.prototype) as any;
 		service.distributorRepository = {
-			findOne: jest.fn().mockResolvedValue({ id: 9, user_id: 607, distributor_code: 'D607', status: 1 }),
+			findOne: jest.fn().mockResolvedValue({ id: 9, user_id: 607, distributor_code: 'D607', status: 1, agent_level: 2 }),
 		};
 		service.courseRepository = {
-			findOne: jest.fn().mockResolvedValue({ id: 12, name: '护理学', price: 20, agent_price: 6 }),
+			findOne: jest.fn().mockResolvedValue({
+				id: 12,
+				name: '护理学',
+				price: 20,
+				agent_price: 6,
+				agent_prices: { '1': 6, '2': 4, '3': 3 },
+			}),
 		};
 		service.orderRepository = {
 			create: jest.fn((payload) => payload),
@@ -91,10 +99,17 @@ describe('DistributorService agent identity activation codes', () => {
 
 		await expect(service.buyActivationCodes(607, 12, 3)).resolves.toMatchObject({
 			count: 3,
-			total_price: 18,
+			total_price: 12,
+			agent_level: 2,
 		});
 		expect(service.orderRepository.create).toHaveBeenCalledWith(
-			expect.objectContaining({ amount: 18, original_amount: 18 }),
+			expect.objectContaining({
+				amount: 12,
+				original_amount: 12,
+				pay_payload: expect.objectContaining({
+					activation_code_purchase: expect.objectContaining({ unit_price: 4, agent_level: 2 }),
+				}),
+			}),
 		);
 	});
 });

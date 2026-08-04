@@ -82,11 +82,14 @@ describe('ActivationCodeService', () => {
       code: 'AGNT-EFGH-JKLM',
       status: ActivationCodeStatus.PENDING,
       target_type: ActivationCodeTargetType.AGENT,
+	  reward_payload: { agent_level: 2 },
     });
 
     await expect(service.previewCode('AGNT-EFGH-JKLM')).resolves.toMatchObject({
       target_type: ActivationCodeTargetType.AGENT,
-      identity_name: '代理商',
+      identity_name: '二级代理',
+	  agent_level: 2,
+	  agent_level_name: '二级代理',
       benefits: expect.arrayContaining(['按代理商价格购买课程激活码']),
     });
   });
