@@ -1,6 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
 import { AppUserRole } from '../../database/entities/app-user.entity';
-import { PackageScopeType } from '../../database/entities/package-section-scope.entity';
 import { AgentPricePolicyService } from './agent-price-policy.service';
 
 describe('AgentPricePolicyService', () => {
@@ -82,22 +81,16 @@ describe('AgentPricePolicyService', () => {
 		).resolves.toMatchObject({ unitPrice: 6, excluded: false });
 	});
 
-	it('uses the original price when an excluded package covers the course category', async () => {
+	it('does not exclude courses covered by an excluded package or all-site VIP', async () => {
 		const { service, packageSectionRepository } = createService({ category_ids: [], package_section_ids: [5] });
-		packageSectionRepository.find.mockResolvedValue([
-			{
-				id: 5,
-				name: '护理套餐',
-				scopes: [{ scope_type: PackageScopeType.CATEGORY, scope_value: '护理' }],
-			},
-		]);
+		packageSectionRepository.find.mockResolvedValue([{ id: 5, name: '尊享VIP会员' }]);
 
 		await expect(
 			service.getCoursePrice(
 				{ id: 12, category: '护理', sub_category: '内科', price: 20, agent_price: 6 } as any,
 				1,
 			),
-		).resolves.toMatchObject({ unitPrice: 20, excluded: true, pricingMode: 'original' });
+		).resolves.toMatchObject({ unitPrice: 6, excluded: false, pricingMode: 'agent' });
 	});
 
 	it('normalizes duplicate ids when an admin updates the policy', async () => {

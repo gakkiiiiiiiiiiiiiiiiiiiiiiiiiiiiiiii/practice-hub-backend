@@ -5,7 +5,6 @@ import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { Course } from '../../database/entities/course.entity';
 import { CourseCategory } from '../../database/entities/course-category.entity';
 import { Distributor } from '../../database/entities/distributor.entity';
-import { PackageScopeType } from '../../database/entities/package-section-scope.entity';
 import { PackageSection } from '../../database/entities/package-section.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { UpdateAgentPriceExclusionsDto } from './dto/update-agent-price-exclusions.dto';
@@ -59,11 +58,11 @@ export class AgentPricePolicyService {
 			stored = this.systemConfigRepository.create({
 				configKey: AGENT_PRICE_EXCLUSIONS_CONFIG_KEY,
 				configValue: JSON.stringify(config),
-				description: '代理商价格排除的课程分类与套餐',
+				description: '代理商价格排除的课程分类与套餐商品',
 			});
 		} else {
 			stored.configValue = JSON.stringify(config);
-			stored.description = '代理商价格排除的课程分类与套餐';
+			stored.description = '代理商价格排除的课程分类与套餐商品';
 		}
 		await this.systemConfigRepository.save(stored);
 		return this.buildPolicyResponse();
@@ -122,7 +121,6 @@ export class AgentPricePolicyService {
 		const packageSections = config.package_section_ids.length
 			? await this.packageSectionRepository.find({
 					where: { id: In(config.package_section_ids) },
-					relations: ['scopes'],
 				})
 			: [];
 
@@ -135,11 +133,10 @@ export class AgentPricePolicyService {
 	}
 
 	private matchesResolvedPolicy(course: Course, resolved: ResolvedAgentPriceExclusions) {
-		if (resolved.categories.some((category) => this.courseMatchesCategory(course, category, resolved.categoryParents))) {
-			return true;
-		}
-		return resolved.packageSections.some((section) =>
-			(section.scopes || []).some((scope) => this.courseMatchesPackageScope(course, scope.scope_type, scope.scope_value)),
+		// 套餐/VIP 是独立商品。排除套餐只表示套餐商品本身不享代理价，
+		// 不能把套餐覆盖的课程（尤其是 scope=all 的 VIP）连带判定为原价。
+		return resolved.categories.some((category) =>
+			this.courseMatchesCategory(course, category, resolved.categoryParents),
 		);
 	}
 
@@ -153,15 +150,6 @@ export class AgentPricePolicyService {
 		if (!category.parent_id) return courseCategory === String(category.name || '').trim();
 		const parentName = String(parents.get(category.parent_id)?.name || '').trim();
 		return courseCategory === parentName && courseSubCategory === String(category.name || '').trim();
-	}
-
-	private courseMatchesPackageScope(course: Course, scopeType: PackageScopeType, scopeValue: string) {
-		const value = String(scopeValue || '').trim();
-		if (scopeType === PackageScopeType.ALL) return true;
-		if (scopeType === PackageScopeType.COURSE) return Number(value) === Number(course.id);
-		if (scopeType === PackageScopeType.CATEGORY) return String(course.category || '').trim() === value;
-		if (scopeType === PackageScopeType.SUB_CATEGORY) return String(course.sub_category || '').trim() === value;
-		return false;
 	}
 
 	private async getConfig(): Promise<AgentPriceExclusionConfig> {
