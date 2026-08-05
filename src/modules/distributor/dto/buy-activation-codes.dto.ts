@@ -1,6 +1,6 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 
 export class BuyActivationCodesDto {
 	@ApiProperty({ description: '课程 ID', example: 1 })
@@ -15,4 +15,16 @@ export class BuyActivationCodesDto {
 	@Min(1)
 	@Max(1000)
 	count: number;
+
+	@ApiPropertyOptional({ description: '旧版小程序兼容字段', enum: ['course'] })
+	@IsOptional()
+	@IsIn(['course'])
+	target_type?: 'course';
+
+	@ApiPropertyOptional({ description: '旧版小程序兼容字段，实际购买目标仍以 course_id 为准' })
+	@IsOptional()
+	@Type(() => Number)
+	@IsInt()
+	@Min(1)
+	target_id?: number;
 }
