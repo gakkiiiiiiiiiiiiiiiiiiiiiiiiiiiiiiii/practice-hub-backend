@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, UseGuards, Query, Param, Patch } from '@nestjs/common';
+import { Controller, Post, Get, Body, UseGuards, Query, Param, Patch, Put } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { DistributorService } from './distributor.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -12,6 +12,8 @@ import { IssueCouponDto } from '../marketing/dto/issue-coupon.dto';
 import { AppAdminRewardService } from './app-admin-reward.service';
 import { BuyActivationCodesDto } from './dto/buy-activation-codes.dto';
 import { GenerateAppActivationCodesDto } from './dto/generate-app-activation-codes.dto';
+import { UpdateAgentPriceExclusionsDto } from './dto/update-agent-price-exclusions.dto';
+import { AgentPricePolicyService } from './agent-price-policy.service';
 
 @ApiTags('分销')
 @Controller('app/distributor')
@@ -19,6 +21,7 @@ export class DistributorController {
 	constructor(
 		private readonly distributorService: DistributorService,
 		private readonly appAdminRewardService: AppAdminRewardService,
+		private readonly agentPricePolicyService: AgentPricePolicyService,
 	) {}
 
 	@Post('apply')
@@ -54,6 +57,24 @@ export class DistributorController {
 	@ApiOperation({ summary: '获取分销统计数据' })
 	async getDistributorStats(@CurrentUser() user: any) {
 		const result = await this.distributorService.getDistributorStats(user.userId);
+		return CommonResponseDto.success(result);
+	}
+
+	@Get('agent-price-exclusions')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '获取代理商价格排除范围' })
+	async getAgentPriceExclusions(@CurrentUser() user: any) {
+		const result = await this.agentPricePolicyService.getPolicyForUser(user.userId);
+		return CommonResponseDto.success(result);
+	}
+
+	@Put('admin/agent-price-exclusions')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '小程序超级管理员设置代理商价格排除范围' })
+	async updateAgentPriceExclusions(@CurrentUser() user: any, @Body() dto: UpdateAgentPriceExclusionsDto) {
+		const result = await this.agentPricePolicyService.updatePolicy(user.userId, dto);
 		return CommonResponseDto.success(result);
 	}
 

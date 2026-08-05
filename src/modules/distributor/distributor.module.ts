@@ -10,6 +10,8 @@ import { ActivationCode } from '../../database/entities/activation-code.entity';
 import { Course } from '../../database/entities/course.entity';
 import { PackagePlan } from '../../database/entities/package-plan.entity';
 import { CourseCategory } from '../../database/entities/course-category.entity';
+import { PackageSection } from '../../database/entities/package-section.entity';
+import { SystemConfig } from '../../database/entities/system-config.entity';
 import { DistributorService } from './distributor.service';
 import { DistributorController } from './distributor.controller';
 import { AdminDistributorController } from './admin-distributor.controller';
@@ -17,6 +19,7 @@ import { OrderModule } from '../order/order.module';
 import { UploadModule } from '../upload/upload.module';
 import { MarketingModule } from '../marketing/marketing.module';
 import { AppAdminRewardService } from './app-admin-reward.service';
+import { AgentPricePolicyService } from './agent-price-policy.service';
 
 @Module({
 	imports: [
@@ -31,13 +34,15 @@ import { AppAdminRewardService } from './app-admin-reward.service';
 			Course,
 			PackagePlan,
 			CourseCategory,
+			PackageSection,
+			SystemConfig,
 		]),
 		forwardRef(() => OrderModule),
 		forwardRef(() => UploadModule),
 		MarketingModule,
 	],
 	controllers: [DistributorController, AdminDistributorController],
-	providers: [DistributorService, AppAdminRewardService],
+	providers: [DistributorService, AppAdminRewardService, AgentPricePolicyService],
 	exports: [DistributorService],
 })
 export class DistributorModule {}

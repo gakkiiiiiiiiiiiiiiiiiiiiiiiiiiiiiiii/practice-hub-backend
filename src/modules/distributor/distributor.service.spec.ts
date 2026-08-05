@@ -96,11 +96,20 @@ describe('DistributorService agent identity activation codes', () => {
 		service.orderService = {
 			startCoinPaymentForOrder: jest.fn().mockResolvedValue({ payment_params: { mode: 'test' } }),
 		};
+		service.agentPricePolicyService = {
+			getCoursePrice: jest.fn().mockResolvedValue({
+				unitPrice: 4,
+				excluded: false,
+				pricingMode: 'agent',
+			}),
+		};
 
 		await expect(service.buyActivationCodes(607, 12, 3)).resolves.toMatchObject({
 			count: 3,
 			total_price: 12,
 			agent_level: 2,
+			agent_price_excluded: false,
+			pricing_mode: 'agent',
 		});
 		expect(service.orderRepository.create).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -108,6 +117,56 @@ describe('DistributorService agent identity activation codes', () => {
 				original_amount: 12,
 				pay_payload: expect.objectContaining({
 					activation_code_purchase: expect.objectContaining({ unit_price: 4, agent_level: 2 }),
+				}),
+			}),
+		);
+	});
+
+	it('forces the original price when the course is excluded from agent pricing', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		service.distributorRepository = {
+			findOne: jest.fn().mockResolvedValue({ id: 9, user_id: 607, distributor_code: 'D607', status: 1, agent_level: 3 }),
+		};
+		service.courseRepository = {
+			findOne: jest.fn().mockResolvedValue({
+				id: 12,
+				name: '护理学',
+				price: 20,
+				agent_price: 6,
+				agent_prices: { '1': 6, '2': 4, '3': 3 },
+			}),
+		};
+		service.orderRepository = {
+			create: jest.fn((payload) => payload),
+			save: jest.fn().mockResolvedValue(undefined),
+		};
+		service.orderService = {
+			startCoinPaymentForOrder: jest.fn().mockResolvedValue({ payment_params: { mode: 'test' } }),
+		};
+		service.agentPricePolicyService = {
+			getCoursePrice: jest.fn().mockResolvedValue({
+				unitPrice: 20,
+				excluded: true,
+				pricingMode: 'original',
+			}),
+		};
+
+		await expect(service.buyActivationCodes(607, 12, 2)).resolves.toMatchObject({
+			count: 2,
+			total_price: 40,
+			agent_level: 3,
+			agent_price_excluded: true,
+			pricing_mode: 'original',
+		});
+		expect(service.orderRepository.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				amount: 40,
+				pay_payload: expect.objectContaining({
+					activation_code_purchase: expect.objectContaining({
+						unit_price: 20,
+						agent_price_excluded: true,
+						pricing_mode: 'original',
+					}),
 				}),
 			}),
 		);

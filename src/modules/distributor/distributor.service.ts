@@ -26,6 +26,7 @@ import { UpdateDistributorStatusDto } from './dto/update-distributor-status.dto'
 import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dto';
 import { OrderService } from '../order/order.service';
 import { UploadService } from '../upload/upload.service';
+import { AgentPricePolicyService } from './agent-price-policy.service';
 
 @Injectable()
 export class DistributorService {
@@ -58,6 +59,7 @@ export class DistributorService {
 			@Inject(forwardRef(() => UploadService))
 			private uploadService: UploadService,
 			private dataSource: DataSource,
+			private agentPricePolicyService: AgentPricePolicyService,
 		) {}
 
 	/**
@@ -781,7 +783,8 @@ export class DistributorService {
 		}
 
 		const agentLevel = this.normalizeAgentLevel(distributor.agent_level);
-		const agentPrice = this.getCourseAgentPrice(course, agentLevel);
+		const pricing = await this.agentPricePolicyService.getCoursePrice(course, agentLevel);
+		const agentPrice = pricing.unitPrice;
 		const totalPrice = agentPrice * normalizedCount;
 		if (totalPrice <= 0) {
 			throw new BadRequestException('激活码购买金额异常，请检查课程代理商售价');
@@ -810,6 +813,8 @@ export class DistributorService {
 					count: normalizedCount,
 					unit_price: agentPrice,
 					agent_level: agentLevel,
+					agent_price_excluded: pricing.excluded,
+					pricing_mode: pricing.pricingMode,
 					total_price: totalPrice,
 				},
 			},
@@ -830,6 +835,8 @@ export class DistributorService {
 			total_price: totalPrice,
 			agent_level: agentLevel,
 			agent_level_name: this.getAgentLevelName(agentLevel),
+			agent_price_excluded: pricing.excluded,
+			pricing_mode: pricing.pricingMode,
 			payment_params: payment.payment_params,
 		};
 	}
@@ -1382,8 +1389,4 @@ export class DistributorService {
 			return ['一级代理', '二级代理', '三级代理'][this.normalizeAgentLevel(value) - 1];
 		}
 
-		private getCourseAgentPrice(course: Course, agentLevel: number) {
-			const levelPrice = Number(course.agent_prices?.[String(agentLevel)] || 0);
-			return levelPrice || Number(course.agent_price || course.price || 0);
-		}
 	}
