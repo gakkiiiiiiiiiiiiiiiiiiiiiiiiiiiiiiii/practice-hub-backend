@@ -33,6 +33,13 @@ export class HomeController {
     return CommonResponseDto.success(result);
   }
 
+  @Get('customer-service')
+  @ApiOperation({ summary: '获取小程序客服配置' })
+  async getCustomerServiceConfig() {
+    const result = await this.homeService.getCustomerServiceConfig();
+    return CommonResponseDto.success(result);
+  }
+
   @Get('version')
   @ApiOperation({ summary: '获取小程序最低版本要求' })
   async getMiniappVersion() {

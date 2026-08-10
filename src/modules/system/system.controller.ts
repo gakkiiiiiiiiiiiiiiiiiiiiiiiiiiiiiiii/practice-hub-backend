@@ -196,6 +196,22 @@ export class SystemController {
     return CommonResponseDto.success(result);
   }
 
+  @Get('settings/customer-service')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+  @ApiOperation({ summary: '获取小程序客服配置' })
+  async getCustomerServiceConfig() {
+    const result = await this.systemService.getCustomerServiceConfig();
+    return CommonResponseDto.success(result);
+  }
+
+  @Put('settings/customer-service')
+  @Roles(AdminRole.SUPER_ADMIN, AdminRole.CONTENT_ADMIN)
+  @ApiOperation({ summary: '设置小程序客服配置' })
+  async setCustomerServiceConfig(@Body() body: Record<string, any>) {
+    const result = await this.systemService.setCustomerServiceConfig(body || {});
+    return CommonResponseDto.success(result);
+  }
+
   @Get('settings/referral-coupon')
   @Roles(AdminRole.SUPER_ADMIN)
   @ApiOperation({ summary: '获取拉新优惠券配置' })

@@ -19,13 +19,17 @@ export class HomeService {
     const countdownDate = this.configService.get('COUNTDOWN_DATE', '2024-12-23');
     
     // 从数据库获取启用的轮播图列表
-    const banners = await this.bannerService.getActiveBanners();
-    const popup = await this.systemService.getHomePopupConfigForUser(userId);
+    const [banners, popup, customerService] = await Promise.all([
+      this.bannerService.getActiveBanners(),
+      this.systemService.getHomePopupConfigForUser(userId),
+      this.systemService.getCustomerServiceConfig(),
+    ]);
 
     return {
       countdown_date: countdownDate,
       banners,
       popup,
+      customerService,
     };
   }
 
@@ -47,6 +51,10 @@ export class HomeService {
 
   async getFaqs() {
     return this.systemService.getFaqConfig();
+  }
+
+  async getCustomerServiceConfig() {
+    return this.systemService.getCustomerServiceConfig();
   }
 
   async getMiniappVersion() {

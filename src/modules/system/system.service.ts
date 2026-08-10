@@ -1071,6 +1071,57 @@ export class SystemService {
     };
   }
 
+  private getDefaultCustomerServiceConfig() {
+    return {
+      enabled: true,
+      floatingButtonText: '客服',
+      title: '联系客服',
+      guideText: '如需帮助，请扫码添加客服QQ，我们会尽快为您处理。',
+      contactValue: '2705208065',
+      qrCodeUrl: '/static/customer-service-qq-qr.jpg',
+    };
+  }
+
+  private normalizeCustomerServiceConfig(input: Record<string, any>) {
+    const fallback = this.getDefaultCustomerServiceConfig();
+    return {
+      enabled: input?.enabled === undefined ? fallback.enabled : Boolean(input.enabled),
+      floatingButtonText:
+        String(input?.floatingButtonText || '').trim().slice(0, 8) ||
+        fallback.floatingButtonText,
+      title: String(input?.title || '').trim().slice(0, 40) || fallback.title,
+      guideText:
+        String(input?.guideText || '').trim().slice(0, 300) || fallback.guideText,
+      contactValue:
+        String(input?.contactValue || '').trim().slice(0, 64) ||
+        fallback.contactValue,
+      qrCodeUrl:
+        String(input?.qrCodeUrl || '').trim().slice(0, 1000) ||
+        fallback.qrCodeUrl,
+    };
+  }
+
+  async getCustomerServiceConfig() {
+    const value = await this.getJsonConfig(
+      'customer_service_config',
+      this.getDefaultCustomerServiceConfig(),
+    );
+    return this.normalizeCustomerServiceConfig(value as Record<string, any>);
+  }
+
+  async setCustomerServiceConfig(input: Record<string, any>) {
+    const config = this.normalizeCustomerServiceConfig(input || {});
+    await this.setJsonConfig(
+      'customer_service_config',
+      '小程序客服浮窗与联系方式配置',
+      config,
+    );
+    return {
+      success: true,
+      config,
+    };
+  }
+
   /** 小程序版本策略：发布新版本时在环境变量或 system_config(miniapp_version) 中提高 minVersion */
   async getMiniappVersionPolicy() {
     const fromDb = await this.getJsonConfig<{
