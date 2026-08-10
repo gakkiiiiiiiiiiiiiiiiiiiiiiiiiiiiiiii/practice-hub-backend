@@ -1078,7 +1078,7 @@ export class SystemService {
       title: '联系客服',
       guideText: '如需帮助，请扫码添加客服QQ，我们会尽快为您处理。',
       contactValue: '2705208065',
-      qrCodeUrl: '/static/customer-service-qq-qr.jpg',
+      qrCodeUrl: '/customer-service-qq-qr.jpg',
     };
   }
 
