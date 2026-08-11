@@ -30,6 +30,10 @@ import { UploadService } from '../upload/upload.service';
 import { PackageService } from '../package/package.service';
 import { CourseListPageDto } from './dto/course-list-page.dto';
 import { CategoryBundleAccessService } from '../category-bundle-access/category-bundle-access.service';
+import {
+  inferPaperMaterialPageCount,
+  resolvePaperMaterialPricing,
+} from './paper-material-price.util';
 
 const execFileAsync = promisify(execFile);
 const PREVIEW_IMAGE_WIDTH = 1440;
@@ -546,6 +550,9 @@ export class CourseService {
         ? this.uploadService.getAuthorizedCourseFileUrl(file.file_url)
         : null,
     }));
+    const paperMaterialPricing = isFileCourse
+      ? resolvePaperMaterialPricing(rawCourseFiles)
+      : null;
     const needPreviewUrl =
       isFileCourse &&
       !hasAuth &&
@@ -573,6 +580,19 @@ export class CourseService {
       hasAuth,
       expireTime,
       relatedPackageSections,
+      paper_material: paperMaterialPricing
+        ? {
+            available: paperMaterialPricing.available,
+            total_pages: paperMaterialPricing.totalPages,
+            price: paperMaterialPricing.price,
+            pricing_formula: {
+              base_fee: paperMaterialPricing.baseFee,
+              per_page_fee: paperMaterialPricing.perPageFee,
+              multiplier: paperMaterialPricing.multiplier,
+            },
+            pending_reason: paperMaterialPricing.available ? null : '资料页数核算中，请稍后再试',
+          }
+        : null,
       /** 付费未购买时，试读用：按课程配置返回指定页数，0 表示无试读 */
       file_preview_url:
         needPreviewUrl && fileType === 'pdf'
@@ -2094,19 +2114,7 @@ export class CourseService {
   private inferPageCountFromCourseFileName(
     file: Pick<CourseFile, 'display_name' | 'file_name'>,
   ): number | null {
-    const text = `${file.display_name || ''} ${file.file_name || ''}`;
-    const patterns = [
-      /[【\[]\s*(\d{1,5})\s*页?\s*[】\]]/,
-      /(?:共|合计)\s*(\d{1,5})\s*页/i,
-      /[-—]\s*(\d{1,5})\s*页(?:\s|$)/i,
-    ];
-    for (const pattern of patterns) {
-      const count = Number.parseInt(text.match(pattern)?.[1] || '', 10);
-      if (Number.isInteger(count) && count > 0 && count <= 20000) {
-        return count;
-      }
-    }
-    return null;
+    return inferPaperMaterialPageCount(file);
   }
 
   private async resolveAndPersistFullFilePageCount(file: CourseFile, versionKey: string): Promise<number> {

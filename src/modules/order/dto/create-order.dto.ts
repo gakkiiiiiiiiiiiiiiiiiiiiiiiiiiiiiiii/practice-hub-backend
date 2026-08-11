@@ -12,6 +12,11 @@ export class CreateOrderDto {
   @IsIn(['course', 'package', 'category'])
   order_type?: 'course' | 'package' | 'category';
 
+  @ApiPropertyOptional({ description: '资料交付形式', enum: ['digital', 'paper'], default: 'digital' })
+  @IsOptional()
+  @IsIn(['digital', 'paper'])
+  fulfillment_type?: 'digital' | 'paper';
+
   @ApiPropertyOptional({ description: '分类ID（购买整类课程时必填）' })
   @ValidateIf((dto) => dto.order_type === 'category')
   @IsNumber()
@@ -32,7 +37,7 @@ export class CreateOrderDto {
   @IsNumber()
   coupon_id?: number;
 
-  @ApiPropertyOptional({ description: '纸质专业真题收货地址' })
+  @ApiPropertyOptional({ description: '纸质资料收货地址' })
   @IsOptional()
   @IsObject()
   shipping_address?: Record<string, any>;

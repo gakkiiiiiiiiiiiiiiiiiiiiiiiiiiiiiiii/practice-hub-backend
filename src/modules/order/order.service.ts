@@ -8,6 +8,7 @@ import axios from 'axios';
 import { Order, OrderDeliveryStatus, OrderShippingAddress, OrderStatus } from '../../database/entities/order.entity';
 import { Course } from '../../database/entities/course.entity';
 import { CourseCategory } from '../../database/entities/course-category.entity';
+import { CourseFile } from '../../database/entities/course-file.entity';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -21,9 +22,10 @@ import { XpayService } from './xpay.service';
 import { ReferralCouponService } from '../marketing/referral-coupon.service';
 import { PackageService } from '../package/package.service';
 import { CoinService } from './coin.service';
-import { normalizePayAmountYuan, assertIntegerYuanPrice } from '../../common/utils/price.util';
+import { normalizePayAmountYuan, assertIntegerYuanPrice, normalizeThresholdYuan } from '../../common/utils/price.util';
 import { CategoryBundleAccessService } from '../category-bundle-access/category-bundle-access.service';
 import { requestUserPreviewDemand } from '../course/preview-demand.util';
+import { resolvePaperMaterialPricing } from '../course/paper-material-price.util';
 
 type ShipOrderActor = {
   operatorType: 'admin' | 'app_admin';
@@ -83,6 +85,8 @@ export class OrderService {
     private courseRepository: Repository<Course>,
     @InjectRepository(CourseCategory)
     private courseCategoryRepository: Repository<CourseCategory>,
+    @InjectRepository(CourseFile)
+    private courseFileRepository: Repository<CourseFile>,
     @InjectRepository(AppUser)
     private appUserRepository: Repository<AppUser>,
     @InjectRepository(UserCourseAuth)
@@ -279,10 +283,29 @@ export class OrderService {
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
-    const shippingAddress = this.resolveShippingAddressForCourses([course], dto.shipping_address);
+    const isPaperMaterial = dto.fulfillment_type === 'paper';
+    let paperMaterialPricing: ReturnType<typeof resolvePaperMaterialPricing> | null = null;
+    if (isPaperMaterial) {
+      if (course.content_type !== 'file') {
+        throw new BadRequestException('仅文件资料支持购买纸质版');
+      }
+      const files = await this.courseFileRepository.find({
+        where: { course_id: course.id, status: 1 },
+        order: { sort: 'ASC', id: 'ASC' },
+      });
+      paperMaterialPricing = resolvePaperMaterialPricing(files);
+      if (!paperMaterialPricing.available || paperMaterialPricing.price === null) {
+        throw new BadRequestException('资料页数核算中，暂时无法购买纸质版，请稍后再试');
+      }
+    }
+    const shippingAddress = isPaperMaterial
+      ? this.normalizeShippingAddress(dto.shipping_address, true)
+      : this.resolveShippingAddressForCourses([course], dto.shipping_address);
 
-    const originalAmount = Number(course.price || 0);
-    if (course.is_free !== 1 && originalAmount > 0) {
+    const originalAmount = isPaperMaterial
+      ? Number(paperMaterialPricing?.price || 0)
+      : Number(course.price || 0);
+    if (!isPaperMaterial && course.is_free !== 1 && originalAmount > 0) {
       assertIntegerYuanPrice(originalAmount, '课程价格');
     }
     let discountAmount = 0;
@@ -294,10 +317,27 @@ export class OrderService {
       couponId = couponResult.coupon.id;
     }
 
-    const amount = normalizePayAmountYuan(Math.max(0, originalAmount - discountAmount));
-    const requiresWechatPay = course.content_type === 'paper_exam';
+    const discountedAmount = Math.max(0, originalAmount - discountAmount);
+    const amount = isPaperMaterial
+      ? normalizeThresholdYuan(discountedAmount)
+      : normalizePayAmountYuan(discountedAmount);
+    const requiresWechatPay = isPaperMaterial || course.content_type === 'paper_exam';
+    const paperMaterialPayload = isPaperMaterial && paperMaterialPricing
+      ? {
+          fulfillment_type: 'paper',
+          paper_material: {
+            total_pages: paperMaterialPricing.totalPages,
+            price: paperMaterialPricing.price,
+            pricing_formula: {
+              base_fee: paperMaterialPricing.baseFee,
+              per_page_fee: paperMaterialPricing.perPageFee,
+              multiplier: paperMaterialPricing.multiplier,
+            },
+          },
+        }
+      : null;
 
-    if (amount <= 0 || course.is_free === 1) {
+    if (amount <= 0 || (!isPaperMaterial && course.is_free === 1)) {
       const freeOrder = this.orderRepository.create({
         order_no: this.generateOrderNo(),
         user_id: userId,
@@ -310,6 +350,7 @@ export class OrderService {
         status: OrderStatus.PENDING,
         pay_provider: 'free',
         shipping_address: shippingAddress,
+        pay_payload: paperMaterialPayload,
       });
       await this.orderRepository.save(freeOrder);
       await this.handlePaymentSuccess(freeOrder.id);
@@ -342,6 +383,7 @@ export class OrderService {
       status: OrderStatus.PENDING,
       pay_provider: requiresWechatPay ? 'wechat_pay' : 'virtual_payment',
       shipping_address: shippingAddress,
+      pay_payload: paperMaterialPayload,
     });
 
     await this.orderRepository.save(order);
@@ -350,11 +392,12 @@ export class OrderService {
       return this.processWechatPayPayment({
         user,
         order,
-        goodsTitle: course.name || '纸质专业真题',
+        goodsTitle: isPaperMaterial ? `${course.name || '资料'}（纸质版）` : course.name || '纸质专业真题',
         clientIp,
         responseExtras: {
           course_id: order.course_id,
           order_type: order.order_type,
+          ...(isPaperMaterial ? { fulfillment_type: 'paper' } : {}),
         },
       });
     }
@@ -1491,6 +1534,18 @@ export class OrderService {
       return { message: '分类课程订单支付成功' };
     }
 
+    if (order.pay_payload?.fulfillment_type === 'paper') {
+      if (order.coupon_id) {
+        await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
+      }
+      try {
+        await this.distributorService.processOrderCommission(orderId);
+      } catch (error) {
+        console.error('订单分成处理失败:', error.message);
+      }
+      return { message: '纸质资料订单支付成功' };
+    }
+
     const cartItems = Array.isArray(order.pay_payload?.cart_items) ? order.pay_payload.cart_items : [];
     if (cartItems.length > 0) {
       for (const item of cartItems) {
@@ -1645,6 +1700,10 @@ export class OrderService {
 
     if (order.order_type === 'category') {
       await this.categoryBundleAccessService.revokeOrderAccess(order.id);
+      return;
+    }
+
+    if (order.pay_payload?.fulfillment_type === 'paper') {
       return;
     }
 
@@ -2181,6 +2240,7 @@ export class OrderService {
         cartItems.some((item) => item.contentType === 'paper_exam') ||
         Boolean(row.shippingAddress);
       const categoryBundle = payPayload?.category_bundle || null;
+      const isPaperMaterial = payPayload?.fulfillment_type === 'paper';
       const productName =
         cartCount > 1
           ? `购物车(${cartCount}门课程)`
@@ -2188,7 +2248,9 @@ export class OrderService {
             ? row.packageSectionName || '套餐'
             : row.orderType === 'category'
               ? categoryBundle?.title || '分类全部课程'
-            : row.courseName || '课程';
+            : isPaperMaterial
+              ? `${row.courseName || '资料'}（纸质资料）`
+              : row.courseName || '课程';
 
       return {
         id: Number(row.id),
@@ -3040,6 +3102,7 @@ export class OrderService {
         }))
       : [];
     const categoryBundle = payPayload?.category_bundle || null;
+    const isPaperMaterial = payPayload?.fulfillment_type === 'paper';
 
     const productName =
       cartItems.length > 1
@@ -3048,7 +3111,9 @@ export class OrderService {
           ? row.packageSectionName || '套餐'
           : row.orderType === 'category'
             ? categoryBundle?.title || '分类全部课程'
-          : row.courseName || '课程';
+          : isPaperMaterial
+            ? `${row.courseName || '资料'}（纸质资料）`
+            : row.courseName || '课程';
 
     return {
       id: Number(row.id),

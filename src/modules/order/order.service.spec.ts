@@ -2,6 +2,88 @@ import { BadRequestException } from '@nestjs/common';
 import { OrderService } from './order.service';
 import { OrderStatus } from '../../database/entities/order.entity';
 
+describe('OrderService paper material checkout', () => {
+  it('recalculates the paper price on the server and stores the pricing snapshot', async () => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.courseRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 9,
+        name: '诊断学资料',
+        content_type: 'file',
+        price: 5,
+        is_free: 0,
+      }),
+    };
+    service.courseFileRepository = {
+      find: jest.fn().mockResolvedValue([
+        { id: 91, course_id: 9, status: 1, sort: 0, file_type: 'pdf', file_page_count: 22 },
+      ]),
+    };
+    service.referralCouponService = {};
+    service.appUserRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }),
+    };
+    service.orderRepository = {
+      create: jest.fn((value) => ({ id: 100, ...value })),
+      save: jest.fn(async (value) => value),
+    };
+    service.generateOrderNo = jest.fn(() => 'PAPER100');
+    service.processWechatPayPayment = jest.fn(async ({ order }) => order);
+
+    const result = await service.createCourseOrder(7, {
+      course_id: 9,
+      fulfillment_type: 'paper',
+      shipping_address: {
+        name: '测试用户',
+        phone: '13800138000',
+        province: '上海市',
+        city: '上海市',
+        district: '浦东新区',
+        detail: '测试路 1 号',
+      },
+    });
+
+    expect(result.amount).toBe(8.29);
+    expect(result.pay_provider).toBe('wechat_pay');
+    expect(result.pay_payload).toMatchObject({
+      fulfillment_type: 'paper',
+      paper_material: {
+        total_pages: 22,
+        price: 8.29,
+      },
+    });
+  });
+
+  it('does not grant or revoke digital access for a paper-only order', async () => {
+    const order: any = {
+      id: 101,
+      user_id: 7,
+      course_id: 9,
+      order_type: 'course',
+      status: OrderStatus.PENDING,
+      coupon_id: null,
+      pay_payload: { fulfillment_type: 'paper' },
+    };
+    const service = Object.create(OrderService.prototype) as any;
+    service.orderRepository = {
+      findOne: jest.fn().mockResolvedValue(order),
+      save: jest.fn(async (value) => value),
+    };
+    service.distributorService = {
+      processOrderCommission: jest.fn().mockResolvedValue(undefined),
+    };
+    service.grantCourseAccess = jest.fn();
+    service.revokeCourseAccess = jest.fn();
+
+    await service.handlePaymentSuccess(order.id);
+    await service.revokeOrderAccess(order);
+
+    expect(service.grantCourseAccess).not.toHaveBeenCalled();
+    expect(service.revokeCourseAccess).not.toHaveBeenCalled();
+    expect(order.status).toBe(OrderStatus.PAID);
+  });
+});
+
 describe('OrderService category bundle access', () => {
   it('grants a permanent category entitlement instead of snapshot course permissions', async () => {
     const order: any = {
