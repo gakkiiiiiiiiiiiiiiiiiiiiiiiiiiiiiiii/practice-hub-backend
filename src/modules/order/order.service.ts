@@ -174,6 +174,11 @@ export class OrderService {
       originalAmount += price;
     }
 
+    const hasPaperCourse = cartItems.some((item) => item.content_type === 'paper_exam');
+    if (dto.coupon_id && hasPaperCourse) {
+      throw new BadRequestException('纸质资料不能使用优惠券，优惠券仅限电子资料使用');
+    }
+
     let discountAmount = 0;
     let couponId: number | null = null;
     if (dto.coupon_id && originalAmount > 0) {
@@ -284,6 +289,10 @@ export class OrderService {
       throw new NotFoundException('课程不存在');
     }
     const isPaperMaterial = dto.fulfillment_type === 'paper';
+    const isPhysicalCourse = isPaperMaterial || course.content_type === 'paper_exam';
+    if (dto.coupon_id && isPhysicalCourse) {
+      throw new BadRequestException('纸质资料不能使用优惠券，优惠券仅限电子资料使用');
+    }
     let paperMaterialPricing: ReturnType<typeof resolvePaperMaterialPricing> | null = null;
     if (isPaperMaterial) {
       if (course.content_type !== 'file') {
@@ -331,7 +340,13 @@ export class OrderService {
             pricing_formula: {
               base_fee: paperMaterialPricing.baseFee,
               per_page_fee: paperMaterialPricing.perPageFee,
+              page_threshold: paperMaterialPricing.pageThreshold,
+              over_threshold_base_fee: paperMaterialPricing.overThresholdBaseFee,
+              over_threshold_per_page_fee: paperMaterialPricing.overThresholdPerPageFee,
+              binding_fee: paperMaterialPricing.bindingFee,
+              shipping_fee: paperMaterialPricing.shippingFee,
               multiplier: paperMaterialPricing.multiplier,
+              rounding_mode: paperMaterialPricing.roundingMode,
             },
           },
         }

@@ -43,15 +43,58 @@ describe('OrderService paper material checkout', () => {
       },
     });
 
-    expect(result.amount).toBe(8.29);
+    expect(result.amount).toBe(10);
     expect(result.pay_provider).toBe('wechat_pay');
     expect(result.pay_payload).toMatchObject({
       fulfillment_type: 'paper',
       paper_material: {
         total_pages: 22,
-        price: 8.29,
+        price: 10,
       },
     });
+  });
+
+  it('rejects coupons for paper material orders before coupon validation', async () => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.courseRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 9, name: '诊断学资料', content_type: 'file', price: 5 }),
+    };
+    service.referralCouponService = { validateCouponForOrder: jest.fn() };
+
+    await expect(
+      service.createCourseOrder(7, {
+        course_id: 9,
+        fulfillment_type: 'paper',
+        coupon_id: 3,
+      }),
+    ).rejects.toThrow('纸质资料不能使用优惠券，优惠券仅限电子资料使用');
+    expect(service.referralCouponService.validateCouponForOrder).not.toHaveBeenCalled();
+  });
+
+  it('rejects coupons when a cart contains a physical paper course', async () => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.courseRepository = {
+      find: jest.fn().mockResolvedValue([
+        { id: 11, name: '纸质真题', content_type: 'paper_exam', price: 20, is_free: 0 },
+      ]),
+    };
+    service.referralCouponService = { validateCouponForOrder: jest.fn() };
+
+    await expect(
+      service.createCartOrder(7, {
+        course_ids: [11],
+        coupon_id: 3,
+        shipping_address: {
+          name: '测试用户',
+          phone: '13800138000',
+          province: '上海市',
+          city: '上海市',
+          district: '浦东新区',
+          detail: '测试路 1 号',
+        },
+      }),
+    ).rejects.toThrow('纸质资料不能使用优惠券，优惠券仅限电子资料使用');
+    expect(service.referralCouponService.validateCouponForOrder).not.toHaveBeenCalled();
   });
 
   it('does not grant or revoke digital access for a paper-only order', async () => {

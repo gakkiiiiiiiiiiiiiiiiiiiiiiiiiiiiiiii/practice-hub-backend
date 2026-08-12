@@ -588,7 +588,13 @@ export class CourseService {
             pricing_formula: {
               base_fee: paperMaterialPricing.baseFee,
               per_page_fee: paperMaterialPricing.perPageFee,
+              page_threshold: paperMaterialPricing.pageThreshold,
+              over_threshold_base_fee: paperMaterialPricing.overThresholdBaseFee,
+              over_threshold_per_page_fee: paperMaterialPricing.overThresholdPerPageFee,
+              binding_fee: paperMaterialPricing.bindingFee,
+              shipping_fee: paperMaterialPricing.shippingFee,
               multiplier: paperMaterialPricing.multiplier,
+              rounding_mode: paperMaterialPricing.roundingMode,
             },
             pending_reason: paperMaterialPricing.available ? null : '资料页数核算中，请稍后再试',
           }

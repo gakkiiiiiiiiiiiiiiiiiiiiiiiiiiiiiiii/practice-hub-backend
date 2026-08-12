@@ -1,5 +1,10 @@
-export const PAPER_MATERIAL_BASE_FEE = 5.28;
+export const PAPER_MATERIAL_PAGE_THRESHOLD = 250;
+export const PAPER_MATERIAL_BASE_FEE = 6.28;
 export const PAPER_MATERIAL_PER_PAGE_FEE = 0.05;
+export const PAPER_MATERIAL_OVER_THRESHOLD_BASE_FEE = 15;
+export const PAPER_MATERIAL_OVER_THRESHOLD_PER_PAGE_FEE = 0.1;
+export const PAPER_MATERIAL_BINDING_FEE = 3;
+export const PAPER_MATERIAL_SHIPPING_FEE = 1;
 export const PAPER_MATERIAL_PRICE_MULTIPLIER = 1.3;
 
 type PrintableCourseFile = {
@@ -17,7 +22,13 @@ export type PaperMaterialPricing = {
   missingFileIds: number[];
   baseFee: number;
   perPageFee: number;
+  pageThreshold: number;
+  overThresholdBaseFee: number;
+  overThresholdPerPageFee: number;
+  bindingFee: number;
+  shippingFee: number;
   multiplier: number;
+  roundingMode: 'ceil_yuan';
 };
 
 export function inferPaperMaterialPageCount(
@@ -41,9 +52,20 @@ export function inferPaperMaterialPageCount(
 export function calculatePaperMaterialPrice(totalPages: number): number {
   const pages = Math.max(0, Math.trunc(Number(totalPages) || 0));
   if (pages <= 0) return 0;
-  const amount = (PAPER_MATERIAL_BASE_FEE + pages * PAPER_MATERIAL_PER_PAGE_FEE)
-    * PAPER_MATERIAL_PRICE_MULTIPLIER;
-  return Math.round((amount + Number.EPSILON) * 100) / 100;
+  if (pages <= PAPER_MATERIAL_PAGE_THRESHOLD) {
+    // Convert to integer cents before applying the 1.3 multiplier to avoid
+    // floating-point noise accidentally rounding an exact integer upward.
+    const subtotalInCents = Math.round(PAPER_MATERIAL_BASE_FEE * 100)
+      + pages * Math.round(PAPER_MATERIAL_PER_PAGE_FEE * 100);
+    return Math.ceil((subtotalInCents * 13) / 1000);
+  }
+  const subtotalInTenths = Math.round((
+    PAPER_MATERIAL_OVER_THRESHOLD_BASE_FEE
+    + PAPER_MATERIAL_BINDING_FEE
+    + PAPER_MATERIAL_SHIPPING_FEE
+  ) * 10) + (pages - PAPER_MATERIAL_PAGE_THRESHOLD)
+    * Math.round(PAPER_MATERIAL_OVER_THRESHOLD_PER_PAGE_FEE * 10);
+  return Math.ceil((subtotalInTenths * 13) / 100);
 }
 
 export function resolvePaperMaterialPricing(files: PrintableCourseFile[]): PaperMaterialPricing {
@@ -75,6 +97,12 @@ export function resolvePaperMaterialPricing(files: PrintableCourseFile[]): Paper
     missingFileIds,
     baseFee: PAPER_MATERIAL_BASE_FEE,
     perPageFee: PAPER_MATERIAL_PER_PAGE_FEE,
+    pageThreshold: PAPER_MATERIAL_PAGE_THRESHOLD,
+    overThresholdBaseFee: PAPER_MATERIAL_OVER_THRESHOLD_BASE_FEE,
+    overThresholdPerPageFee: PAPER_MATERIAL_OVER_THRESHOLD_PER_PAGE_FEE,
+    bindingFee: PAPER_MATERIAL_BINDING_FEE,
+    shippingFee: PAPER_MATERIAL_SHIPPING_FEE,
     multiplier: PAPER_MATERIAL_PRICE_MULTIPLIER,
+    roundingMode: 'ceil_yuan',
   };
 }

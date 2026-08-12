@@ -5,9 +5,16 @@ import {
 } from './paper-material-price.util';
 
 describe('paper material pricing', () => {
-  it('rounds the configured formula to cents', () => {
-    expect(calculatePaperMaterialPrice(22)).toBe(8.29);
-    expect(calculatePaperMaterialPrice(100)).toBe(13.36);
+  it('uses the within-250-page formula and rounds up to whole yuan', () => {
+    expect(calculatePaperMaterialPrice(22)).toBe(10);
+    expect(calculatePaperMaterialPrice(100)).toBe(15);
+    expect(calculatePaperMaterialPrice(250)).toBe(25);
+  });
+
+  it('uses the over-250-page formula and rounds up to whole yuan', () => {
+    expect(calculatePaperMaterialPrice(251)).toBe(25);
+    expect(calculatePaperMaterialPrice(260)).toBe(26);
+    expect(calculatePaperMaterialPrice(261)).toBe(27);
   });
 
   it('sums cached and filename-inferred page counts', () => {
@@ -19,7 +26,7 @@ describe('paper material pricing', () => {
     ).toMatchObject({
       available: true,
       totalPages: 50,
-      price: 10.11,
+      price: 12,
       missingFileIds: [],
     });
   });
