@@ -42,7 +42,7 @@ export class AdminService {
 	 * 获取小程序用户列表
 	 */
 	async getUserList(dto: GetUserListDto) {
-		const { page = 1, pageSize = 10, keyword, status } = dto;
+		const { page = 1, pageSize = 10, keyword, status, role } = dto;
 		const skip = (page - 1) * pageSize;
 
 		const queryBuilder = this.appUserRepository.createQueryBuilder('user');
@@ -61,6 +61,10 @@ export class AdminService {
 		// 注意：如果实体中没有status字段，这个条件会被忽略
 		if (status !== undefined) {
 			queryBuilder.andWhere('user.status = :status', { status });
+		}
+
+		if (role) {
+			queryBuilder.andWhere('user.role = :role', { role });
 		}
 
 		// 总数

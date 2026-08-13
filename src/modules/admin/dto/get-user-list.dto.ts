@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsNumber, IsString, Min } from 'class-validator';
+import { IsOptional, IsNumber, IsString, IsEnum, Min } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { AppUserRole } from '../../../database/entities/app-user.entity';
 
 export class GetUserListDto {
 	@ApiProperty({ description: '页码', example: 1, required: false, default: 1 })
@@ -45,4 +46,13 @@ export class GetUserListDto {
 	})
 	@IsNumber({}, { message: '状态必须是数字' })
 	status?: number;
+
+	@ApiProperty({
+		description: '小程序角色',
+		enum: AppUserRole,
+		required: false,
+	})
+	@IsOptional()
+	@IsEnum(AppUserRole, { message: '小程序角色无效' })
+	role?: AppUserRole;
 }
