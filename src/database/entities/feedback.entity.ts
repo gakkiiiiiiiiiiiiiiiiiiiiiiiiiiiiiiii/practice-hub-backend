@@ -27,10 +27,17 @@ export class Feedback {
 	@PrimaryGeneratedColumn()
 	id: number;
 
-	@Column({ type: 'int', nullable: true, comment: '用户ID，0表示管理员提交的反馈' })
+	@Column({
+		type: 'int',
+		nullable: true,
+		comment: '用户ID，0表示管理员提交的反馈',
+	})
 	user_id: number;
 
-	@ManyToOne(() => AppUser, { nullable: true, createForeignKeyConstraints: false })
+	@ManyToOne(() => AppUser, {
+		nullable: true,
+		createForeignKeyConstraints: false,
+	})
 	@JoinColumn({ name: 'user_id' })
 	user: AppUser;
 
@@ -44,7 +51,12 @@ export class Feedback {
 	@Column({ type: 'text', comment: '问题描述' })
 	description: string;
 
-	@Column({ type: 'varchar', length: 64, default: '', comment: '微信联系方式（微信号/手机号，选填）' })
+	@Column({
+		type: 'varchar',
+		length: 64,
+		default: '',
+		comment: '微信联系方式（微信号/手机号，选填）',
+	})
 	wechat_contact: string;
 
 	@Column({ type: 'json', nullable: true, comment: '图片URL数组' })
@@ -61,6 +73,12 @@ export class Feedback {
 	@Column({ type: 'text', nullable: true, comment: '管理员回复' })
 	reply: string;
 
+	@Column({ type: 'datetime', nullable: true, comment: '管理员最近回复时间' })
+	reply_time: Date;
+
+	@Column({ type: 'datetime', nullable: true, comment: '用户最近读取回复时间' })
+	reply_read_time: Date;
+
 	@Column({ type: 'int', nullable: true, comment: '处理人ID' })
 	handler_id: number;
 
@@ -70,4 +88,3 @@ export class Feedback {
 	@UpdateDateColumn()
 	update_time: Date;
 }
-
