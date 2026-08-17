@@ -1341,6 +1341,7 @@ export class AdminCourseService {
     subject?: string;
     category?: string;
     subCategory?: string;
+    uncategorizedOnly?: boolean;
     status?: number;
   }) {
     const similarityOptions = await this.getCourseSimilarityOptions();
@@ -1349,6 +1350,7 @@ export class AdminCourseService {
       subject: filters?.subject,
       category: filters?.category,
       subCategory: filters?.subCategory,
+      uncategorizedOnly: filters?.uncategorizedOnly,
       status: filters?.status,
     });
     const groups = buildSimilarCourseGroups(
@@ -1391,6 +1393,7 @@ export class AdminCourseService {
     subject?: string;
     category?: string;
     subCategory?: string;
+    uncategorizedOnly?: boolean;
     status?: number;
     similarOnly?: boolean;
   }) {
@@ -1431,10 +1434,12 @@ export class AdminCourseService {
     if (filters?.subject?.trim()) {
       queryBuilder.andWhere('course.subject LIKE :subject', { subject: `%${filters.subject.trim()}%` });
     }
-    if (filters?.category?.trim()) {
+    if (filters?.uncategorizedOnly) {
+      queryBuilder.andWhere("(course.category IS NULL OR TRIM(course.category) = '')");
+    } else if (filters?.category?.trim()) {
       queryBuilder.andWhere('course.category = :category', { category: filters.category.trim() });
     }
-    if (filters?.subCategory?.trim()) {
+    if (!filters?.uncategorizedOnly && filters?.subCategory?.trim()) {
       queryBuilder.andWhere('course.sub_category = :subCategory', { subCategory: filters.subCategory.trim() });
     }
     if (filters?.status !== undefined && filters.status !== null && !Number.isNaN(filters.status)) {
@@ -1732,6 +1737,7 @@ export class AdminCourseService {
         subject: dto.subject,
         category: dto.category,
         subCategory: dto.subCategory,
+        uncategorizedOnly: dto.uncategorizedOnly,
         status: dto.status,
       });
     } else {

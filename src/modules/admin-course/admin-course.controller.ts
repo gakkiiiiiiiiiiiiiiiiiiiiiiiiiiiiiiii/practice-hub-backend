@@ -127,6 +127,7 @@ export class AdminCourseController {
 		@Query('subject') subject?: string,
 		@Query('category') category?: string,
 		@Query('subCategory') subCategory?: string,
+		@Query('uncategorizedOnly') uncategorizedOnly?: string,
 		@Query('status') status?: string,
 	) {
 		const parsedStatus =
@@ -136,6 +137,7 @@ export class AdminCourseController {
 			subject,
 			category,
 			subCategory,
+			uncategorizedOnly: uncategorizedOnly === '1' || uncategorizedOnly === 'true',
 			status: parsedStatus !== undefined && !Number.isNaN(parsedStatus) ? parsedStatus : undefined,
 		});
 		return CommonResponseDto.success(result);
@@ -149,6 +151,7 @@ export class AdminCourseController {
 		@Query('subject') subject?: string,
 		@Query('category') category?: string,
 		@Query('subCategory') subCategory?: string,
+		@Query('uncategorizedOnly') uncategorizedOnly?: string,
 		@Query('status') status?: string,
 		@Query('similarOnly') similarOnly?: string,
 	) {
@@ -159,6 +162,7 @@ export class AdminCourseController {
 			subject,
 			category,
 			subCategory,
+			uncategorizedOnly: uncategorizedOnly === '1' || uncategorizedOnly === 'true',
 			status: parsedStatus !== undefined && !Number.isNaN(parsedStatus) ? parsedStatus : undefined,
 			similarOnly: similarOnly === '1' || similarOnly === 'true',
 		});

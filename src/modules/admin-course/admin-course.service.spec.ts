@@ -6,6 +6,26 @@ import { Question } from '../../database/entities/question.entity';
 import { ExamConfig } from '../../database/entities/exam-config.entity';
 import { ActivationCode, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
 
+describe('AdminCourseService getCourseList', () => {
+	it('filters courses whose primary category is null or blank', async () => {
+		const query = {
+			select: jest.fn().mockReturnThis(),
+			andWhere: jest.fn().mockReturnThis(),
+			orderBy: jest.fn().mockReturnThis(),
+			addOrderBy: jest.fn().mockReturnThis(),
+			getMany: jest.fn().mockResolvedValue([]),
+		};
+		const service = Object.create(AdminCourseService.prototype) as AdminCourseService;
+		(service as any).courseRepository = {
+			createQueryBuilder: jest.fn().mockReturnValue(query),
+		};
+
+		await expect(service.getCourseList({ uncategorizedOnly: true })).resolves.toEqual([]);
+
+		expect(query.andWhere).toHaveBeenCalledWith("(course.category IS NULL OR TRIM(course.category) = '')");
+	});
+});
+
 describe('AdminCourseService batchUpdateContent', () => {
 	function createService(courses: Array<{ id: number; content_type: string }>) {
 		const query = {

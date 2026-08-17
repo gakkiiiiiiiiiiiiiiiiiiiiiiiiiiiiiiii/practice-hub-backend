@@ -34,6 +34,11 @@ export class BatchAdjustCoursePriceDto {
   @IsString()
   subCategory?: string;
 
+  @ApiProperty({ description: '筛选：仅未设置分类课程（selectAll 时有效）', required: false })
+  @IsOptional()
+  @IsBoolean({ message: 'uncategorizedOnly 必须是布尔值' })
+  uncategorizedOnly?: boolean;
+
   @ApiProperty({ description: '筛选：状态 0-禁用 1-启用（selectAll 时有效）', required: false })
   @IsOptional()
   @IsNumber({}, { message: '状态必须是数字' })
