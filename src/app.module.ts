@@ -43,6 +43,7 @@ import { PackageModule } from './modules/package/package.module';
 import { AdminPackageModule } from './modules/admin-package/admin-package.module';
 import { CourseTypeModule } from './modules/course-type/course-type.module';
 import { OperationLogInterceptor } from './common/interceptors/operation-log.interceptor';
+import { ClientErrorModule } from './modules/client-error/client-error.module';
 
 @Module({
 	imports: [
@@ -145,6 +146,7 @@ import { OperationLogInterceptor } from './common/interceptors/operation-log.int
 		PackageModule,
 		AdminPackageModule,
 		CourseTypeModule,
+		ClientErrorModule,
 	],
 	controllers: [AppController],
 	providers: [
