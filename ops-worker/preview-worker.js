@@ -8,6 +8,7 @@ const { pipeline } = require('stream/promises');
 const { Readable } = require('stream');
 const { promisify } = require('util');
 const { loadEnv, required } = require('./env');
+const { requiresTrialPass, shouldRunFullPass } = require('./preview-worker-policy');
 
 const execFileAsync = promisify(execFile);
 const env = loadEnv();
@@ -263,6 +264,9 @@ async function reportPageCount(job, pageCount) {
 }
 
 async function isModeComplete(job, mode) {
+  if (mode === 'trial' && !requiresTrialPass(job)) {
+    return true;
+  }
   if (mode === 'full' && job.fullPreviewEligible === false) {
     return true;
   }
@@ -443,9 +447,9 @@ async function run() {
   // 先让所有付费资料尽快具备前几页试读能力，再继续生成耗时较长的完整缓存。
   // 避免一个数百页 PDF 阻塞后续所有课程的试读。
   const trialResult = await runPass(state, 'trial', maxTrialJobsPerRun, startCursor);
-  const result = trialOnly || trialResult.attempted > 0
-    ? trialResult
-    : await runPass(state, 'full', maxJobsPerRun, startCursor);
+  const result = shouldRunFullPass(trialOnly, trialResult)
+    ? await runPass(state, 'full', maxJobsPerRun, startCursor)
+    : trialResult;
 
   console.log(
     JSON.stringify({

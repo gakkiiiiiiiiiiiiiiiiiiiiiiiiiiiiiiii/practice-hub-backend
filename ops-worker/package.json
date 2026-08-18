@@ -4,6 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
+    "test": "node --test *.test.js",
     "preview": "node preview-worker.js",
     "health": "node storage-health-check.js"
   }

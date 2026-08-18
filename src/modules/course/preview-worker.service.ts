@@ -196,6 +196,10 @@ export class PreviewWorkerService {
           'course.trial_preview_page_count AS trial_preview_page_count',
         ])
         .addSelect(
+          'CASE WHEN course.is_free = 1 OR course.price = 0 THEN 1 ELSE 0 END',
+          'always_full_access',
+        )
+        .addSelect(
           `CASE WHEN ${this.getFullPreviewDemandSql('course')} THEN 1 ELSE 0 END`,
           'full_preview_eligible',
         )
@@ -287,6 +291,7 @@ export class PreviewWorkerService {
       const fullPreviewEligible =
         Number(row.full_preview_eligible || 0) === 1 ||
         (uploadRequested && !fullCacheComplete);
+      const alwaysFullAccess = Number(row.always_full_access || 0) === 1;
       return {
         fileId,
         courseId,
@@ -299,6 +304,7 @@ export class PreviewWorkerService {
         pageCountVersion: versions.pageCount,
         trialPages,
         sourceProvider,
+        alwaysFullAccess,
         fullPreviewEligible,
         fullPreviewRequested: uploadRequested && !fullCacheComplete,
         cacheComplete,
