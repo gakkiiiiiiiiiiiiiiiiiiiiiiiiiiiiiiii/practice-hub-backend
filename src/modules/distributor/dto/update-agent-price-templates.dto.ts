@@ -68,6 +68,17 @@ export class UpdateAgentPriceTemplatesDto {
   @IsInt({ each: true })
   @Min(1, { each: true })
   package_section_ids: number[];
+
+  @ApiPropertyOptional({
+    description: "不应用代理价的类目套餐 ID",
+    type: [Number],
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(1000)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  category_bundle_ids?: number[];
 }
 
 export class ApplyAgentPriceTemplatesDto {

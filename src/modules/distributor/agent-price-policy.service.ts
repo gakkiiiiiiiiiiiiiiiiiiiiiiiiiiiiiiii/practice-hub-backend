@@ -16,6 +16,7 @@ import {
 type AgentPriceExclusionConfig = {
   category_ids: number[];
   package_section_ids: number[];
+  category_bundle_ids: number[];
 };
 
 type AgentPriceTemplate = {
@@ -33,6 +34,7 @@ type ResolvedAgentPriceExclusions = {
   categories: CourseCategory[];
   categoryParents: Map<number, CourseCategory>;
   packageSections: PackageSection[];
+  categoryBundles: CourseCategory[];
 };
 
 const AGENT_PRICE_EXCLUSIONS_CONFIG_KEY = "agent_price_exclusions";
@@ -40,6 +42,7 @@ const AGENT_PRICE_TEMPLATES_CONFIG_KEY = "agent_price_templates";
 const EMPTY_CONFIG: AgentPriceExclusionConfig = {
   category_ids: [],
   package_section_ids: [],
+  category_bundle_ids: [],
 };
 const DEFAULT_AGENT_PRICE_TEMPLATES: AgentPriceTemplate[] = [
   { level: 1, discount: 4, enabled: true },
@@ -71,7 +74,8 @@ export class AgentPricePolicyService {
 
   async updatePolicy(userId: number, dto: UpdateAgentPriceExclusionsDto) {
     await this.assertAppAdmin(userId);
-    const config = this.normalizeConfig(dto);
+    const currentConfig = await this.getConfig();
+    const config = this.normalizeConfig({ ...currentConfig, ...dto });
     await this.assertTargetsExist(config);
     await this.saveExclusionConfig(config);
     return this.buildPolicyResponse();
@@ -90,7 +94,8 @@ export class AgentPricePolicyService {
 
   async updateAdminTemplateConfig(dto: UpdateAgentPriceTemplatesDto) {
     const templateConfig = this.normalizeTemplateConfig(dto);
-    const exclusionConfig = this.normalizeConfig(dto);
+    const currentConfig = await this.getConfig();
+    const exclusionConfig = this.normalizeConfig({ ...currentConfig, ...dto });
     await this.assertTargetsExist(exclusionConfig);
     await Promise.all([
       this.saveTemplateConfig(templateConfig),
@@ -185,6 +190,14 @@ export class AgentPricePolicyService {
         id: section.id,
         name: section.name,
       })),
+      category_bundles: resolved.categoryBundles.map((category) => ({
+        id: category.id,
+        name: category.name,
+        parent_id: category.parent_id,
+        parent_name: category.parent_id
+          ? resolved.categoryParents.get(category.parent_id)?.name || ""
+          : "",
+      })),
     };
   }
 
@@ -212,14 +225,31 @@ export class AgentPricePolicyService {
           where: { id: In(config.package_section_ids) },
         })
       : [];
+    const categoryBundles = config.category_bundle_ids.length
+      ? await this.courseCategoryRepository.find({
+          where: { id: In(config.category_bundle_ids) },
+        })
+      : [];
+    const bundleParentIds = categoryBundles
+      .map((category) => Number(category.parent_id))
+      .filter((id) => id > 0 && !parentIds.includes(id));
+    const bundleParents = bundleParentIds.length
+      ? await this.courseCategoryRepository.find({
+          where: { id: In(bundleParentIds) },
+        })
+      : [];
 
     return {
       config,
       categories,
       categoryParents: new Map(
-        parents.map((category) => [category.id, category]),
+        [...parents, ...bundleParents].map((category) => [
+          category.id,
+          category,
+        ]),
       ),
       packageSections,
+      categoryBundles,
     };
   }
 
@@ -333,11 +363,11 @@ export class AgentPricePolicyService {
       stored = this.systemConfigRepository.create({
         configKey: AGENT_PRICE_EXCLUSIONS_CONFIG_KEY,
         configValue: JSON.stringify(config),
-        description: "代理商价格排除的课程分类与套餐商品",
+        description: "代理商价格排除的课程分类、套餐商品与类目套餐",
       });
     } else {
       stored.configValue = JSON.stringify(config);
-      stored.description = "代理商价格排除的课程分类与套餐商品";
+      stored.description = "代理商价格排除的课程分类、套餐商品与类目套餐";
     }
     await this.systemConfigRepository.save(stored);
   }
@@ -356,26 +386,35 @@ export class AgentPricePolicyService {
     return {
       category_ids: normalizeIds(value?.category_ids),
       package_section_ids: normalizeIds(value?.package_section_ids),
+      category_bundle_ids: normalizeIds(value?.category_bundle_ids),
     };
   }
 
   private async assertTargetsExist(config: AgentPriceExclusionConfig) {
-    const [categoryCount, packageCount] = await Promise.all([
-      config.category_ids.length
-        ? this.courseCategoryRepository.count({
-            where: { id: In(config.category_ids) },
-          })
-        : 0,
-      config.package_section_ids.length
-        ? this.packageSectionRepository.count({
-            where: { id: In(config.package_section_ids) },
-          })
-        : 0,
-    ]);
+    const [categoryCount, packageCount, categoryBundleCount] =
+      await Promise.all([
+        config.category_ids.length
+          ? this.courseCategoryRepository.count({
+              where: { id: In(config.category_ids) },
+            })
+          : 0,
+        config.package_section_ids.length
+          ? this.packageSectionRepository.count({
+              where: { id: In(config.package_section_ids) },
+            })
+          : 0,
+        config.category_bundle_ids.length
+          ? this.courseCategoryRepository.count({
+              where: { id: In(config.category_bundle_ids) },
+            })
+          : 0,
+      ]);
     if (categoryCount !== config.category_ids.length)
       throw new BadRequestException("部分排除分类不存在");
     if (packageCount !== config.package_section_ids.length)
       throw new BadRequestException("部分排除套餐不存在");
+    if (categoryBundleCount !== config.category_bundle_ids.length)
+      throw new BadRequestException("部分类目套餐不存在");
   }
 
   private async assertAppAdmin(userId: number) {

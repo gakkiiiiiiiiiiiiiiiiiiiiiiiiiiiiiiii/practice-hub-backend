@@ -177,6 +177,7 @@ describe("AgentPricePolicyService", () => {
         configValue: JSON.stringify({
           category_ids: [3],
           package_section_ids: [5],
+          category_bundle_ids: [],
         }),
       }),
     );
@@ -197,6 +198,31 @@ describe("AgentPricePolicyService", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it("preserves category bundle exclusions when an older client omits them", async () => {
+    const { service, courseCategoryRepository, systemConfigRepository } =
+      createService({
+        category_ids: [],
+        package_section_ids: [],
+        category_bundle_ids: [8],
+      });
+    courseCategoryRepository.count.mockResolvedValue(1);
+
+    await service.updatePolicy(1, {
+      category_ids: [3],
+      package_section_ids: [],
+    });
+
+    expect(systemConfigRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configValue: JSON.stringify({
+          category_ids: [3],
+          package_section_ids: [],
+          category_bundle_ids: [8],
+        }),
+      }),
+    );
+  });
+
   it("returns the default three-level agent price templates", async () => {
     const { service } = createService();
 
@@ -208,6 +234,7 @@ describe("AgentPricePolicyService", () => {
       ],
       category_ids: [],
       package_section_ids: [],
+      category_bundle_ids: [],
     });
   });
 
@@ -237,6 +264,47 @@ describe("AgentPricePolicyService", () => {
     expect(systemConfigRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({ configKey: "agent_price_exclusions" }),
     );
+  });
+
+  it("stores category bundle exclusions without excluding their courses", async () => {
+    const { service, courseCategoryRepository, systemConfigRepository } =
+      createService();
+    courseCategoryRepository.count.mockResolvedValue(1);
+
+    await service.updateAdminTemplateConfig({
+      templates: [
+        { level: 1, discount: 4, enabled: true },
+        { level: 2, discount: 3, enabled: true },
+        { level: 3, discount: 2, enabled: true },
+      ],
+      category_ids: [],
+      package_section_ids: [],
+      category_bundle_ids: [8, 8],
+    });
+
+    expect(systemConfigRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configKey: "agent_price_exclusions",
+        configValue: JSON.stringify({
+          category_ids: [],
+          package_section_ids: [],
+          category_bundle_ids: [8],
+        }),
+      }),
+    );
+
+    await expect(
+      service.getCoursePrice(
+        {
+          id: 13,
+          category: "护理",
+          sub_category: "内科",
+          price: 20,
+          agent_price: 6,
+        } as any,
+        1,
+      ),
+    ).resolves.toMatchObject({ unitPrice: 6, excluded: false });
   });
 
   it("applies enabled templates to eligible courses and skips excluded categories", async () => {
