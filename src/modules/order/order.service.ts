@@ -2128,8 +2128,9 @@ export class OrderService {
           course.content_type = :paperType
           OR JSON_SEARCH(o.pay_payload, 'one', :paperType, NULL, '$.cart_items[*].content_type') IS NOT NULL
           OR JSON_SEARCH(o.pay_payload, 'one', :paperType, NULL, '$.cart_items[*].contentType') IS NOT NULL
+          OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.fulfillment_type')) = :paperFulfillmentType
         )`,
-        { paperType: 'paper_exam' },
+        { paperType: 'paper_exam', paperFulfillmentType: 'paper' },
       )
       .select([
         'o.id AS id',

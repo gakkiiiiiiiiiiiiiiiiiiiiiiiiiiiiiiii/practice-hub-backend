@@ -127,6 +127,62 @@ describe('OrderService paper material checkout', () => {
   });
 });
 
+describe('OrderService paper shipping list', () => {
+  it('includes paid paper material orders in the app admin shipping query', async () => {
+    const paperMaterialRow = {
+      id: 101,
+      orderNo: 'PAPER101',
+      userId: 7,
+      amount: 20,
+      status: OrderStatus.PAID,
+      orderType: 'course',
+      courseId: 9,
+      courseName: '诊断学资料',
+      contentType: 'file',
+      payPayload: JSON.stringify({ fulfillment_type: 'paper' }),
+      shippingAddress: JSON.stringify({ name: '测试用户', phone: '13800138000' }),
+      deliveryStatus: 'pending',
+    };
+    const query: any = {
+      leftJoin: jest.fn(),
+      where: jest.fn(),
+      andWhere: jest.fn(),
+      select: jest.fn(),
+      orderBy: jest.fn(),
+      limit: jest.fn(),
+      getRawMany: jest.fn().mockResolvedValue([paperMaterialRow]),
+    };
+    Object.keys(query).forEach((key) => {
+      if (key !== 'getRawMany') query[key].mockReturnValue(query);
+    });
+
+    const service = Object.create(OrderService.prototype) as any;
+    service.appUserRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 1, role: 'admin' }),
+    };
+    service.orderRepository = {
+      createQueryBuilder: jest.fn().mockReturnValue(query),
+    };
+    service.getLatestAfterSaleMap = jest.fn().mockResolvedValue(new Map());
+
+    const result = await service.getAppAdminShippingOrderList(1, 'pending');
+
+    expect(query.andWhere).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.fulfillment_type'))"),
+      { paperType: 'paper_exam', paperFulfillmentType: 'paper' },
+    );
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 101,
+        productName: '诊断学资料（纸质资料）',
+        contentType: 'file',
+        requiresShipping: true,
+      }),
+    ]);
+  });
+});
+
 describe('OrderService category bundle access', () => {
   it('grants a permanent category entitlement instead of snapshot course permissions', async () => {
     const order: any = {

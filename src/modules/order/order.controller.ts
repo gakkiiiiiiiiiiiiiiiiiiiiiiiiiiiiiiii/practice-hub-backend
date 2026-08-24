@@ -56,7 +56,7 @@ export class OrderController {
   }
 
   @Get('shipping-list')
-  @ApiOperation({ summary: '小程序超管获取纸质真题发货订单列表' })
+  @ApiOperation({ summary: '小程序超管获取纸质订单发货列表' })
   async getShippingOrderList(
     @CurrentUser() user: any,
     @Query('delivery_status') deliveryStatus?: string,
@@ -73,7 +73,7 @@ export class OrderController {
   }
 
   @Post(':id/ship')
-  @ApiOperation({ summary: '小程序超管录入纸质真题发货信息' })
+  @ApiOperation({ summary: '小程序超管录入纸质订单发货信息' })
   async shipOrder(@CurrentUser() user: any, @Param('id', ParseIntPipe) id: number, @Body() dto: ShipOrderDto) {
     const result = await this.orderService.shipOrderByAppAdmin(user.userId, id, dto);
     return CommonResponseDto.success(result);
