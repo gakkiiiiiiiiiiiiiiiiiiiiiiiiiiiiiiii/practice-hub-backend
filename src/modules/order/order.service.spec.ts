@@ -50,8 +50,83 @@ describe('OrderService paper material checkout', () => {
       paper_material: {
         total_pages: 22,
         price: 10,
+        unit_price: 10,
+        quantity: 1,
+        total_price: 10,
       },
     });
+  });
+
+  it('multiplies the server-calculated paper price by the requested quantity', async () => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.courseRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 9,
+        name: '诊断学资料',
+        content_type: 'file',
+        price: 5,
+        is_free: 0,
+      }),
+    };
+    service.courseFileRepository = {
+      find: jest.fn().mockResolvedValue([
+        { id: 91, course_id: 9, status: 1, sort: 0, file_type: 'pdf', file_page_count: 22 },
+      ]),
+    };
+    service.referralCouponService = {};
+    service.appUserRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }),
+    };
+    service.orderRepository = {
+      create: jest.fn((value) => ({ id: 100, ...value })),
+      save: jest.fn(async (value) => value),
+    };
+    service.generateOrderNo = jest.fn(() => 'PAPER300');
+    service.processWechatPayPayment = jest.fn(async ({ order }) => order);
+
+    const result = await service.createCourseOrder(7, {
+      course_id: 9,
+      fulfillment_type: 'paper',
+      quantity: 3,
+      shipping_address: {
+        name: '测试用户',
+        phone: '13800138000',
+        province: '上海市',
+        city: '上海市',
+        district: '浦东新区',
+        detail: '测试路 1 号',
+      },
+    });
+
+    expect(result.amount).toBe(30);
+    expect(result.original_amount).toBe(30);
+    expect(result.pay_payload.paper_material).toMatchObject({
+      price: 10,
+      unit_price: 10,
+      quantity: 3,
+      total_price: 30,
+    });
+    expect(service.processWechatPayPayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        goodsTitle: '诊断学资料（纸质版×3）',
+        responseExtras: expect.objectContaining({ quantity: 3 }),
+      }),
+    );
+  });
+
+  it('rejects an invalid paper material quantity', async () => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.courseRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 9, name: '诊断学资料', content_type: 'file', price: 5 }),
+    };
+
+    await expect(
+      service.createCourseOrder(7, {
+        course_id: 9,
+        fulfillment_type: 'paper',
+        quantity: 0,
+      }),
+    ).rejects.toThrow('纸质资料购买数量必须为1-99份');
   });
 
   it('rejects coupons for paper material orders before coupon validation', async () => {
@@ -139,7 +214,10 @@ describe('OrderService paper shipping list', () => {
       courseId: 9,
       courseName: '诊断学资料',
       contentType: 'file',
-      payPayload: JSON.stringify({ fulfillment_type: 'paper' }),
+      payPayload: JSON.stringify({
+        fulfillment_type: 'paper',
+        paper_material: { quantity: 3 },
+      }),
       shippingAddress: JSON.stringify({ name: '测试用户', phone: '13800138000' }),
       deliveryStatus: 'pending',
     };
@@ -175,7 +253,7 @@ describe('OrderService paper shipping list', () => {
     expect(result).toEqual([
       expect.objectContaining({
         id: 101,
-        productName: '诊断学资料（纸质资料）',
+        productName: '诊断学资料（纸质资料 × 3）',
         contentType: 'file',
         requiresShipping: true,
       }),

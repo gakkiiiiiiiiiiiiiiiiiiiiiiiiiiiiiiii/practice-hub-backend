@@ -32,6 +32,8 @@ type ShipOrderActor = {
   operatorId?: number;
 };
 
+const PAPER_MATERIAL_MAX_QUANTITY = 99;
+
 type CloudPayConfig = {
   subAppid: string;
   subMchId: string;
@@ -289,6 +291,13 @@ export class OrderService {
       throw new NotFoundException('课程不存在');
     }
     const isPaperMaterial = dto.fulfillment_type === 'paper';
+    const paperMaterialQuantity = isPaperMaterial ? Number(dto.quantity ?? 1) : 1;
+    if (
+      isPaperMaterial &&
+      (!Number.isInteger(paperMaterialQuantity) || paperMaterialQuantity < 1 || paperMaterialQuantity > PAPER_MATERIAL_MAX_QUANTITY)
+    ) {
+      throw new BadRequestException(`纸质资料购买数量必须为1-${PAPER_MATERIAL_MAX_QUANTITY}份`);
+    }
     const isPhysicalCourse = isPaperMaterial || course.content_type === 'paper_exam';
     if (dto.coupon_id && isPhysicalCourse) {
       throw new BadRequestException('纸质资料不能使用优惠券，优惠券仅限电子资料使用');
@@ -312,7 +321,7 @@ export class OrderService {
       : this.resolveShippingAddressForCourses([course], dto.shipping_address);
 
     const originalAmount = isPaperMaterial
-      ? Number(paperMaterialPricing?.price || 0)
+      ? normalizeThresholdYuan(Number(paperMaterialPricing?.price || 0) * paperMaterialQuantity)
       : Number(course.price || 0);
     if (!isPaperMaterial && course.is_free !== 1 && originalAmount > 0) {
       assertIntegerYuanPrice(originalAmount, '课程价格');
@@ -337,6 +346,9 @@ export class OrderService {
           paper_material: {
             total_pages: paperMaterialPricing.totalPages,
             price: paperMaterialPricing.price,
+            unit_price: paperMaterialPricing.price,
+            quantity: paperMaterialQuantity,
+            total_price: originalAmount,
             pricing_formula: {
               base_fee: paperMaterialPricing.baseFee,
               per_page_fee: paperMaterialPricing.perPageFee,
@@ -407,12 +419,14 @@ export class OrderService {
       return this.processWechatPayPayment({
         user,
         order,
-        goodsTitle: isPaperMaterial ? `${course.name || '资料'}（纸质版）` : course.name || '纸质专业真题',
+        goodsTitle: isPaperMaterial
+          ? `${course.name || '资料'}（纸质版${paperMaterialQuantity > 1 ? `×${paperMaterialQuantity}` : ''}）`
+          : course.name || '纸质专业真题',
         clientIp,
         responseExtras: {
           course_id: order.course_id,
           order_type: order.order_type,
-          ...(isPaperMaterial ? { fulfillment_type: 'paper' } : {}),
+          ...(isPaperMaterial ? { fulfillment_type: 'paper', quantity: paperMaterialQuantity } : {}),
         },
       });
     }
@@ -2257,6 +2271,7 @@ export class OrderService {
         Boolean(row.shippingAddress);
       const categoryBundle = payPayload?.category_bundle || null;
       const isPaperMaterial = payPayload?.fulfillment_type === 'paper';
+      const paperMaterialQuantity = Math.max(1, Number(payPayload?.paper_material?.quantity || 1));
       const productName =
         cartCount > 1
           ? `购物车(${cartCount}门课程)`
@@ -2265,7 +2280,7 @@ export class OrderService {
             : row.orderType === 'category'
               ? categoryBundle?.title || '分类全部课程'
             : isPaperMaterial
-              ? `${row.courseName || '资料'}（纸质资料）`
+              ? `${row.courseName || '资料'}（纸质资料${paperMaterialQuantity > 1 ? ` × ${paperMaterialQuantity}` : ''}）`
               : row.courseName || '课程';
 
       return {
@@ -3119,6 +3134,7 @@ export class OrderService {
       : [];
     const categoryBundle = payPayload?.category_bundle || null;
     const isPaperMaterial = payPayload?.fulfillment_type === 'paper';
+    const paperMaterialQuantity = Math.max(1, Number(payPayload?.paper_material?.quantity || 1));
 
     const productName =
       cartItems.length > 1
@@ -3128,7 +3144,7 @@ export class OrderService {
           : row.orderType === 'category'
             ? categoryBundle?.title || '分类全部课程'
           : isPaperMaterial
-            ? `${row.courseName || '资料'}（纸质资料）`
+            ? `${row.courseName || '资料'}（纸质资料${paperMaterialQuantity > 1 ? ` × ${paperMaterialQuantity}` : ''}）`
             : row.courseName || '课程';
 
     return {

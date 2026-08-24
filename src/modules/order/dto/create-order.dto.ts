@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsNumber, IsObject, IsOptional, ValidateIf } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsIn, IsInt, IsNumber, IsObject, IsOptional, Max, Min, ValidateIf } from 'class-validator';
 
 export class CreateOrderDto {
   @ApiPropertyOptional({ description: '课程ID（购买课程时必填）', example: 1 })
@@ -16,6 +17,14 @@ export class CreateOrderDto {
   @IsOptional()
   @IsIn(['digital', 'paper'])
   fulfillment_type?: 'digital' | 'paper';
+
+  @ApiPropertyOptional({ description: '纸质资料购买数量', minimum: 1, maximum: 99, default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: '购买数量必须是整数' })
+  @Min(1, { message: '购买数量不能少于1份' })
+  @Max(99, { message: '单次最多购买99份' })
+  quantity?: number;
 
   @ApiPropertyOptional({ description: '分类ID（购买整类课程时必填）' })
   @ValidateIf((dto) => dto.order_type === 'category')
