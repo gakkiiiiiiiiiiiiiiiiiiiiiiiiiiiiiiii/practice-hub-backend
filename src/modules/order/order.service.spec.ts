@@ -946,6 +946,31 @@ describe('OrderService WeChat express logistics', () => {
     post.mockRestore();
   });
 
+  it('uses the WeChat Cloud Run internal API route when the platform environment is injected', async () => {
+    const previousCloudRunEnv = process.env.WX_CLOUD_RUN_ENV;
+    process.env.WX_CLOUD_RUN_ENV = 'true';
+    const service = createLogisticsService();
+    service.callWechatExpressApi = OrderService.prototype['callWechatExpressApi'].bind(service);
+    const post = jest.spyOn(axios, 'post').mockResolvedValueOnce({ data: { errcode: 0, waybill_token: 'token' } });
+
+    try {
+      await service.callWechatExpressApi('/cgi-bin/express/delivery/open_msg/follow_waybill', { waybill_id: 'SF1' });
+
+      expect(post).toHaveBeenCalledWith(
+        'http://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/follow_waybill',
+        { waybill_id: 'SF1' },
+        expect.objectContaining({ proxy: false }),
+      );
+    } finally {
+      if (previousCloudRunEnv === undefined) {
+        delete process.env.WX_CLOUD_RUN_ENV;
+      } else {
+        process.env.WX_CLOUD_RUN_ENV = previousCloudRunEnv;
+      }
+      post.mockRestore();
+    }
+  });
+
   it('retries message binding when logistics is refreshed and uses the detected carrier first', async () => {
     const service = createLogisticsService();
     const order = { ...baseOrder, shipper_code: null, shipper_name: null };

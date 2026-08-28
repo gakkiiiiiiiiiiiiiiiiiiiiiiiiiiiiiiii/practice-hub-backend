@@ -2610,7 +2610,13 @@ export class OrderService {
 
   private getWechatPublicApiUrls(pathname: string) {
     const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
-    const useInternal = Boolean(this.configService.get<string>('WECHAT_PAY_CLOUDRUN_ENV_ID'));
+    const useInternal = Boolean(
+      process.env.WX_CLOUD_RUN_ENV === 'true' ||
+      process.env.WX_CLOUD_ENV ||
+      process.env.WX_CLOUDBASE_ENV ||
+      process.env.CBR_ENV_ID ||
+      this.configService.get<string>('WECHAT_PAY_CLOUDRUN_ENV_ID'),
+    );
     return useInternal
       ? [`http://api.weixin.qq.com${normalizedPath}`, `https://api.weixin.qq.com${normalizedPath}`]
       : [`https://api.weixin.qq.com${normalizedPath}`];
