@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import axios from 'axios';
 import { OrderService } from './order.service';
 import { OrderStatus } from '../../database/entities/order.entity';
 
@@ -799,6 +800,8 @@ describe('OrderService WeChat express logistics', () => {
       expect.objectContaining({
         configured: true,
         success: true,
+        trackingSuccess: true,
+        messageSuccess: true,
         waybillToken: 'trace-token',
         followWaybillToken: 'follow-token',
         status: 2,
@@ -849,5 +852,132 @@ describe('OrderService WeChat express logistics', () => {
       }),
     );
     expect(service.callWechatExpressApi).not.toHaveBeenCalled();
+  });
+
+  it('does not report message delivery as successful when only the tracking token was created', async () => {
+    const service = createLogisticsService();
+    service.callWechatExpressApi = jest
+      .fn()
+      .mockResolvedValueOnce({ errcode: 0, waybill_token: 'trace-token' })
+      .mockRejectedValueOnce(new Error('follow failed'))
+      .mockResolvedValueOnce({ errcode: 0, waybill_info: { status: 1 } });
+
+    const snapshot = await service.attachWechatExpressSnapshot(
+      { ...baseOrder },
+      {
+        provider: 'kdniao',
+        configured: false,
+        success: false,
+        trackingNo: 'SF123456789',
+        traces: [],
+        queriedAt: '2026-07-07T00:00:00.000Z',
+      },
+      { syncMessage: true },
+    );
+
+    expect(snapshot.wechat).toEqual(
+      expect.objectContaining({
+        success: false,
+        trackingSuccess: true,
+        messageSuccess: false,
+        waybillToken: 'trace-token',
+        messageError: '消息能力传运单失败：follow failed',
+      }),
+    );
+  });
+
+  it('retries only the missing message binding for the same waybill', async () => {
+    const service = createLogisticsService();
+    service.callWechatExpressApi = jest
+      .fn()
+      .mockResolvedValueOnce({ errcode: 0, waybill_token: 'follow-token' })
+      .mockResolvedValueOnce({ errcode: 0, waybill_info: { status: 2 } });
+    const order = {
+      ...baseOrder,
+      logistics_snapshot: {
+        wechat: {
+          trackingNo: 'SF123456789',
+          waybillToken: 'trace-token',
+          messageSuccess: false,
+          messageError: '消息能力传运单失败：temporary error',
+        },
+      },
+    };
+
+    const snapshot = await service.attachWechatExpressSnapshot(
+      order,
+      {
+        provider: 'kdniao',
+        configured: false,
+        success: false,
+        trackingNo: 'SF123456789',
+        traces: [],
+        queriedAt: '2026-07-07T00:00:00.000Z',
+      },
+      { syncMessage: true },
+    );
+
+    expect(service.callWechatExpressApi).toHaveBeenCalledTimes(2);
+    expect(service.callWechatExpressApi.mock.calls[0][0]).toBe(
+      '/cgi-bin/express/delivery/open_msg/follow_waybill',
+    );
+    expect(snapshot.wechat).toEqual(
+      expect.objectContaining({
+        success: true,
+        trackingSuccess: true,
+        messageSuccess: true,
+        messageError: '',
+      }),
+    );
+  });
+
+  it('calls the WeChat express API without inheriting an environment proxy', async () => {
+    const service = createLogisticsService();
+    service.callWechatExpressApi = OrderService.prototype['callWechatExpressApi'].bind(service);
+    const post = jest.spyOn(axios, 'post').mockResolvedValueOnce({ data: { errcode: 0, waybill_token: 'token' } });
+
+    await service.callWechatExpressApi('/cgi-bin/express/delivery/open_msg/follow_waybill', { waybill_id: 'SF1' });
+
+    expect(post).toHaveBeenCalledWith(
+      'https://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/follow_waybill',
+      { waybill_id: 'SF1' },
+      expect.objectContaining({ proxy: false }),
+    );
+    post.mockRestore();
+  });
+
+  it('retries message binding when logistics is refreshed and uses the detected carrier first', async () => {
+    const service = createLogisticsService();
+    const order = { ...baseOrder, shipper_code: null, shipper_name: null };
+    service.orderRepository = {
+      findOne: jest.fn().mockResolvedValue(order),
+      save: jest.fn(async (value) => value),
+    };
+    service.orderRequiresShipping = jest.fn().mockResolvedValue(true);
+    service.queryLogisticsSnapshot = jest.fn().mockResolvedValue({
+      provider: 'kdniao',
+      configured: true,
+      success: true,
+      trackingNo: 'SF123456789',
+      shipperCode: 'SF',
+      shipperName: '顺丰速运',
+      traces: [],
+      queriedAt: '2026-07-07T00:00:00.000Z',
+    });
+    service.attachWechatExpressSnapshot = jest.fn(async (currentOrder, snapshot, options) => ({
+      ...snapshot,
+      wechat: { configured: true, success: true, queriedAt: snapshot.queriedAt },
+      carrierSeenByWechat: currentOrder.shipper_code,
+      syncMessage: options.syncMessage,
+    }));
+
+    const snapshot = await service.queryOrderLogistics(order.id);
+
+    expect(service.attachWechatExpressSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ shipper_code: 'SF', shipper_name: '顺丰速运' }),
+      expect.any(Object),
+      { syncMessage: true },
+    );
+    expect(snapshot).toEqual(expect.objectContaining({ carrierSeenByWechat: 'SF', syncMessage: true }));
   });
 });

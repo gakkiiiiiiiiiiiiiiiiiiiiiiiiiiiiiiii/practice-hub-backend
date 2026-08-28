@@ -3,7 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
-import * as https from 'https';
 import axios from 'axios';
 import { Order, OrderDeliveryStatus, OrderShippingAddress, OrderStatus } from '../../database/entities/order.entity';
 import { Course } from '../../database/entities/course.entity';
@@ -62,8 +61,13 @@ type LogisticsSnapshot = {
   wechat?: {
     configured: boolean;
     success: boolean;
+    trackingSuccess?: boolean;
+    messageSuccess?: boolean;
     message?: string;
     reason?: string;
+    trackingError?: string;
+    messageError?: string;
+    messageLastAttemptAt?: string;
     waybillToken?: string;
     followWaybillToken?: string;
     trackingNo?: string;
@@ -1940,14 +1944,14 @@ export class OrderService {
       shipperCode: order.shipper_code || undefined,
       shipperName: order.shipper_name || undefined,
     });
-    logisticsSnapshot = await this.attachWechatExpressSnapshot(order, logisticsSnapshot, { syncMessage: true });
-    order.logistics_snapshot = logisticsSnapshot;
     if (logisticsSnapshot.shipperCode && !order.shipper_code) {
       order.shipper_code = logisticsSnapshot.shipperCode;
     }
     if (logisticsSnapshot.shipperName && !order.shipper_name) {
       order.shipper_name = logisticsSnapshot.shipperName;
     }
+    logisticsSnapshot = await this.attachWechatExpressSnapshot(order, logisticsSnapshot, { syncMessage: true });
+    order.logistics_snapshot = logisticsSnapshot;
 
     await this.orderRepository.save(order);
 
@@ -1997,14 +2001,14 @@ export class OrderService {
       shipperCode: order.shipper_code || undefined,
       shipperName: order.shipper_name || undefined,
     });
-    logisticsSnapshot = await this.attachWechatExpressSnapshot(order, logisticsSnapshot, { syncMessage: false });
-    order.logistics_snapshot = logisticsSnapshot;
     if (logisticsSnapshot.shipperCode && !order.shipper_code) {
       order.shipper_code = logisticsSnapshot.shipperCode;
     }
     if (logisticsSnapshot.shipperName && !order.shipper_name) {
       order.shipper_name = logisticsSnapshot.shipperName;
     }
+    logisticsSnapshot = await this.attachWechatExpressSnapshot(order, logisticsSnapshot, { syncMessage: true });
+    order.logistics_snapshot = logisticsSnapshot;
     await this.orderRepository.save(order);
     return logisticsSnapshot;
   }
@@ -2758,6 +2762,7 @@ export class OrderService {
           const response = await axios.post(url, payload, {
             params: { access_token: accessToken },
             timeout: 10000,
+            proxy: false,
           });
           const data = response.data || {};
           if (Number(data.errcode || 0) === 0) {
@@ -2797,8 +2802,10 @@ export class OrderService {
 
     const baseWechat = {
       configured: true,
-      success: Boolean(previousWechat.waybillToken || previousWechat.followWaybillToken),
       ...previousWechat,
+      success: Boolean(previousWechat.followWaybillToken),
+      trackingSuccess: Boolean(previousWechat.waybillToken),
+      messageSuccess: Boolean(previousWechat.followWaybillToken),
       trackingNo,
       queriedAt,
     };
@@ -2813,7 +2820,9 @@ export class OrderService {
         wechat: {
           ...baseWechat,
           configured: this.isWechatExpressEnabled(),
-          success: Boolean(previousWechat.waybillToken || previousWechat.followWaybillToken),
+          success: Boolean(previousWechat.followWaybillToken),
+          trackingSuccess: Boolean(previousWechat.waybillToken),
+          messageSuccess: Boolean(previousWechat.followWaybillToken),
           message: `微信物流同步失败：${reason}`,
           reason,
           queriedAt,
@@ -2827,7 +2836,9 @@ export class OrderService {
         wechat: {
           ...baseWechat,
           configured: this.isWechatExpressEnabled(),
-          success: Boolean(previousWechat.waybillToken || previousWechat.followWaybillToken),
+          success: Boolean(previousWechat.followWaybillToken),
+          trackingSuccess: Boolean(previousWechat.waybillToken),
+          messageSuccess: Boolean(previousWechat.followWaybillToken),
           message: payloadResult.message,
           queriedAt,
         },
@@ -2839,6 +2850,9 @@ export class OrderService {
     const errors: string[] = [];
     let waybillToken = previousTrackingNo === trackingNo ? previousWechat.waybillToken : '';
     let followWaybillToken = previousTrackingNo === trackingNo ? previousWechat.followWaybillToken : '';
+    let trackingError = previousTrackingNo === trackingNo ? String(previousWechat.trackingError || '') : '';
+    let messageError = previousTrackingNo === trackingNo ? String(previousWechat.messageError || '') : '';
+    let messageLastAttemptAt = previousTrackingNo === trackingNo ? previousWechat.messageLastAttemptAt : undefined;
     let deliveryName = previousTrackingNo === trackingNo ? previousWechat.deliveryName : '';
     let status = previousTrackingNo === trackingNo ? previousWechat.status : undefined;
 
@@ -2846,17 +2860,22 @@ export class OrderService {
       try {
         const result = await this.callWechatExpressApi('/cgi-bin/express/delivery/open_msg/trace_waybill', payloadResult.payload);
         waybillToken = result.waybill_token || waybillToken || '';
+        trackingError = '';
       } catch (error) {
-        errors.push(`查询组件传运单失败：${error?.message || error}`);
+        trackingError = `查询组件传运单失败：${error?.message || error}`;
+        errors.push(trackingError);
       }
     }
 
     if (shouldCreateMessageToken) {
+      messageLastAttemptAt = queriedAt;
       try {
         const result = await this.callWechatExpressApi('/cgi-bin/express/delivery/open_msg/follow_waybill', payloadResult.payload);
         followWaybillToken = result.waybill_token || followWaybillToken || '';
+        messageError = '';
       } catch (error) {
-        errors.push(`消息能力传运单失败：${error?.message || error}`);
+        messageError = `消息能力传运单失败：${error?.message || error}`;
+        errors.push(messageError);
       }
     }
 
@@ -2879,9 +2898,18 @@ export class OrderService {
       ...snapshot,
       wechat: {
         configured: true,
-        success: Boolean(waybillToken || followWaybillToken),
-        message: errors.length ? errors.join('；') : '微信物流已同步',
+        success: Boolean(followWaybillToken),
+        trackingSuccess: Boolean(waybillToken),
+        messageSuccess: Boolean(followWaybillToken),
+        message: errors.length
+          ? errors.join('；')
+          : followWaybillToken
+            ? '微信物流消息已绑定'
+            : '微信物流消息尚未绑定',
         reason: errors.join('；'),
+        trackingError,
+        messageError,
+        messageLastAttemptAt,
         waybillToken,
         followWaybillToken,
         trackingNo,

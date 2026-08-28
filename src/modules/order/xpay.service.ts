@@ -1,7 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
-import * as https from 'https';
 import axios from 'axios';
 
 export type XpayConfig = {
@@ -14,7 +13,6 @@ export type XpayConfig = {
 export class XpayService {
   private readonly logger = new Logger(XpayService.name);
   private wechatAccessTokenCache: { token: string; expireAt: number } | null = null;
-  private wechatTlsCompatWarned = false;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -253,42 +251,14 @@ export class XpayService {
   }
 
   private async requestWechatPublicApi(url: string, body: string | null, params: Record<string, any>) {
-    try {
-      return body === null
-        ? await axios.get(url, { params, timeout: 20000 })
-        : await axios.post(url, body, {
-            params,
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-            timeout: 30000,
-          });
-    } catch (error) {
-      if (!this.isTlsCertificateError(error)) {
-        throw error;
-      }
-      if (!this.wechatTlsCompatWarned) {
-        this.logger.warn(`微信公网接口 TLS 证书校验失败，使用兼容模式重试: ${error?.message || error}`);
-        this.wechatTlsCompatWarned = true;
-      }
-      const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-      return body === null
-        ? axios.get(url, { params, timeout: 20000, httpsAgent })
-        : axios.post(url, body, {
-            params,
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-            timeout: 30000,
-            httpsAgent,
-          });
-    }
-  }
-
-  private isTlsCertificateError(error: any) {
-    const message = String(error?.message || error?.code || '').toLowerCase();
-    return (
-      message.includes('self-signed certificate') ||
-      message.includes('unable to verify') ||
-      message.includes('certificate') ||
-      error?.code === 'SELF_SIGNED_CERT_IN_CHAIN'
-    );
+    return body === null
+      ? axios.get(url, { params, timeout: 20000, proxy: false })
+      : axios.post(url, body, {
+          params,
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          timeout: 30000,
+          proxy: false,
+        });
   }
 
   private createHmacSha256(secret: string, data: string) {
