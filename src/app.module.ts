@@ -13,6 +13,7 @@ import { UserModule } from './modules/user/user.module';
 import { CourseModule } from './modules/course/course.module';
 import { QuestionModule } from './modules/question/question.module';
 import { OrderModule } from './modules/order/order.module';
+import { PaymentBillModule } from './modules/payment-bill/payment-bill.module';
 import { ActivationCodeModule } from './modules/activation-code/activation-code.module';
 import { WrongBookModule } from './modules/wrong-book/wrong-book.module';
 import { CollectionModule } from './modules/collection/collection.module';
@@ -117,6 +118,7 @@ import { ClientErrorModule } from './modules/client-error/client-error.module';
 		CourseModule,
 		QuestionModule,
 		OrderModule,
+		PaymentBillModule,
 		ActivationCodeModule,
 		WrongBookModule,
 		CollectionModule,

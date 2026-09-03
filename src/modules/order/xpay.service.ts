@@ -93,6 +93,31 @@ export class XpayService {
     return this.getWechatAccessTokenWithFallback(forceRefresh);
   }
 
+  /** Billing is on demand: reuse the cache, otherwise one token request, no retries. */
+  async getWechatAccessTokenForBill(): Promise<string> {
+    if (this.wechatAccessTokenCache && this.wechatAccessTokenCache.expireAt > Date.now() + 60_000) {
+      return this.wechatAccessTokenCache.token;
+    }
+    const appid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
+    const secret = this.configService.get<string>('WECHAT_SECRET') || this.configService.get<string>('AppSecret') ||
+      this.configService.get<string>('WECHAT_APPSECRET');
+    if (!appid || !secret) throw new BadRequestException('微信账单所需 AppID / Secret 配置缺失');
+    try {
+      const response = await axios.post('https://api.weixin.qq.com/cgi-bin/stable_token', {
+        grant_type: 'client_credential', appid, secret, force_refresh: false,
+      }, { timeout: 15000, maxRedirects: 0, maxContentLength: 65536 });
+      const token = response.data?.access_token;
+      const expires = Number(response.data?.expires_in);
+      if (typeof token !== 'string' || !token || !Number.isFinite(expires) || expires <= 60) {
+        throw new Error('Invalid token response');
+      }
+      this.wechatAccessTokenCache = { token, expireAt: Date.now() + expires * 1000 };
+      return token;
+    } catch {
+      throw new BadRequestException('微信账单访问凭证获取失败，请检查配置及平台权限后重试');
+    }
+  }
+
   private async getWechatAccessTokenWithFallback(forceRefresh = false) {
     try {
       return await this.getWechatAccessToken(forceRefresh);
