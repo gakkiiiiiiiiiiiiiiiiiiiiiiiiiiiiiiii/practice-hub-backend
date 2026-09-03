@@ -12,6 +12,7 @@ import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreateCartOrderDto } from './dto/create-cart-order.dto';
+import { CreatePaperCartOrderDto } from './dto/create-paper-cart-order.dto';
 import { GetAdminOrderListDto } from './dto/get-admin-order-list.dto';
 import { RefundOrderDto } from './dto/refund-order.dto';
 import { ShipOrderDto } from './dto/ship-order.dto';
@@ -282,6 +283,129 @@ export class OrderService {
         is_cart: true,
       },
     });
+  }
+
+  async createPaperCartOrder(userId: number, dto: CreatePaperCartOrderDto, clientIp?: string) {
+    const items = dto.items;
+    if (!Array.isArray(items) || items.length < 1 || items.length > 20) {
+      throw new BadRequestException('请选择1-20种纸质资料');
+    }
+    if (items.some((item) => !item || !Number.isSafeInteger(item.course_id) || item.course_id < 1 ||
+      !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > PAPER_MATERIAL_MAX_QUANTITY)) {
+      throw new BadRequestException('课程ID必须为正整数，纸质资料数量必须为1-99份');
+    }
+    const courseIds = items.map((item) => item.course_id);
+    if (new Set(courseIds).size !== courseIds.length) {
+      throw new BadRequestException('同一纸质资料不能重复提交');
+    }
+    if (!Number.isFinite(dto.expected_amount) || dto.expected_amount <= 0 ||
+      normalizeThresholdYuan(dto.expected_amount) !== dto.expected_amount) {
+      throw new BadRequestException('请提交有效的合计金额');
+    }
+    if ('coupon_id' in dto) {
+      throw new BadRequestException('纸质资料不能使用优惠券，优惠券仅限电子资料使用');
+    }
+    const shippingAddress = this.normalizeShippingAddress(dto.shipping_address, true);
+    const courses = await this.courseRepository.find({ where: { id: In(courseIds) } });
+    if (courses.length !== courseIds.length) {
+      throw new NotFoundException('部分资料不存在或已下架，请刷新后重试');
+    }
+    if (courses.some((course) => course.status !== 1 || course.content_type !== 'file' ||
+      course.is_free === 1 || !(Number(course.price) > 0))) {
+      throw new BadRequestException('仅支持已上架的付费文件课程购买纸质资料，请刷新后重试');
+    }
+
+    const [auths, packageAccessMap, categoryAccessMap, files, user] = await Promise.all([
+      this.userCourseAuthRepository.find({ where: { user_id: userId, course_id: In(courseIds) } }),
+      this.packageService.batchUserHasCourseAccessViaPackage(userId, courses),
+      this.categoryBundleAccessService.batchUserHasCourseAccess(userId, courses),
+      // Only use cached page counts/file names; never probe remote files while checking out.
+      this.courseFileRepository.find({ where: { course_id: In(courseIds), status: 1 }, order: { sort: 'ASC', id: 'ASC' } }),
+      this.appUserRepository.findOne({ where: { id: userId } }),
+    ]);
+    if (!user) throw new NotFoundException('用户不存在');
+    const now = Date.now();
+    const activeCourseIds = new Set(auths.filter((auth) =>
+      !auth.expire_time || new Date(auth.expire_time).getTime() > now,
+    ).map((auth) => auth.course_id));
+    if (courses.some((course) => !activeCourseIds.has(course.id) &&
+      packageAccessMap.get(course.id)?.hasAccess !== true && !categoryAccessMap.has(course.id))) {
+      throw new BadRequestException('仅支持购买当前已拥有课程的纸质资料，请刷新已购资料后重试');
+    }
+    const courseMap = new Map(courses.map((course) => [course.id, course]));
+    const filesByCourse = new Map<number, CourseFile[]>();
+    for (const file of files) {
+      const group = filesByCourse.get(file.course_id) || [];
+      group.push(file);
+      filesByCourse.set(file.course_id, group);
+    }
+    const cartItems = items.map((item) => {
+      const course = courseMap.get(item.course_id)!;
+      const pricing = resolvePaperMaterialPricing(filesByCourse.get(course.id) || []);
+      if (!pricing.available || pricing.price === null) {
+        throw new BadRequestException(`《${course.name}》资料页数核算中，暂时无法购买纸质版`);
+      }
+      const totalPrice = normalizeThresholdYuan(pricing.price * item.quantity);
+      return {
+        course_id: course.id,
+        name: course.name || '资料',
+        content_type: 'file',
+        quantity: item.quantity,
+        unit_price: pricing.price,
+        price: totalPrice,
+        total_price: totalPrice,
+        total_pages: pricing.totalPages,
+        pricing_formula: {
+          base_fee: pricing.baseFee,
+          per_page_fee: pricing.perPageFee,
+          page_threshold: pricing.pageThreshold,
+          over_threshold_base_fee: pricing.overThresholdBaseFee,
+          over_threshold_per_page_fee: pricing.overThresholdPerPageFee,
+          binding_fee: pricing.bindingFee,
+          shipping_fee: pricing.shippingFee,
+          multiplier: pricing.multiplier,
+          rounding_mode: pricing.roundingMode,
+        },
+      };
+    });
+    const amount = normalizeThresholdYuan(cartItems.reduce((sum, item) => sum + item.total_price, 0));
+    if (amount !== dto.expected_amount) {
+      throw new BadRequestException('纸质资料价格已变化，请刷新价格并重新确认后下单');
+    }
+    const order = this.orderRepository.create({
+      order_no: this.generateOrderNo(),
+      user_id: userId,
+      course_id: courseIds[0],
+      order_type: 'course',
+      amount,
+      original_amount: amount,
+      discount_amount: 0,
+      coupon_id: null,
+      status: OrderStatus.PENDING,
+      pay_provider: 'wechat_pay',
+      shipping_address: shippingAddress,
+      pay_payload: { fulfillment_type: 'paper', is_cart: true, cart_items: cartItems },
+    });
+    await this.orderRepository.save(order);
+    const responseExtras = { order_type: 'course', course_ids: courseIds, is_cart: true, fulfillment_type: 'paper' };
+    try {
+      return await this.processWechatPayPayment({
+        user, order, goodsTitle: this.getPaperCartTitle(cartItems), clientIp, responseExtras,
+      });
+    } catch {
+      // The order already exists. Return its identity so clients resume it rather
+      // than treating a payment-provider failure as an uncreated checkout.
+      this.logger.warn({ event: 'PAPER_CART_PAYMENT_PREPARATION_FAILED', orderId: order.id });
+      return {
+        order_no: order.order_no,
+        amount: order.amount,
+        ...responseExtras,
+        status: OrderStatus.PENDING,
+        pay_provider: 'wechat_pay',
+        payment_params: null,
+        payment_error: '订单已创建，暂时无法发起支付，请前往订单页继续支付，请勿重复下单',
+      };
+    }
   }
 
   private async createCourseOrder(userId: number, dto: CreateOrderDto, clientIp?: string) {
@@ -1533,6 +1657,8 @@ export class OrderService {
     }
 
     if (order.status === OrderStatus.PAID) {
+      // Repeated paper payment notifications must not schedule digital preview work.
+      if (order.pay_payload?.fulfillment_type === 'paper') return { message: '订单已支付' };
       if (order.order_type === 'category') {
         await this.categoryBundleAccessService.grantOrderAccess(order);
       }
@@ -2261,15 +2387,9 @@ export class OrderService {
         payPayload = typeof row.payPayload === 'string' ? JSON.parse(row.payPayload) : row.payPayload;
       }
       const cartCount = Array.isArray(payPayload?.cart_items) ? payPayload.cart_items.length : 0;
-      const cartItems = Array.isArray(payPayload?.cart_items)
-        ? payPayload.cart_items.map((item: Record<string, any>) => ({
-            courseId: Number(item.course_id || item.courseId || 0),
-            name: item.name || '课程',
-            price: Number(item.price || 0),
-            contentType: item.content_type || item.contentType || 'normal',
-          }))
-        : [];
+      const cartItems = this.mapCartItems(payPayload);
       const requiresShipping =
+        payPayload?.fulfillment_type === 'paper' ||
         row.contentType === 'paper_exam' ||
         cartItems.some((item) => item.contentType === 'paper_exam') ||
         Boolean(row.shippingAddress);
@@ -2277,7 +2397,9 @@ export class OrderService {
       const isPaperMaterial = payPayload?.fulfillment_type === 'paper';
       const paperMaterialQuantity = Math.max(1, Number(payPayload?.paper_material?.quantity || 1));
       const productName =
-        cartCount > 1
+        isPaperMaterial && cartCount > 0
+          ? this.getPaperCartTitle(cartItems)
+        : cartCount > 1
           ? `购物车(${cartCount}门课程)`
           : row.orderType === 'package'
             ? row.packageSectionName || '套餐'
@@ -2303,9 +2425,10 @@ export class OrderService {
         fileType: row.fileType || '',
         createTime: row.createTime,
         paidTime: row.paidTime,
-        isCart: cartCount > 1,
+        isCart: Boolean(payPayload?.is_cart) || cartCount > 1,
         cartCount,
         cartItems,
+        fulfillmentType: isPaperMaterial ? 'paper' : 'digital',
         categoryBundle,
         shippingAddress: this.parseJsonColumn(row.shippingAddress),
         requiresShipping,
@@ -2365,7 +2488,9 @@ export class OrderService {
     if (order.pay_provider === 'wechat_pay' || requiresShipping) {
       const cartItems = Array.isArray(payPayload.cart_items) ? payPayload.cart_items : [];
       const cartCount = cartItems.length;
-      const goodsTitle = payPayload.is_cart
+      const goodsTitle = payPayload.fulfillment_type === 'paper' && cartCount > 0
+        ? this.getPaperCartTitle(cartItems)
+        : payPayload.is_cart
         ? cartCount > 1
           ? `购物车(${cartCount}门课程)`
           : cartItems[0]?.name || course?.name || '纸质专业真题'
@@ -2379,6 +2504,7 @@ export class OrderService {
         responseExtras: {
           course_id: order.course_id,
           order_type: order.order_type,
+          ...(payPayload.fulfillment_type === 'paper' ? { fulfillment_type: 'paper' } : {}),
           ...(payPayload.is_cart
             ? {
                 course_ids: Array.isArray(payPayload.cart_items)
@@ -2559,7 +2685,28 @@ export class OrderService {
     return Array.isArray(payPayload.cart_items) ? payPayload.cart_items : [];
   }
 
+  private getPaperCartTitle(items: Array<Record<string, any>>) {
+    const quantity = items.reduce((sum, item) => sum + Math.max(1, Number(item.quantity || 1)), 0);
+    return `纸质资料 ${items.length} 种 ${quantity} 份`;
+  }
+
+  private mapCartItems(payPayload: Record<string, any> | null) {
+    return Array.isArray(payPayload?.cart_items)
+      ? payPayload.cart_items.map((item: Record<string, any>) => ({
+          courseId: Number(item.course_id || item.courseId || 0),
+          name: item.name || '课程',
+          price: Number(item.price || 0),
+          contentType: item.content_type || item.contentType || 'normal',
+          quantity: Math.max(1, Number(item.quantity || 1)),
+          unitPrice: Number(item.unit_price ?? item.unitPrice ?? item.price ?? 0),
+          totalPrice: Number(item.total_price ?? item.totalPrice ?? item.price ?? 0),
+          totalPages: Number(item.total_pages ?? item.totalPages ?? 0),
+        }))
+      : [];
+  }
+
   private async orderRequiresShipping(order: Pick<Order, 'course_id' | 'pay_payload' | 'shipping_address'>) {
+    if (this.parseJsonColumn(order.pay_payload)?.fulfillment_type === 'paper') return true;
     const cartItems = this.getCartItemsFromOrder(order);
     if (cartItems.some((item: Record<string, any>) => (item.content_type || item.contentType) === 'paper_exam')) {
       return true;
@@ -2654,6 +2801,11 @@ export class OrderService {
   private getWechatExpressGoodsName(order: Pick<Order, 'pay_payload'>, course?: Course | null) {
     const payPayload = this.parseJsonColumn(order.pay_payload) || {};
     const cartItems = Array.isArray(payPayload.cart_items) ? payPayload.cart_items : [];
+    if (payPayload.fulfillment_type === 'paper') {
+      if (cartItems.length) return this.getPaperCartTitle(cartItems);
+      const quantity = Math.max(1, Number(payPayload.paper_material?.quantity || 1));
+      return `${course?.name || '资料'}（纸质资料 × ${quantity}）`.slice(0, 60);
+    }
     if (cartItems.length > 1) {
       return `纸质真题合集(${cartItems.length}门)`;
     }
@@ -3158,20 +3310,15 @@ export class OrderService {
       payPayload = typeof row.payPayload === 'string' ? JSON.parse(row.payPayload) : row.payPayload;
     }
 
-    const cartItems = Array.isArray(payPayload?.cart_items)
-      ? payPayload.cart_items.map((item: Record<string, any>) => ({
-          courseId: Number(item.course_id || item.courseId || 0),
-          name: item.name || '课程',
-          price: Number(item.price || 0),
-          contentType: item.content_type || item.contentType || 'normal',
-        }))
-      : [];
+    const cartItems = this.mapCartItems(payPayload);
     const categoryBundle = payPayload?.category_bundle || null;
     const isPaperMaterial = payPayload?.fulfillment_type === 'paper';
     const paperMaterialQuantity = Math.max(1, Number(payPayload?.paper_material?.quantity || 1));
 
     const productName =
-      cartItems.length > 1
+      isPaperMaterial && cartItems.length > 0
+        ? this.getPaperCartTitle(cartItems)
+      : cartItems.length > 1
         ? `购物车(${cartItems.length}门课程)`
         : row.orderType === 'package'
           ? row.packageSectionName || '套餐'
@@ -3210,6 +3357,7 @@ export class OrderService {
       refundRemark: payPayload?.refund?.remark || '',
       shippingAddress: this.parseJsonColumn(row.shippingAddress),
       requiresShipping:
+        isPaperMaterial ||
         row.contentType === 'paper_exam' ||
         cartItems.some((item) => item.contentType === 'paper_exam') ||
         Boolean(row.shippingAddress),
@@ -3226,8 +3374,9 @@ export class OrderService {
       productName,
       contentType: row.contentType || 'normal',
       cartItems,
+      fulfillmentType: isPaperMaterial ? 'paper' : 'digital',
       categoryBundle,
-      isCart: cartItems.length > 1,
+      isCart: Boolean(payPayload?.is_cart) || cartItems.length > 1,
       createTime: row.createTime,
       paidTime: row.paidTime,
     };

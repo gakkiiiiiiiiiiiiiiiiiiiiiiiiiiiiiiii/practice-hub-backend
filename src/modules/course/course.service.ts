@@ -381,6 +381,38 @@ export class CourseService {
       : toLegacyResponse(list);
   }
 
+  async getPurchasedPaperMaterials(userId: number) {
+    // Match the practice page's paid, currently accessible file-course list,
+    // including package/category entitlements. No per-course detail or OSS calls.
+    const all = await this.getAllCourses(undefined, undefined, undefined, undefined, userId);
+    const owned = (all as Array<Record<string, any>>).filter((course) =>
+      course.content_type === 'file' && course.hasAuth === true
+      && Number(course.price) > 0 && Number(course.is_free) !== 1,
+    );
+    const files = await this.courseFileService.listPricingFilesByCourseIds(owned.map((course) => course.id));
+    const filesByCourse = new Map<number, CourseFile[]>();
+    for (const file of files) {
+      const group = filesByCourse.get(file.course_id) || [];
+      group.push(file);
+      filesByCourse.set(file.course_id, group);
+    }
+    return owned.map((course) => {
+      const pricing = resolvePaperMaterialPricing(filesByCourse.get(course.id) || []);
+      return {
+        id: course.id,
+        name: course.name,
+        category: course.category,
+        sub_category: course.sub_category,
+        paper_material: {
+          available: pricing.available,
+          price: pricing.price,
+          total_pages: pricing.totalPages,
+          pending_reason: pricing.available ? null : '暂无可购买的纸质版或页数核算中',
+        },
+      };
+    });
+  }
+
   async getCategoryBundleInfo(category?: string, subCategory?: string, userId?: number) {
     const target = await this.resolveCategoryBundleTarget(category, subCategory);
     if (!target) {

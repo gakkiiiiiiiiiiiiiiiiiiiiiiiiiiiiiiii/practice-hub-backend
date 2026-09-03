@@ -45,6 +45,14 @@ export class CourseController {
     return CommonResponseDto.success(result);
   }
 
+  @Get('purchased-paper-materials')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取当前已购课程的纸质资料价格' })
+  async getPurchasedPaperMaterials(@CurrentUser() user: any) {
+    return CommonResponseDto.success(await this.courseService.getPurchasedPaperMaterials(user.userId));
+  }
+
   @Get('category-bundle')
   @UseGuards(OptionalJwtAuthGuard)
   @ApiBearerAuth()

@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { Course } from '../../database/entities/course.entity';
 import { CourseFile } from '../../database/entities/course-file.entity';
 import { UploadService } from '../upload/upload.service';
@@ -54,6 +54,15 @@ export class CourseFileService {
     return this.courseFileRepository.find({
       where: { course_id: courseId, status: 1 },
       order: { sort: 'ASC', id: 'ASC' },
+    });
+  }
+
+  // Pricing only uses database metadata; never probe/download source objects here.
+  async listPricingFilesByCourseIds(courseIds: number[]): Promise<CourseFile[]> {
+    if (!courseIds.length) return [];
+    return this.courseFileRepository.find({
+      where: { course_id: In(courseIds), status: 1 },
+      select: ['id', 'course_id', 'display_name', 'file_name', 'file_type', 'file_page_count'],
     });
   }
 

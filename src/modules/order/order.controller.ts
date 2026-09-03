@@ -10,6 +10,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { CommonResponseDto } from '../../common/dto/common-response.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreateCartOrderDto } from './dto/create-cart-order.dto';
+import { CreatePaperCartOrderDto } from './dto/create-paper-cart-order.dto';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
 import { GetAdminOrderListDto } from './dto/get-admin-order-list.dto';
 import { RefundOrderDto } from './dto/refund-order.dto';
@@ -38,6 +39,13 @@ export class OrderController {
   @ApiOperation({ summary: '购物车合单下单' })
   async createCartOrder(@CurrentUser() user: any, @Body() dto: CreateCartOrderDto, @Req() req: Request) {
     const result = await this.orderService.createCartOrder(user.userId, dto, resolveClientIp(req));
+    return CommonResponseDto.success(result);
+  }
+
+  @Post('create-paper-cart')
+  @ApiOperation({ summary: '已购文件课程纸质资料合单下单，不开通电子权限' })
+  async createPaperCartOrder(@CurrentUser() user: any, @Body() dto: CreatePaperCartOrderDto, @Req() req: Request) {
+    const result = await this.orderService.createPaperCartOrder(user.userId, dto, resolveClientIp(req));
     return CommonResponseDto.success(result);
   }
 
