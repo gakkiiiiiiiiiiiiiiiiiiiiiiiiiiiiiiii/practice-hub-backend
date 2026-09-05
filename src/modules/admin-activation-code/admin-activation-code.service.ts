@@ -323,7 +323,10 @@ export class AdminActivationCodeService {
       queryBuilder.where('code.agent_id = :agentId', { agentId });
     }
 
-    const [total, pending, used, invalid] = await Promise.all([
+    const sourceTypeExpression = `COALESCE(code.source_type, CASE WHEN code.batch_id LIKE 'D%' THEN '${ActivationCodeSourceType.DISTRIBUTOR}' ELSE '${ActivationCodeSourceType.ADMIN}' END)`;
+    const sourceIdExpression = 'COALESCE(code.source_id, code.agent_id, 0)';
+
+    const [total, pending, used, invalid, generatorRows] = await Promise.all([
       queryBuilder.getCount(),
       queryBuilder
         .clone()
@@ -337,13 +340,58 @@ export class AdminActivationCodeService {
         .clone()
         .andWhere('code.status = :status', { status: ActivationCodeStatus.INVALID })
         .getCount(),
+      queryBuilder
+        .clone()
+        .select(sourceTypeExpression, 'source_type')
+        .addSelect(sourceIdExpression, 'source_id')
+        .addSelect('COUNT(code.id)', 'total')
+        .addSelect('SUM(CASE WHEN code.status = :pendingStatus THEN 1 ELSE 0 END)', 'pending')
+        .addSelect('SUM(CASE WHEN code.status = :usedStatus THEN 1 ELSE 0 END)', 'used')
+        .addSelect('SUM(CASE WHEN code.status = :invalidStatus THEN 1 ELSE 0 END)', 'invalid')
+        .setParameters({
+          pendingStatus: ActivationCodeStatus.PENDING,
+          usedStatus: ActivationCodeStatus.USED,
+          invalidStatus: ActivationCodeStatus.INVALID,
+        })
+        .groupBy(sourceTypeExpression)
+        .addGroupBy(sourceIdExpression)
+        .orderBy('total', 'DESC')
+        .getRawMany(),
     ]);
+
+    const generatorCodes = generatorRows.map((row, index) => {
+      const sourceId = Number(row.source_id) || null;
+      return {
+        id: index + 1,
+        source_type: row.source_type as ActivationCodeSourceType,
+        source_id: sourceId,
+        agent_id: sourceId,
+        batch_id: '',
+      } as ActivationCode;
+    });
+    const generatorUserMap = await this.buildGeneratorUserMap(generatorCodes);
+    const generators = generatorRows.map((row, index) => {
+      const code = generatorCodes[index];
+      const sourceId = code.source_id || null;
+      return {
+        key: `${code.source_type}:${sourceId || 'unknown'}`,
+        source_type: code.source_type,
+        source_text: this.getSourceText(code),
+        source_id: sourceId,
+        generator_user: generatorUserMap.get(code.id) || '未知用户',
+        total: Number(row.total) || 0,
+        pending: Number(row.pending) || 0,
+        used: Number(row.used) || 0,
+        invalid: Number(row.invalid) || 0,
+      };
+    });
 
     return {
       total,
       pending,
       used,
       invalid,
+      generators,
     };
   }
 
