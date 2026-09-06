@@ -1,7 +1,43 @@
 import { CourseService } from './course.service';
 
-describe('CourseService preview metadata', () => {
+describe('CourseService', () => {
 	const service = Object.create(CourseService.prototype) as CourseService;
+
+	it('applies fuzzy subsequence matching across all searchable course fields', async () => {
+		const queryBuilder: any = {
+			where: jest.fn(),
+			andWhere: jest.fn(),
+			orderBy: jest.fn(),
+			addOrderBy: jest.fn(),
+			select: jest.fn(),
+			getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+		};
+		Object.values(queryBuilder).forEach((value) => {
+			if (typeof value === 'function' && value !== queryBuilder.getManyAndCount) {
+				(value as jest.Mock).mockReturnValue(queryBuilder);
+			}
+		});
+		const searchService = Object.create(CourseService.prototype) as CourseService;
+		(searchService as any).courseRepository = {
+			createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+		};
+		(searchService as any).courseTypeRepository = {
+			find: jest.fn().mockResolvedValue([]),
+		};
+
+		await searchService.getAllCourses('北大 计算机');
+
+		expect(queryBuilder.andWhere).toHaveBeenNthCalledWith(
+			1,
+			expect.stringContaining("COALESCE(course.sub_category, '')"),
+			{ fuzzyKeyword0: '%北%大%' },
+		);
+		expect(queryBuilder.andWhere).toHaveBeenNthCalledWith(
+			2,
+			expect.stringContaining("COALESCE(course.major, '')"),
+			{ fuzzyKeyword1: '%计%算%机%' },
+		);
+	});
 
 	it.each([
 		['资料 --【155页】.pdf', 155],

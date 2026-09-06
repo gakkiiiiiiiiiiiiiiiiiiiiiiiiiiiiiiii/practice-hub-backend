@@ -34,6 +34,7 @@ import {
   inferPaperMaterialPageCount,
   resolvePaperMaterialPricing,
 } from './paper-material-price.util';
+import { buildFuzzyLikePatterns } from '../../common/utils/fuzzy-search.util';
 
 const execFileAsync = promisify(execFile);
 const PREVIEW_IMAGE_WIDTH = 1440;
@@ -221,10 +222,23 @@ export class CourseService {
 
     // 关键词搜索
     if (normalizedKeyword) {
-      appendWhere(
-        '(course.name LIKE :keyword OR course.subject LIKE :keyword OR course.school LIKE :keyword OR course.major LIKE :keyword)',
-        { keyword: `%${normalizedKeyword}%` },
-      );
+      const fuzzyPatterns = buildFuzzyLikePatterns(normalizedKeyword);
+      const searchableText = `LOWER(CONCAT_WS('',
+        COALESCE(course.name, ''),
+        COALESCE(course.subject, ''),
+        COALESCE(course.category, ''),
+        COALESCE(course.sub_category, ''),
+        COALESCE(course.school, ''),
+        COALESCE(course.major, '')
+      ))`;
+      if (fuzzyPatterns.length === 0) {
+        appendWhere('1 = 0');
+      } else {
+        fuzzyPatterns.forEach((pattern, index) => {
+          const parameter = `fuzzyKeyword${index}`;
+          appendWhere(`${searchableText} LIKE :${parameter}`, { [parameter]: pattern });
+        });
+      }
     }
 
     // 分类筛选
