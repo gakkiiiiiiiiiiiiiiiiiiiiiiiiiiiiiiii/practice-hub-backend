@@ -26,6 +26,13 @@ export class CreateOrderDto {
   @Max(99, { message: '单次最多购买99份' })
   quantity?: number;
 
+  @ApiPropertyOptional({ description: '纸质资料页面确认的订单金额（元），服务器重新核价不一致时拒绝下单' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ allowNaN: false, allowInfinity: false, maxDecimalPlaces: 2 })
+  @Min(0.01)
+  expected_amount?: number;
+
   @ApiPropertyOptional({ description: '分类ID（购买整类课程时必填）' })
   @ValidateIf((dto) => dto.order_type === 'category')
   @IsNumber()

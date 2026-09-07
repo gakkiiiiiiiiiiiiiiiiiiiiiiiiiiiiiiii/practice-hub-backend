@@ -74,6 +74,7 @@ describe('OrderService paper cart', () => {
       course_ids: [9, 10], pay_provider: 'wechat_pay', payment_params: params });
     expect(savedOrder).toMatchObject({ amount: 146, original_amount: 146, discount_amount: 0, coupon_id: null,
       shipping_address: address, pay_payload: { fulfillment_type: 'paper', is_cart: true,
+        material_amount: 146, regional_shipping_fee: 0, regional_shipping_region: null,
         cart_items: [
           { course_id: 9, quantity: 2, unit_price: 10, price: 20, total_price: 20, total_pages: 22 },
           { course_id: 10, quantity: 3, unit_price: 42, price: 126, total_price: 126, total_pages: 382 },
@@ -86,6 +87,35 @@ describe('OrderService paper cart', () => {
     expect(repos.get(UserCourseAuth).find).toHaveBeenCalledTimes(1);
     expect(packageAccess.batchUserHasCourseAccessViaPackage).toHaveBeenCalledTimes(1);
     expect(categoryAccess.batchUserHasCourseAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('adds the regional shipping fee once for a configured province', async () => {
+    const regionalAddress = { ...address, province: '新疆维吾尔自治区', city: '乌鲁木齐市' };
+    await expect(service.createPaperCartOrder(7, {
+      ...dto(),
+      shipping_address: regionalAddress,
+      expected_amount: 146,
+    })).rejects.toThrow('价格已变化');
+    expect(repos.get(Order).save).not.toHaveBeenCalled();
+
+    const result = await service.createPaperCartOrder(7, {
+      ...dto(),
+      shipping_address: regionalAddress,
+      expected_amount: 154,
+    });
+
+    expect(result.amount).toBe(154);
+    expect(savedOrder).toMatchObject({
+      amount: 154,
+      original_amount: 154,
+      shipping_address: regionalAddress,
+      pay_payload: {
+        material_amount: 146,
+        regional_shipping_fee: 8,
+        regional_shipping_region: '新疆',
+      },
+    });
+    expect(savedOrder.pay_payload.cart_items.reduce((sum, item) => sum + item.total_price, 0)).toBe(146);
   });
 
   it.each([[], [{ course_id: 9, quantity: 0 }], [{ course_id: 9, quantity: 100 }],

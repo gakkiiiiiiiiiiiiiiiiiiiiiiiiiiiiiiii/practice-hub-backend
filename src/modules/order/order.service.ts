@@ -26,6 +26,7 @@ import { normalizePayAmountYuan, assertIntegerYuanPrice, normalizeThresholdYuan 
 import { CategoryBundleAccessService } from '../category-bundle-access/category-bundle-access.service';
 import { requestUserPreviewDemand } from '../course/preview-demand.util';
 import { resolvePaperMaterialPricing } from '../course/paper-material-price.util';
+import { resolvePaperMaterialRegionalShipping } from './paper-material-shipping.util';
 
 type ShipOrderActor = {
   operatorType: 'admin' | 'app_admin';
@@ -368,7 +369,9 @@ export class OrderService {
         },
       };
     });
-    const amount = normalizeThresholdYuan(cartItems.reduce((sum, item) => sum + item.total_price, 0));
+    const materialAmount = normalizeThresholdYuan(cartItems.reduce((sum, item) => sum + item.total_price, 0));
+    const regionalShipping = resolvePaperMaterialRegionalShipping(shippingAddress);
+    const amount = normalizeThresholdYuan(materialAmount + regionalShipping.fee);
     if (amount !== dto.expected_amount) {
       throw new BadRequestException('纸质资料价格已变化，请刷新价格并重新确认后下单');
     }
@@ -384,7 +387,14 @@ export class OrderService {
       status: OrderStatus.PENDING,
       pay_provider: 'wechat_pay',
       shipping_address: shippingAddress,
-      pay_payload: { fulfillment_type: 'paper', is_cart: true, cart_items: cartItems },
+      pay_payload: {
+        fulfillment_type: 'paper',
+        is_cart: true,
+        cart_items: cartItems,
+        material_amount: materialAmount,
+        regional_shipping_fee: regionalShipping.fee,
+        regional_shipping_region: regionalShipping.region,
+      },
     });
     await this.orderRepository.save(order);
     const responseExtras = { order_type: 'course', course_ids: courseIds, is_cart: true, fulfillment_type: 'paper' };
@@ -448,8 +458,14 @@ export class OrderService {
       ? this.normalizeShippingAddress(dto.shipping_address, true)
       : this.resolveShippingAddressForCourses([course], dto.shipping_address);
 
-    const originalAmount = isPaperMaterial
+    const paperMaterialAmount = isPaperMaterial
       ? normalizeThresholdYuan(Number(paperMaterialPricing?.price || 0) * paperMaterialQuantity)
+      : 0;
+    const regionalShipping = isPaperMaterial
+      ? resolvePaperMaterialRegionalShipping(shippingAddress)
+      : { fee: 0, region: null };
+    const originalAmount = isPaperMaterial
+      ? normalizeThresholdYuan(paperMaterialAmount + regionalShipping.fee)
       : Number(course.price || 0);
     if (!isPaperMaterial && course.is_free !== 1 && originalAmount > 0) {
       assertIntegerYuanPrice(originalAmount, '课程价格');
@@ -467,6 +483,12 @@ export class OrderService {
     const amount = isPaperMaterial
       ? normalizeThresholdYuan(discountedAmount)
       : normalizePayAmountYuan(discountedAmount);
+    if (isPaperMaterial && (
+      !Number.isFinite(dto.expected_amount) ||
+      normalizeThresholdYuan(Number(dto.expected_amount)) !== amount
+    )) {
+      throw new BadRequestException('纸质资料价格已变化，请重新选择收货地址并确认金额');
+    }
     const requiresWechatPay = isPaperMaterial || course.content_type === 'paper_exam';
     const paperMaterialPayload = isPaperMaterial && paperMaterialPricing
       ? {
@@ -476,6 +498,9 @@ export class OrderService {
             price: paperMaterialPricing.price,
             unit_price: paperMaterialPricing.price,
             quantity: paperMaterialQuantity,
+            material_total_price: paperMaterialAmount,
+            regional_shipping_fee: regionalShipping.fee,
+            regional_shipping_region: regionalShipping.region,
             total_price: originalAmount,
             pricing_formula: {
               base_fee: paperMaterialPricing.baseFee,
@@ -485,6 +510,7 @@ export class OrderService {
               over_threshold_per_page_fee: paperMaterialPricing.overThresholdPerPageFee,
               binding_fee: paperMaterialPricing.bindingFee,
               shipping_fee: paperMaterialPricing.shippingFee,
+              regional_shipping_fee: regionalShipping.fee,
               multiplier: paperMaterialPricing.multiplier,
               rounding_mode: paperMaterialPricing.roundingMode,
             },

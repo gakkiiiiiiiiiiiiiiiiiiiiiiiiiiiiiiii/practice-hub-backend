@@ -34,6 +34,7 @@ describe('OrderService paper material checkout', () => {
     const result = await service.createCourseOrder(7, {
       course_id: 9,
       fulfillment_type: 'paper',
+      expected_amount: 10,
       shipping_address: {
         name: '测试用户',
         phone: '13800138000',
@@ -53,8 +54,63 @@ describe('OrderService paper material checkout', () => {
         price: 10,
         unit_price: 10,
         quantity: 1,
+        material_total_price: 10,
+        regional_shipping_fee: 0,
+        regional_shipping_region: null,
         total_price: 10,
       },
+    });
+  });
+
+  it('adds one regional shipping fee to a single paper material order', async () => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.courseRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 9,
+        name: '诊断学资料',
+        content_type: 'file',
+        price: 5,
+        is_free: 0,
+      }),
+    };
+    service.courseFileRepository = {
+      find: jest.fn().mockResolvedValue([
+        { id: 91, course_id: 9, status: 1, sort: 0, file_type: 'pdf', file_page_count: 22 },
+      ]),
+    };
+    service.referralCouponService = {};
+    service.appUserRepository = { findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }) };
+    service.orderRepository = {
+      create: jest.fn((value) => ({ id: 100, ...value })),
+      save: jest.fn(async (value) => value),
+    };
+    service.generateOrderNo = jest.fn(() => 'PAPER-REGIONAL');
+    service.processWechatPayPayment = jest.fn(async ({ order }) => order);
+
+    const result = await service.createCourseOrder(7, {
+      course_id: 9,
+      fulfillment_type: 'paper',
+      quantity: 3,
+      expected_amount: 38,
+      shipping_address: {
+        name: '测试用户',
+        phone: '13800138000',
+        province: '宁夏回族自治区',
+        city: '银川市',
+        district: '兴庆区',
+        detail: '测试路 1 号',
+      },
+    });
+
+    expect(result.amount).toBe(38);
+    expect(result.original_amount).toBe(38);
+    expect(result.pay_payload.paper_material).toMatchObject({
+      unit_price: 10,
+      quantity: 3,
+      material_total_price: 30,
+      regional_shipping_fee: 8,
+      regional_shipping_region: '宁夏',
+      total_price: 38,
     });
   });
 
@@ -89,6 +145,7 @@ describe('OrderService paper material checkout', () => {
       course_id: 9,
       fulfillment_type: 'paper',
       quantity: 3,
+      expected_amount: 30,
       shipping_address: {
         name: '测试用户',
         phone: '13800138000',
