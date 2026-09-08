@@ -5,13 +5,14 @@ import {
 } from './paper-material-price.util';
 
 describe('paper material pricing', () => {
-  it('uses the within-250-page formula and rounds up to whole yuan', () => {
-    expect(calculatePaperMaterialPrice(22)).toBe(10);
-    expect(calculatePaperMaterialPrice(100)).toBe(15);
-    expect(calculatePaperMaterialPrice(250)).toBe(25);
+  it('uses the 1.5 multiplier below 250 pages and rounds up to whole yuan', () => {
+    expect(calculatePaperMaterialPrice(22)).toBe(12);
+    expect(calculatePaperMaterialPrice(100)).toBe(17);
+    expect(calculatePaperMaterialPrice(249)).toBe(29);
   });
 
-  it('uses the over-250-page formula and rounds up to whole yuan', () => {
+  it('keeps the 1.3 multiplier at 250 pages and above', () => {
+    expect(calculatePaperMaterialPrice(250)).toBe(25);
     expect(calculatePaperMaterialPrice(251)).toBe(25);
     expect(calculatePaperMaterialPrice(260)).toBe(26);
     expect(calculatePaperMaterialPrice(261)).toBe(27);
@@ -26,9 +27,16 @@ describe('paper material pricing', () => {
     ).toMatchObject({
       available: true,
       totalPages: 50,
-      price: 12,
+      price: 14,
+      multiplier: 1.5,
       missingFileIds: [],
     });
+  });
+
+  it('reports the multiplier used at the 250-page boundary', () => {
+    expect(resolvePaperMaterialPricing([
+      { id: 1, file_type: 'pdf', file_page_count: 250 },
+    ])).toMatchObject({ price: 25, multiplier: 1.3 });
   });
 
   it('keeps paper purchasing unavailable while any printable file page count is missing', () => {

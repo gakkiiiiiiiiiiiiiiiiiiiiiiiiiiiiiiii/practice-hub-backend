@@ -34,7 +34,7 @@ describe('OrderService paper material checkout', () => {
     const result = await service.createCourseOrder(7, {
       course_id: 9,
       fulfillment_type: 'paper',
-      expected_amount: 10,
+      expected_amount: 12,
       shipping_address: {
         name: '测试用户',
         phone: '13800138000',
@@ -45,19 +45,19 @@ describe('OrderService paper material checkout', () => {
       },
     });
 
-    expect(result.amount).toBe(10);
+    expect(result.amount).toBe(12);
     expect(result.pay_provider).toBe('wechat_pay');
     expect(result.pay_payload).toMatchObject({
       fulfillment_type: 'paper',
       paper_material: {
         total_pages: 22,
-        price: 10,
-        unit_price: 10,
+        price: 12,
+        unit_price: 12,
         quantity: 1,
-        material_total_price: 10,
+        material_total_price: 12,
         regional_shipping_fee: 0,
         regional_shipping_region: null,
-        total_price: 10,
+        total_price: 12,
       },
     });
   });
@@ -91,7 +91,7 @@ describe('OrderService paper material checkout', () => {
       course_id: 9,
       fulfillment_type: 'paper',
       quantity: 3,
-      expected_amount: 38,
+      expected_amount: 44,
       shipping_address: {
         name: '测试用户',
         phone: '13800138000',
@@ -102,15 +102,15 @@ describe('OrderService paper material checkout', () => {
       },
     });
 
-    expect(result.amount).toBe(38);
-    expect(result.original_amount).toBe(38);
+    expect(result.amount).toBe(44);
+    expect(result.original_amount).toBe(44);
     expect(result.pay_payload.paper_material).toMatchObject({
-      unit_price: 10,
+      unit_price: 12,
       quantity: 3,
-      material_total_price: 30,
+      material_total_price: 36,
       regional_shipping_fee: 8,
       regional_shipping_region: '宁夏',
-      total_price: 38,
+      total_price: 44,
     });
   });
 
@@ -145,7 +145,7 @@ describe('OrderService paper material checkout', () => {
       course_id: 9,
       fulfillment_type: 'paper',
       quantity: 3,
-      expected_amount: 30,
+      expected_amount: 36,
       shipping_address: {
         name: '测试用户',
         phone: '13800138000',
@@ -156,13 +156,13 @@ describe('OrderService paper material checkout', () => {
       },
     });
 
-    expect(result.amount).toBe(30);
-    expect(result.original_amount).toBe(30);
+    expect(result.amount).toBe(36);
+    expect(result.original_amount).toBe(36);
     expect(result.pay_payload.paper_material).toMatchObject({
-      price: 10,
-      unit_price: 10,
+      price: 12,
+      unit_price: 12,
       quantity: 3,
-      total_price: 30,
+      total_price: 36,
     });
     expect(service.processWechatPayPayment).toHaveBeenCalledWith(
       expect.objectContaining({

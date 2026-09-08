@@ -28,7 +28,7 @@ describe('purchased paper material prices', () => {
     expect(h.listPricingFilesByCourseIds).toHaveBeenCalledTimes(1);
     expect(h.listPricingFilesByCourseIds).toHaveBeenCalledWith([1, 2]);
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ id: 1, paper_material: { available: true, total_pages: 120, price: 16 } });
+    expect(rows[0]).toMatchObject({ id: 1, paper_material: { available: true, total_pages: 120, price: 19 } });
     expect(rows[1]).toMatchObject({ id: 2, paper_material: { available: false, price: null } });
     expect(rows[1].paper_material.pending_reason).toBeTruthy();
     expect(rows[0]).not.toHaveProperty('file_url');

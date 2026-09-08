@@ -5,7 +5,8 @@ export const PAPER_MATERIAL_OVER_THRESHOLD_BASE_FEE = 15;
 export const PAPER_MATERIAL_OVER_THRESHOLD_PER_PAGE_FEE = 0.1;
 export const PAPER_MATERIAL_BINDING_FEE = 3;
 export const PAPER_MATERIAL_SHIPPING_FEE = 1;
-export const PAPER_MATERIAL_PRICE_MULTIPLIER = 1.3;
+export const PAPER_MATERIAL_BELOW_THRESHOLD_MULTIPLIER = 1.5;
+export const PAPER_MATERIAL_AT_OR_ABOVE_THRESHOLD_MULTIPLIER = 1.3;
 
 type PrintableCourseFile = {
   id?: number | null;
@@ -52,12 +53,12 @@ export function inferPaperMaterialPageCount(
 export function calculatePaperMaterialPrice(totalPages: number): number {
   const pages = Math.max(0, Math.trunc(Number(totalPages) || 0));
   if (pages <= 0) return 0;
-  if (pages <= PAPER_MATERIAL_PAGE_THRESHOLD) {
-    // Convert to integer cents before applying the 1.3 multiplier to avoid
+  if (pages < PAPER_MATERIAL_PAGE_THRESHOLD) {
+    // Convert to integer cents before applying the 1.5 multiplier to avoid
     // floating-point noise accidentally rounding an exact integer upward.
     const subtotalInCents = Math.round(PAPER_MATERIAL_BASE_FEE * 100)
       + pages * Math.round(PAPER_MATERIAL_PER_PAGE_FEE * 100);
-    return Math.ceil((subtotalInCents * 13) / 1000);
+    return Math.ceil((subtotalInCents * 15) / 1000);
   }
   const subtotalInTenths = Math.round((
     PAPER_MATERIAL_OVER_THRESHOLD_BASE_FEE
@@ -102,7 +103,9 @@ export function resolvePaperMaterialPricing(files: PrintableCourseFile[]): Paper
     overThresholdPerPageFee: PAPER_MATERIAL_OVER_THRESHOLD_PER_PAGE_FEE,
     bindingFee: PAPER_MATERIAL_BINDING_FEE,
     shippingFee: PAPER_MATERIAL_SHIPPING_FEE,
-    multiplier: PAPER_MATERIAL_PRICE_MULTIPLIER,
+    multiplier: totalPages < PAPER_MATERIAL_PAGE_THRESHOLD
+      ? PAPER_MATERIAL_BELOW_THRESHOLD_MULTIPLIER
+      : PAPER_MATERIAL_AT_OR_ABOVE_THRESHOLD_MULTIPLIER,
     roundingMode: 'ceil_yuan',
   };
 }

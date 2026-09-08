@@ -26,7 +26,7 @@ describe('OrderService paper cart', () => {
   let savedOrder: any;
   const address = { name: '测试用户', phone: '13800138000', province: '上海市', city: '上海市', district: '浦东新区', detail: '测试路 1 号' };
   const dto = () => ({ items: [{ course_id: 9, quantity: 2 }, { course_id: 10, quantity: 3 }],
-    shipping_address: { ...address }, expected_amount: 146 });
+    shipping_address: { ...address }, expected_amount: 150 });
   const courses = () => [9, 10].map((id) => ({ id, status: 1, content_type: 'file', is_free: 0, price: 5, name: `资料${id}` }));
   const params = { timeStamp: '1', nonceStr: 'nonce', package: 'prepay_id=test', signType: 'MD5', paySign: 'test' };
 
@@ -70,15 +70,15 @@ describe('OrderService paper cart', () => {
 
   it('creates one order and one WeChat payment from batch-cached prices and quantities', async () => {
     const result = await service.createPaperCartOrder(7, dto(), '127.0.0.1');
-    expect(result).toMatchObject({ amount: 146, fulfillment_type: 'paper', is_cart: true,
+    expect(result).toMatchObject({ amount: 150, fulfillment_type: 'paper', is_cart: true,
       course_ids: [9, 10], pay_provider: 'wechat_pay', payment_params: params });
-    expect(savedOrder).toMatchObject({ amount: 146, original_amount: 146, discount_amount: 0, coupon_id: null,
+    expect(savedOrder).toMatchObject({ amount: 150, original_amount: 150, discount_amount: 0, coupon_id: null,
       shipping_address: address, pay_payload: { fulfillment_type: 'paper', is_cart: true,
-        material_amount: 146, regional_shipping_fee: 0, regional_shipping_region: null,
+        material_amount: 150, regional_shipping_fee: 0, regional_shipping_region: null,
         cart_items: [
-          { course_id: 9, quantity: 2, unit_price: 10, price: 20, total_price: 20, total_pages: 22 },
+          { course_id: 9, quantity: 2, unit_price: 12, price: 24, total_price: 24, total_pages: 22 },
           { course_id: 10, quantity: 3, unit_price: 42, price: 126, total_price: 126, total_pages: 382 },
-        ], wechat_pay: { body: '纸质资料 2 种 5 份', total_fee: 14600 } } });
+        ], wechat_pay: { body: '纸质资料 2 种 5 份', total_fee: 15000 } } });
     expect(savedOrder.pay_payload.cart_items[0].pricing_formula.rounding_mode).toBe('ceil_yuan');
     expect(repos.get(Order).create).toHaveBeenCalledTimes(1);
     expect(service.createWechatPayPaymentParams).toHaveBeenCalledTimes(1);
@@ -94,28 +94,28 @@ describe('OrderService paper cart', () => {
     await expect(service.createPaperCartOrder(7, {
       ...dto(),
       shipping_address: regionalAddress,
-      expected_amount: 146,
+      expected_amount: 150,
     })).rejects.toThrow('价格已变化');
     expect(repos.get(Order).save).not.toHaveBeenCalled();
 
     const result = await service.createPaperCartOrder(7, {
       ...dto(),
       shipping_address: regionalAddress,
-      expected_amount: 154,
+      expected_amount: 158,
     });
 
-    expect(result.amount).toBe(154);
+    expect(result.amount).toBe(158);
     expect(savedOrder).toMatchObject({
-      amount: 154,
-      original_amount: 154,
+      amount: 158,
+      original_amount: 158,
       shipping_address: regionalAddress,
       pay_payload: {
-        material_amount: 146,
+        material_amount: 150,
         regional_shipping_fee: 8,
         regional_shipping_region: '新疆',
       },
     });
-    expect(savedOrder.pay_payload.cart_items.reduce((sum, item) => sum + item.total_price, 0)).toBe(146);
+    expect(savedOrder.pay_payload.cart_items.reduce((sum, item) => sum + item.total_price, 0)).toBe(150);
   });
 
   it.each([[], [{ course_id: 9, quantity: 0 }], [{ course_id: 9, quantity: 100 }],
@@ -154,11 +154,11 @@ describe('OrderService paper cart', () => {
     repos.get(UserCourseAuth).find.mockResolvedValue([]);
     packageAccess.batchUserHasCourseAccessViaPackage.mockResolvedValue(new Map([[9, { hasAccess: true }]]));
     categoryAccess.batchUserHasCourseAccess.mockResolvedValue(new Map([[10, {}]]));
-    await expect(service.createPaperCartOrder(7, dto())).resolves.toMatchObject({ amount: 146 });
+    await expect(service.createPaperCartOrder(7, dto())).resolves.toMatchObject({ amount: 150 });
   });
 
   it('rejects unknown page counts and changed total prices without writing an order', async () => {
-    await expect(service.createPaperCartOrder(7, { ...dto(), expected_amount: 145 })).rejects.toThrow('价格已变化');
+    await expect(service.createPaperCartOrder(7, { ...dto(), expected_amount: 149 })).rejects.toThrow('价格已变化');
     repos.get(CourseFile).find.mockResolvedValue([{ course_id: 9, file_type: 'pdf', file_page_count: 22 }]);
     await expect(service.createPaperCartOrder(7, dto())).rejects.toThrow('资料页数核算中');
     expect(repos.get(Order).save).not.toHaveBeenCalled();
@@ -173,7 +173,7 @@ describe('OrderService paper cart', () => {
     const warn = jest.spyOn(service.logger, 'warn').mockImplementation(() => undefined);
     service.createWechatPayPaymentParams.mockRejectedValueOnce(new Error('sensitive provider response'));
     const pending = await service.createPaperCartOrder(7, dto());
-    expect(pending).toMatchObject({ order_no: savedOrder.order_no, amount: 146,
+    expect(pending).toMatchObject({ order_no: savedOrder.order_no, amount: 150,
       status: OrderStatus.PENDING, pay_provider: 'wechat_pay', payment_params: null,
       fulfillment_type: 'paper', is_cart: true, course_ids: [9, 10],
       payment_error: '订单已创建，暂时无法发起支付，请前往订单页继续支付，请勿重复下单' });
@@ -184,7 +184,7 @@ describe('OrderService paper cart', () => {
     expect(savedOrder.status).toBe(OrderStatus.PENDING);
     const orderNo = savedOrder.order_no;
     const result = await service.payPendingOrder(7, savedOrder.id);
-    expect(result).toMatchObject({ order_no: orderNo, fulfillment_type: 'paper', amount: 146 });
+    expect(result).toMatchObject({ order_no: orderNo, fulfillment_type: 'paper', amount: 150 });
     expect(repos.get(Order).create).toHaveBeenCalledTimes(1);
     expect(service.createWechatPayPaymentParams).toHaveBeenLastCalledWith(expect.objectContaining({ goodsTitle: '纸质资料 2 种 5 份' }));
     expect(service.processCoinBasedPayment).not.toHaveBeenCalled();
@@ -214,7 +214,7 @@ describe('OrderService paper cart', () => {
     const result = await service.refundOrder(savedOrder.id, 1, { remark: '测试退款' });
     expect(result.status).toBe(OrderStatus.CANCELLED);
     expect(service.refundWechatPayOrder).toHaveBeenCalledTimes(1);
-    expect(service.refundWechatPayOrder).toHaveBeenCalledWith(expect.objectContaining({ amount: 146 }), expect.any(String), '测试退款');
+    expect(service.refundWechatPayOrder).toHaveBeenCalledWith(expect.objectContaining({ amount: 150 }), expect.any(String), '测试退款');
     expect(service.revokeCourseAccess).not.toHaveBeenCalled();
     expect(savedOrder.pay_payload.cart_items).toHaveLength(2);
     await expect(service.refundOrder(savedOrder.id, 1, {})).rejects.toThrow('该订单已退款');
@@ -239,7 +239,7 @@ describe('OrderService paper cart', () => {
     const row = { id: 101, courseName: '资料9', contentType: 'file', payPayload: savedOrder.pay_payload };
     const admin = service.mapAdminOrderRow(row);
     expect(admin).toMatchObject({ productName: '纸质资料 2 种 5 份', requiresShipping: true, isCart: true, fulfillmentType: 'paper',
-      cartItems: [ { courseId: 9, quantity: 2, unitPrice: 10, price: 20, totalPrice: 20, totalPages: 22 },
+      cartItems: [ { courseId: 9, quantity: 2, unitPrice: 12, price: 24, totalPrice: 24, totalPages: 22 },
         { courseId: 10, quantity: 3, unitPrice: 42, price: 126, totalPrice: 126, totalPages: 382 } ] });
     const qb: any = { getRawMany: jest.fn().mockResolvedValue([row]) };
     for (const key of ['leftJoin', 'select', 'where', 'orderBy']) qb[key] = jest.fn(() => qb);
