@@ -207,9 +207,10 @@ describe('OrderService paper cart', () => {
     expect(commission.processOrderCommission).toHaveBeenCalledTimes(1);
   });
 
-  it('refunds the full paper cart amount once without revoking existing courses', async () => {
+  it('refunds an after-sale paper cart in full once without revoking existing courses', async () => {
     await service.createPaperCartOrder(7, dto());
     await service.handlePaymentSuccess(savedOrder.id);
+    savedOrder.status = OrderStatus.AFTER_SALE;
     jest.spyOn(service, 'refundWechatPayOrder').mockResolvedValue({ result_code: 'SUCCESS' });
     const result = await service.refundOrder(savedOrder.id, 1, { remark: '测试退款' });
     expect(result.status).toBe(OrderStatus.CANCELLED);
