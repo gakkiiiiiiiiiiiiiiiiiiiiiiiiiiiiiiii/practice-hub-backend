@@ -39,6 +39,47 @@ describe('CourseService', () => {
 		);
 	});
 
+	it('excludes paper exams before pagination when requested by the mini program', async () => {
+		const queryBuilder: any = {
+			where: jest.fn(),
+			andWhere: jest.fn(),
+			orderBy: jest.fn(),
+			addOrderBy: jest.fn(),
+			select: jest.fn(),
+			skip: jest.fn(),
+			take: jest.fn(),
+			getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+		};
+		Object.values(queryBuilder).forEach((value) => {
+			if (typeof value === 'function' && value !== queryBuilder.getManyAndCount) {
+				(value as jest.Mock).mockReturnValue(queryBuilder);
+			}
+		});
+		const listService = Object.create(CourseService.prototype) as CourseService;
+		(listService as any).courseRepository = {
+			createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+		};
+		(listService as any).courseTypeRepository = { find: jest.fn().mockResolvedValue([]) };
+
+		await listService.getAllCourses(
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			1,
+			40,
+			'paper_exam',
+		);
+
+		expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+			'course.content_type != :excludedContentType',
+			{ excludedContentType: 'paper_exam' },
+		);
+	});
+
 	it.each([
 		['资料 --【155页】.pdf', 155],
 		['题库 --【112】', 112],

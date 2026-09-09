@@ -53,4 +53,9 @@ export class GetCourseListDto {
   @Min(1)
   @Max(500)
   pageSize?: number;
+
+  @ApiPropertyOptional({ description: '排除的课程内容类型', enum: ['paper_exam'] })
+  @IsOptional()
+  @IsIn(['paper_exam'])
+  excludeContentType?: string;
 }

@@ -41,8 +41,17 @@ export class CourseController {
       query.bookName,
       query.page,
       query.pageSize,
+      query.excludeContentType,
     );
     return CommonResponseDto.success(result);
+  }
+
+  @Get('purchased')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: '获取当前用户已购买或已激活的付费课程' })
+  async getPurchasedCourses(@CurrentUser() user: any) {
+    return CommonResponseDto.success(await this.courseService.getPurchasedCourses(user.userId));
   }
 
   @Get('purchased-paper-materials')

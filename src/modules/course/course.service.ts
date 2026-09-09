@@ -199,6 +199,7 @@ export class CourseService {
     bookName?: string,
     page?: number,
     pageSize?: number,
+    excludeContentType?: string,
   ) {
     const queryBuilder = this.courseRepository.createQueryBuilder('course');
     const normalizedKeyword = String(keyword || '').trim();
@@ -206,6 +207,7 @@ export class CourseService {
     const normalizedSubCategory = String(subCategory || '').trim();
     const normalizedCourseTypeId = Number(courseTypeId) || 0;
     const normalizedBookName = String(bookName || '').trim();
+    const normalizedExcludedContentType = String(excludeContentType || '').trim();
     let hasWhere = false;
 
     const appendWhere = (condition: string, parameters?: Record<string, unknown>) => {
@@ -253,6 +255,12 @@ export class CourseService {
 
     if (normalizedBookName) {
       appendWhere('course.name LIKE :bookName', { bookName: `%${normalizedBookName}%` });
+    }
+
+    if (normalizedExcludedContentType) {
+      appendWhere('course.content_type != :excludedContentType', {
+        excludedContentType: normalizedExcludedContentType,
+      });
     }
 
     let activeTypes: CourseType[] = [];
@@ -340,16 +348,19 @@ export class CourseService {
       return list.map((course) => ({
         id: course.id,
         name: course.name,
+        subject: course.subject,
         category: course.category,
         sub_category: course.sub_category,
         cover_img: course.cover_img,
         price: course.price,
         agent_price: course.agent_price,
-		agent_prices: course.agent_prices,
+        agent_prices: course.agent_prices,
         is_free: course.is_free,
         validity_days: course.validity_days,
+        sort: course.sort,
         content_type: course.content_type,
         hasAuth: course.hasAuth,
+        expireTime: course.expireTime || null,
       }));
     };
     if (!userId || courses.length === 0) {
@@ -393,6 +404,24 @@ export class CourseService {
     return paginated
       ? new CourseListPageDto(list, total, safePage, safePageSize)
       : toLegacyResponse(list);
+  }
+
+  async getPurchasedCourses(userId: number) {
+    const courses = await this.getAllCourses(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      userId,
+    );
+    return (courses as Array<Record<string, any>>)
+      .filter(
+        (course) =>
+          course.hasAuth === true &&
+          Number(course.price) > 0 &&
+          Number(course.is_free) !== 1,
+      )
+      .sort((left, right) => Number(left.sort || 0) - Number(right.sort || 0));
   }
 
   async getPurchasedPaperMaterials(userId: number) {
