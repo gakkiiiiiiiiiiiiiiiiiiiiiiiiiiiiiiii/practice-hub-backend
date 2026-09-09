@@ -39,6 +39,15 @@ export class BatchAdjustCoursePriceDto {
   @IsBoolean({ message: 'uncategorizedOnly 必须是布尔值' })
   uncategorizedOnly?: boolean;
 
+  @ApiProperty({
+    description: '筛选：课程类型（selectAll 时有效）',
+    enum: ['normal', 'file', 'paper_exam'],
+    required: false,
+  })
+  @IsOptional()
+  @IsIn(['normal', 'file', 'paper_exam'], { message: '课程类型无效' })
+  contentType?: 'normal' | 'file' | 'paper_exam';
+
   @ApiProperty({ description: '筛选：状态 0-禁用 1-启用（selectAll 时有效）', required: false })
   @IsOptional()
   @IsNumber({}, { message: '状态必须是数字' })

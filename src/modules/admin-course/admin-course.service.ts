@@ -1342,6 +1342,7 @@ export class AdminCourseService {
     category?: string;
     subCategory?: string;
     uncategorizedOnly?: boolean;
+    contentType?: string;
     status?: number;
   }) {
     const similarityOptions = await this.getCourseSimilarityOptions();
@@ -1351,6 +1352,7 @@ export class AdminCourseService {
       category: filters?.category,
       subCategory: filters?.subCategory,
       uncategorizedOnly: filters?.uncategorizedOnly,
+      contentType: filters?.contentType,
       status: filters?.status,
     });
     const groups = buildSimilarCourseGroups(
@@ -1394,6 +1396,7 @@ export class AdminCourseService {
     category?: string;
     subCategory?: string;
     uncategorizedOnly?: boolean;
+    contentType?: string;
     status?: number;
     similarOnly?: boolean;
   }) {
@@ -1441,6 +1444,9 @@ export class AdminCourseService {
     }
     if (!filters?.uncategorizedOnly && filters?.subCategory?.trim()) {
       queryBuilder.andWhere('course.sub_category = :subCategory', { subCategory: filters.subCategory.trim() });
+    }
+    if (filters?.contentType?.trim()) {
+      queryBuilder.andWhere('course.content_type = :contentType', { contentType: filters.contentType.trim() });
     }
     if (filters?.status !== undefined && filters.status !== null && !Number.isNaN(filters.status)) {
       queryBuilder.andWhere('course.status = :status', { status: filters.status });
@@ -1738,6 +1744,7 @@ export class AdminCourseService {
         category: dto.category,
         subCategory: dto.subCategory,
         uncategorizedOnly: dto.uncategorizedOnly,
+        contentType: dto.contentType,
         status: dto.status,
       });
     } else {

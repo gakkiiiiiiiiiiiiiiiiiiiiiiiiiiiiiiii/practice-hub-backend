@@ -24,6 +24,26 @@ describe('AdminCourseService getCourseList', () => {
 
 		expect(query.andWhere).toHaveBeenCalledWith("(course.category IS NULL OR TRIM(course.category) = '')");
 	});
+
+	it('filters courses by content type using an exact match', async () => {
+		const query = {
+			select: jest.fn().mockReturnThis(),
+			andWhere: jest.fn().mockReturnThis(),
+			orderBy: jest.fn().mockReturnThis(),
+			addOrderBy: jest.fn().mockReturnThis(),
+			getMany: jest.fn().mockResolvedValue([]),
+		};
+		const service = Object.create(AdminCourseService.prototype) as AdminCourseService;
+		(service as any).courseRepository = {
+			createQueryBuilder: jest.fn().mockReturnValue(query),
+		};
+
+		await expect(service.getCourseList({ contentType: 'paper_exam' })).resolves.toEqual([]);
+
+		expect(query.andWhere).toHaveBeenCalledWith('course.content_type = :contentType', {
+			contentType: 'paper_exam',
+		});
+	});
 });
 
 describe('AdminCourseService batchUpdateContent', () => {
