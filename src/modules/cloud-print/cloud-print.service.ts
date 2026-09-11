@@ -23,6 +23,7 @@ import {
   OrderStatus,
 } from '../../database/entities/order.entity';
 import { SystemConfig } from '../../database/entities/system-config.entity';
+import { UploadService } from '../upload/upload.service';
 import { UpdateCloudPrintConfigDto } from './dto/update-cloud-print-config.dto';
 
 const CLOUD_PRINT_CONFIG_KEY = 'cloud_print';
@@ -63,6 +64,7 @@ export class CloudPrintService {
     @InjectRepository(SystemConfig)
     private readonly systemConfigRepository: Repository<SystemConfig>,
     private readonly configService: ConfigService,
+    private readonly uploadService: UploadService,
   ) {}
 
   async getConfig() {
@@ -332,7 +334,7 @@ export class CloudPrintService {
       if (!job.external_package_id) {
         const files = this.getSourceFiles(job);
         const payload = files.map((file) => ({
-          url: file.file_url,
+          url: this.uploadService.getCloudPrintDownloadUrl(file.file_url),
           name: file.display_name || file.file_name || `资料-${file.id}.${file.file_type}`,
         }));
         const response = await this.requestApi<any>('POST', '/api/svip/storage/create-package', payload);

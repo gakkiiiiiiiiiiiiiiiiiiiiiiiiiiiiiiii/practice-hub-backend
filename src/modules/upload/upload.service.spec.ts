@@ -118,6 +118,23 @@ describe('UploadService storage provider credentials', () => {
 		now.mockRestore();
 	});
 
+	it('signs a bounded OSS download URL for a cloud print course file', () => {
+		const signatureUrl = jest.spyOn((service as any).oss, 'signatureUrl').mockReturnValue(
+			'https://example-bucket.oss-cn-shanghai.aliyuncs.com/course-files/example.pdf?signed=1',
+		);
+
+		expect(service.getCloudPrintDownloadUrl('https://cdn.example.com/course-files/example.pdf')).toContain(
+			'signed=1',
+		);
+		expect(signatureUrl).toHaveBeenCalledWith('course-files/example.pdf', {
+			expires: 2 * 60 * 60,
+			method: 'GET',
+		});
+		expect(() => service.getCloudPrintDownloadUrl('https://cdn.example.com/images/cover.jpg')).toThrow(
+			'云打印源文件必须属于 course-files 目录',
+		);
+	});
+
 	it('routes preview sources to the COS worker whenever COS still has the object', async () => {
 		const ossHead = jest.spyOn((service as any).oss, 'head').mockResolvedValue({});
 		const cosHead = jest.spyOn((service as any).cos, 'headObject').mockResolvedValue({});

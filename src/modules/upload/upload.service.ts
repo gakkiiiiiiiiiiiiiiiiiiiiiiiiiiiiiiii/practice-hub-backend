@@ -1312,6 +1312,21 @@ export class UploadService {
 	}
 
 	/**
+	 * 为云打印供应商签发短期 OSS 下载地址。
+	 * 只允许 course-files 下的本项目对象，避免把长期 AccessKey 或受保护 CDN 地址交给第三方。
+	 */
+	getCloudPrintDownloadUrl(url: string, expiresSeconds = 2 * 60 * 60): string {
+		const key = this.extractKeyFromUrl(url);
+		if (!key || !this.isCourseSourceKey(key)) {
+			throw new BadRequestException('云打印源文件必须属于 course-files 目录');
+		}
+		return this.requireOss().signatureUrl(this.normalizeObjectKey(key), {
+			expires: Math.max(15 * 60, Math.min(24 * 60 * 60, expiresSeconds)),
+			method: 'GET',
+		} as any);
+	}
+
+	/**
 	 * 仅删除预览缓存对象，不读取对象正文。
 	 * 强制重建时由腾讯云后端清理标记，上海工作节点在下一轮扫描中重新生成。
 	 */
