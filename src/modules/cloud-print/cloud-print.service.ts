@@ -384,7 +384,7 @@ export class CloudPrintService {
         area: payload.address.area,
         ship_supplier_id: payload.address.ship_supplier_id,
       });
-      // calc-ship-price 文档示例以元展示但未标单位；上线前必须用小额订单核对。
+      // 已向供应商确认 calc-ship-price 的 price 单位为元，统一换算为分参与金额保护。
       const shippingAmountCents = Math.round(Number(shipping?.price) * 100);
       if (!Number.isInteger(shippingAmountCents) || shippingAmountCents < 0) {
         throw new Error('云打印运费计价响应无效');
@@ -395,7 +395,7 @@ export class CloudPrintService {
         totalAmountCents: printAmountCents + shippingAmountCents,
         totalWeightGrams,
         quotedAt: new Date().toISOString(),
-        shippingUnitBasis: 'yuan_inferred_from_provider_example',
+        shippingUnitBasis: 'yuan_confirmed',
       };
       if (quote.totalAmountCents > Number(config.maxSingleAmountCents)) {
         const updated = await this.updateClaimedJob(job, CloudPrintJobStatus.PROCESSING, {
