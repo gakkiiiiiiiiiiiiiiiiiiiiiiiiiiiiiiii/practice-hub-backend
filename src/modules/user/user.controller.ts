@@ -41,6 +41,13 @@ export class UserController {
     return CommonResponseDto.success(result);
   }
 
+  @Post('profile')
+  @ApiOperation({ summary: '更新个人信息（兼容微信云托管）' })
+  async updateProfileByPost(@CurrentUser() user: any, @Body() dto: UpdateUserProfileDto) {
+    const result = await this.userService.updateProfile(user.userId, dto);
+    return CommonResponseDto.success(result);
+  }
+
   @Post('bind_phone')
   @ApiOperation({ summary: '绑定手机号' })
   async bindPhone(@CurrentUser() user: any, @Body() dto: BindPhoneDto) {
@@ -91,4 +98,3 @@ export class UserController {
     return CommonResponseDto.success(result);
   }
 }
-
