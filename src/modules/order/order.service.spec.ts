@@ -598,6 +598,45 @@ describe('OrderService admin pagination', () => {
     expect(query.limit).toHaveBeenCalledWith(100);
     expect(result.pageSize).toBe(100);
   });
+
+  it('applies paper-only and cloud-print filters before pagination', async () => {
+    const query: any = {
+      leftJoin: jest.fn(),
+      select: jest.fn(),
+      orderBy: jest.fn(),
+      andWhere: jest.fn(),
+      clone: jest.fn(),
+      getCount: jest.fn().mockResolvedValue(0),
+      offset: jest.fn(),
+      limit: jest.fn(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    };
+    Object.keys(query).forEach((key) => {
+      if (!['getCount', 'getRawMany'].includes(key)) query[key].mockReturnValue(query);
+    });
+
+    const service = Object.create(OrderService.prototype) as any;
+    service.orderRepository = { createQueryBuilder: jest.fn().mockReturnValue(query) };
+    service.getLatestAfterSaleMap = jest.fn().mockResolvedValue(new Map());
+
+    await service.getAdminOrderList({
+      page: 1,
+      pageSize: 10,
+      paper_only: true,
+      cloud_print_status: 'retryable_failed',
+    });
+
+    expect(query.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining("$.fulfillment_type"),
+      { paperFulfillmentType: 'paper', paperContentType: 'paper_exam' },
+    );
+    expect(query.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining("$.cloud_print.status"),
+      { cloudPrintStatus: 'retryable_failed' },
+    );
+    expect(query.offset).toHaveBeenCalledWith(0);
+    expect(query.limit).toHaveBeenCalledWith(10);
+  });
 });
 
 describe('OrderService paper exam checkout', () => {

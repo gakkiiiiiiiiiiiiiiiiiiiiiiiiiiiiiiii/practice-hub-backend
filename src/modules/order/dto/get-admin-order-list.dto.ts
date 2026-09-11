@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 import { OrderStatus } from '../../../database/entities/order.entity';
 
 export class GetAdminOrderListDto {
@@ -33,6 +33,29 @@ export class GetAdminOrderListDto {
 	@IsOptional()
 	@IsIn(['normal', 'file', 'paper_exam'])
 	content_type?: 'normal' | 'file' | 'paper_exam';
+
+	@ApiPropertyOptional({ description: '是否仅返回需要纸质履约的订单' })
+	@IsOptional()
+	@Transform(({ value }) => value === true || value === 'true')
+	@IsBoolean()
+	paper_only?: boolean;
+
+	@ApiPropertyOptional({ description: '云打印状态，unsubmitted 表示尚未创建云打印任务' })
+	@IsOptional()
+	@IsIn([
+		'unsubmitted',
+		'pending',
+		'processing',
+		'submitting',
+		'waiting_files',
+		'awaiting_confirm',
+		'retryable_failed',
+		'review_required',
+		'submitted',
+		'refund_reserved',
+		'cancelled',
+	])
+	cloud_print_status?: string;
 
 	@ApiPropertyOptional({ description: '关键词：订单号/用户昵称/手机号/用户ID' })
 	@IsOptional()

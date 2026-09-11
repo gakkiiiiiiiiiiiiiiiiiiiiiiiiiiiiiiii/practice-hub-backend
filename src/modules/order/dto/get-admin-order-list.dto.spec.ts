@@ -22,4 +22,24 @@ describe('GetAdminOrderListDto', () => {
 		const errors = await validate(dto);
 		expect(errors.some((error) => error.property === 'pageSize')).toBe(true);
 	});
+
+	it('accepts paper order and cloud print status filters', async () => {
+		const dto = plainToInstance(GetAdminOrderListDto, {
+			paper_only: 'true',
+			cloud_print_status: 'retryable_failed',
+		});
+
+		await expect(validate(dto)).resolves.toEqual([]);
+		expect(dto.paper_only).toBe(true);
+		expect(dto.cloud_print_status).toBe('retryable_failed');
+	});
+
+	it('rejects an unknown cloud print status', async () => {
+		const dto = plainToInstance(GetAdminOrderListDto, {
+			cloud_print_status: 'unknown',
+		});
+
+		const errors = await validate(dto);
+		expect(errors.some((error) => error.property === 'cloud_print_status')).toBe(true);
+	});
 });

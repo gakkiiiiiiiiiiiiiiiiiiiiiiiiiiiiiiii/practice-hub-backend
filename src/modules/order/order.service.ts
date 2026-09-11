@@ -3494,6 +3494,28 @@ export class OrderService {
       query.andWhere(`(${contentTypeConditions.join(' OR ')})`, { contentType: dto.content_type });
     }
 
+    if (dto.paper_only) {
+      query.andWhere(
+        `(
+          JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.fulfillment_type')) = :paperFulfillmentType
+          OR course.content_type = :paperContentType
+          OR JSON_SEARCH(o.pay_payload, 'one', :paperContentType, NULL, '$.cart_items[*].content_type') IS NOT NULL
+          OR JSON_SEARCH(o.pay_payload, 'one', :paperContentType, NULL, '$.cart_items[*].contentType') IS NOT NULL
+          OR o.shipping_address IS NOT NULL
+        )`,
+        { paperFulfillmentType: 'paper', paperContentType: 'paper_exam' },
+      );
+    }
+
+    if (dto.cloud_print_status === 'unsubmitted') {
+      query.andWhere("JSON_EXTRACT(o.pay_payload, '$.cloud_print.status') IS NULL");
+    } else if (dto.cloud_print_status) {
+      query.andWhere(
+        "JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.cloud_print.status')) = :cloudPrintStatus",
+        { cloudPrintStatus: dto.cloud_print_status },
+      );
+    }
+
     const keyword = dto.keyword?.trim();
     if (keyword) {
       const userId = Number(keyword);
