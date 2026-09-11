@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, MoreThan, Repository } from 'typeorm';
 import { PackageSection } from '../../database/entities/package-section.entity';
 import { PackageSectionScope, PackageScopeType } from '../../database/entities/package-section-scope.entity';
 import { PackagePlan, PackagePlanType } from '../../database/entities/package-plan.entity';
@@ -101,6 +101,15 @@ export class PackageService {
 			}
 		}
 		return accessMap;
+	}
+
+	async hasAnyActiveSubscription(userId: number) {
+		if (!userId) return false;
+		return (
+			(await this.userPackageSubscriptionRepository.count({
+				where: { user_id: userId, expire_time: MoreThan(new Date()) },
+			})) > 0
+		);
 	}
 
 	async userCoursePackageAccess(userId: number, course: Course) {

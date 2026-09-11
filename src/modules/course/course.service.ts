@@ -407,6 +407,59 @@ export class CourseService {
   }
 
   async getPurchasedCourses(userId: number) {
+    const now = Date.now();
+    const [auths, hasPackageAccess, hasCategoryAccess] = await Promise.all([
+      this.userCourseAuthRepository.find({ where: { user_id: userId } }),
+      this.packageService.hasAnyActiveSubscription(userId),
+      this.categoryBundleAccessService.hasAnyUserAccess(userId),
+    ]);
+
+    // Package/category grants can cover dynamic course scopes, so preserve the
+    // complete authorization calculation for those comparatively rare users.
+    if (!hasPackageAccess && !hasCategoryAccess) {
+      const activeAuths = auths.filter(
+        (auth) => !auth.expire_time || new Date(auth.expire_time).getTime() > now,
+      );
+      if (activeAuths.length === 0) return [];
+
+      const authByCourseId = new Map<number, UserCourseAuth>();
+      for (const auth of activeAuths) {
+        const current = authByCourseId.get(auth.course_id);
+        if (
+          !current ||
+          !auth.expire_time ||
+          (current.expire_time && auth.expire_time > current.expire_time)
+        ) {
+          authByCourseId.set(auth.course_id, auth);
+        }
+      }
+      const courses = await this.courseRepository.find({
+        where: { id: In([...authByCourseId.keys()]), status: 1 },
+        order: { sort: 'ASC', id: 'ASC' },
+      });
+      return courses
+        .filter(
+          (course) => Number(course.price) > 0 && Number(course.is_free) !== 1,
+        )
+        .map((course) => ({
+          id: course.id,
+          name: course.name,
+          subject: course.subject,
+          category: course.category,
+          sub_category: course.sub_category,
+          cover_img: course.cover_img,
+          price: course.price,
+          agent_price: course.agent_price,
+          agent_prices: course.agent_prices,
+          is_free: course.is_free,
+          validity_days: course.validity_days,
+          sort: course.sort,
+          content_type: course.content_type,
+          hasAuth: true,
+          expireTime: authByCourseId.get(course.id)?.expire_time || null,
+        }));
+    }
+
     const courses = await this.getAllCourses(
       undefined,
       undefined,

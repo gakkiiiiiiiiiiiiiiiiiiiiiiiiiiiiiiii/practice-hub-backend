@@ -49,6 +49,16 @@ describe('CategoryBundleAccessService', () => {
     expect([...accessMap.keys()]).toEqual([501, 502]);
   });
 
+  it('checks whether the user has any category grant without loading courses', async () => {
+    const { service, accessRepository } = createService(
+      [{ user_id: 7, category_id: 1, order_id: 99 }],
+      [],
+    );
+
+    await expect(service.hasAnyUserAccess(7)).resolves.toBe(true);
+    expect(accessRepository.count).toHaveBeenCalledWith({ where: { user_id: 7 } });
+  });
+
   it('grants once per order and supports revoking that order', async () => {
     const { service, accessRepository } = createService([], []);
     const order = {

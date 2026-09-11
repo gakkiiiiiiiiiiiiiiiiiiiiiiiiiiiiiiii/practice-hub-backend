@@ -47,6 +47,11 @@ export class CategoryBundleAccessService {
     );
   }
 
+  async hasAnyUserAccess(userId: number) {
+    if (!userId) return false;
+    return (await this.accessRepository.count({ where: { user_id: userId } })) > 0;
+  }
+
   async userHasCourseAccess(userId: number, course: Course) {
     const accessMap = await this.batchUserHasCourseAccess(userId, [course]);
     return accessMap.has(course.id);
