@@ -47,6 +47,7 @@ import { UserPackageSubscription } from './entities/user-package-subscription.en
 import { CoinTransaction } from './entities/coin-transaction.entity';
 import { StorageDeleteJob } from './entities/storage-delete-job.entity';
 import { UserCategoryBundleAccess } from './entities/user-category-bundle-access.entity';
+import { CloudPrintJob } from './entities/cloud-print-job.entity';
 
 @Module({
 	imports: [
@@ -98,6 +99,7 @@ import { UserCategoryBundleAccess } from './entities/user-category-bundle-access
 			CoinTransaction,
 			StorageDeleteJob,
 			UserCategoryBundleAccess,
+			CloudPrintJob,
 		]),
 	],
 	exports: [TypeOrmModule],

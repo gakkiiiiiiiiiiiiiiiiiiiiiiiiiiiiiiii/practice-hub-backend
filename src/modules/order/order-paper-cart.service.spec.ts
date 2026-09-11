@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+import { CloudPrintService } from '../cloud-print/cloud-print.service';
 import { OrderService } from './order.service';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { Course } from '../../database/entities/course.entity';
@@ -57,6 +58,10 @@ describe('OrderService paper cart', () => {
       { provide: CategoryBundleAccessService, useValue: categoryAccess },
       { provide: CoinService, useValue: { yuanToCoinInt: jest.fn((amount) => amount * 100) } },
       { provide: ConfigService, useValue: { get: jest.fn() } },
+      { provide: CloudPrintService, useValue: {
+        enqueuePaidOrder: jest.fn().mockResolvedValue(null),
+        reserveRefund: jest.fn().mockResolvedValue(null),
+      } },
     ] }).compile();
     service = module.get(OrderService);
     jest.spyOn(service, 'getCloudPayConfig').mockReturnValue({ subMchId: 'test' });

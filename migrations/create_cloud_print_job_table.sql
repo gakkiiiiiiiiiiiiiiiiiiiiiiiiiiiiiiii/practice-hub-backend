@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS `cloud_print_job` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `order_id` INT NOT NULL,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/processing/submitting/waiting_files/awaiting_confirm/retryable_failed/review_required/submitted/cancelled/refund_reserved',
+  `trigger_type` VARCHAR(20) NOT NULL DEFAULT 'manual' COMMENT 'automatic/manual',
+  `operator_id` INT NULL,
+  `attempts` INT NOT NULL DEFAULT 0,
+  `max_attempts` INT NOT NULL DEFAULT 8,
+  `external_package_id` VARCHAR(80) NULL,
+  `external_order_id` VARCHAR(80) NULL,
+  `request_snapshot` JSON NULL,
+  `response_snapshot` JSON NULL,
+  `last_error` TEXT NULL,
+  `next_attempt_at` DATETIME NULL,
+  `locked_at` DATETIME NULL,
+  `submitted_at` DATETIME NULL,
+  `create_time` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `update_time` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_cloud_print_job_order` (`order_id`),
+  KEY `idx_cloud_print_job_status_next` (`status`, `next_attempt_at`),
+  CONSTRAINT `fk_cloud_print_job_order` FOREIGN KEY (`order_id`) REFERENCES `order` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='纸质资料云打印任务';

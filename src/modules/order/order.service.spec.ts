@@ -248,6 +248,8 @@ describe('OrderService paper material checkout', () => {
     service.distributorService = {
       processOrderCommission: jest.fn().mockResolvedValue(undefined),
     };
+    service.cloudPrintService = { enqueuePaidOrder: jest.fn().mockResolvedValue(null) };
+    service.logger = { error: jest.fn() };
     service.grantCourseAccess = jest.fn();
     service.revokeCourseAccess = jest.fn();
 
@@ -382,6 +384,7 @@ describe('OrderService WeChat Pay refund', () => {
     service.orderRepository = {
       save: jest.fn(async (order) => order),
     };
+    service.cloudPrintService = { reserveRefund: jest.fn().mockResolvedValue(null) };
     return service;
   };
 

@@ -27,6 +27,7 @@ import { CategoryBundleAccessService } from '../category-bundle-access/category-
 import { requestUserPreviewDemand } from '../course/preview-demand.util';
 import { resolvePaperMaterialPricing } from '../course/paper-material-price.util';
 import { resolvePaperMaterialRegionalShipping } from './paper-material-shipping.util';
+import { CloudPrintService } from '../cloud-print/cloud-print.service';
 
 type ShipOrderActor = {
   operatorType: 'admin' | 'app_admin';
@@ -109,6 +110,7 @@ export class OrderService {
     private categoryBundleAccessService: CategoryBundleAccessService,
     private coinService: CoinService,
     private configService: ConfigService,
+    private cloudPrintService: CloudPrintService,
   ) {}
 
   /**
@@ -1684,7 +1686,14 @@ export class OrderService {
 
     if (order.status === OrderStatus.PAID) {
       // Repeated paper payment notifications must not schedule digital preview work.
-      if (order.pay_payload?.fulfillment_type === 'paper') return { message: '订单已支付' };
+      if (order.pay_payload?.fulfillment_type === 'paper') {
+        try {
+          await this.cloudPrintService.enqueuePaidOrder(orderId, 'automatic');
+        } catch (error) {
+          this.logger.error(`纸质资料云打印补充入队失败 ${order.order_no}: ${error?.message || error}`);
+        }
+        return { message: '订单已支付' };
+      }
       if (order.order_type === 'category') {
         await this.categoryBundleAccessService.grantOrderAccess(order);
       }
@@ -1727,6 +1736,11 @@ export class OrderService {
         await this.distributorService.processOrderCommission(orderId);
       } catch (error) {
         console.error('订单分成处理失败:', error.message);
+      }
+      try {
+        await this.cloudPrintService.enqueuePaidOrder(orderId, 'automatic');
+      } catch (error) {
+        this.logger.error(`纸质资料云打印入队失败 ${order.order_no}: ${error?.message || error}`);
       }
       return { message: '纸质资料订单支付成功' };
     }
@@ -1916,6 +1930,10 @@ export class OrderService {
     if (![OrderStatus.PAID, OrderStatus.AFTER_SALE].includes(order.status)) {
       throw new BadRequestException('仅已支付或售后中的订单可退款');
     }
+    if (['submitted', 'review_required', 'processing', 'submitting'].includes(order.pay_payload?.cloud_print?.status)) {
+      throw new BadRequestException('云打印订单可能已进入生产，请先在刺猬云印后台确认取消后再退款');
+    }
+    await this.cloudPrintService.reserveRefund(orderId);
 
     const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
     if (!user) {
@@ -3380,6 +3398,7 @@ export class OrderService {
       payProvider: row.payProvider || '',
       wechatRechargeOrderNo: payPayload?.coin_purchase?.recharge_order_no || '',
       refunded: Boolean(payPayload?.refund?.refunded_at),
+      cloudPrint: payPayload?.cloud_print || null,
       refundRemark: payPayload?.refund?.remark || '',
       shippingAddress: this.parseJsonColumn(row.shippingAddress),
       requiresShipping:
