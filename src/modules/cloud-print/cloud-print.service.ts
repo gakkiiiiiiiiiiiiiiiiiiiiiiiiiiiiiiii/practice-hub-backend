@@ -177,7 +177,7 @@ export class CloudPrintService {
 
   async getOrderJob(orderId: number) {
     const job = await this.jobRepository.findOne({ where: { order_id: orderId } });
-    return job ? this.toPublicJob(job) : null;
+    return job ? this.toAuditedPublicJob(job) : null;
   }
 
   async confirmProviderCancelled(orderId: number, operatorId?: number) {
@@ -195,7 +195,7 @@ export class CloudPrintService {
     if (job.external_order_id) {
       providerCancellation = await this.requestApi<any>('PUT', '/api/svip/order/cancel', {
         order_id: job.external_order_id,
-      });
+      }, job);
     }
     const saved = await this.updateClaimedJob(job, previousStatus, {
       status: CloudPrintJobStatus.REFUND_RESERVED,
@@ -337,7 +337,7 @@ export class CloudPrintService {
           url: this.uploadService.getCloudPrintDownloadUrl(file.file_url),
           name: file.display_name || file.file_name || `资料-${file.id}.${file.file_type}`,
         }));
-        const response = await this.requestApi<any>('POST', '/api/svip/storage/create-package', payload);
+        const response = await this.requestApi<any>('POST', '/api/svip/storage/create-package', payload, job);
         job.external_package_id = String(response?.cw_file_package_id || '');
         if (!job.external_package_id) throw new Error('云打印文件上传接口未返回批次号');
         const updated = await this.updateClaimedJob(job, CloudPrintJobStatus.PROCESSING, {
@@ -347,13 +347,18 @@ export class CloudPrintService {
           next_attempt_at: new Date(Date.now() + 15_000),
           locked_at: null,
           last_error: null,
-          response_snapshot: { upload: response },
+          response_snapshot: { ...(job.response_snapshot || {}), upload: response },
         });
         if (updated) await this.syncOrderSnapshot(order, updated);
         return true;
       }
 
-      const packageRows = await this.requestApi<any[]>('GET', `/api/svip/storage/package-file-list/${encodeURIComponent(job.external_package_id)}`);
+      const packageRows = await this.requestApi<any[]>(
+        'GET',
+        `/api/svip/storage/package-file-list/${encodeURIComponent(job.external_package_id)}`,
+        undefined,
+        job,
+      );
       if (!Array.isArray(packageRows) || packageRows.length === 0 || packageRows.some((item) => !item?.downloaded || !item?.file?.id)) {
         const attempts = job.attempts + 1;
         const updated = await this.updateClaimedJob(job, CloudPrintJobStatus.PROCESSING, {
@@ -372,7 +377,7 @@ export class CloudPrintService {
       }
 
       const payload = await this.buildOrderPayload(order, this.getSourceFiles(job), packageRows, config);
-      const price = await this.requestApi<any>('POST', '/api/svip/cart/calc-price', { goods: payload.goods });
+      const price = await this.requestApi<any>('POST', '/api/svip/cart/calc-price', { goods: payload.goods }, job);
       const settlement = price?.origin_price;
       const printAmountCents = Number(settlement?.total_amount);
       const totalWeightGrams = Number(settlement?.total_weight);
@@ -385,7 +390,7 @@ export class CloudPrintService {
         city: payload.address.city,
         area: payload.address.area,
         ship_supplier_id: payload.address.ship_supplier_id,
-      });
+      }, job);
       // 已向供应商确认 calc-ship-price 的 price 单位为元，统一换算为分参与金额保护。
       const shippingAmountCents = Math.round(Number(shipping?.price) * 100);
       if (!Number.isInteger(shippingAmountCents) || shippingAmountCents < 0) {
@@ -440,7 +445,7 @@ export class CloudPrintService {
 
       let response: any;
       try {
-        response = await this.requestApi<any>('POST', '/api/svip/order/generate', payload);
+        response = await this.requestApi<any>('POST', '/api/svip/order/generate', payload, job);
       } catch (error) {
         const axiosError = error as AxiosError;
         if (!axiosError.response || Number(axiosError.response.status) >= 500) {
@@ -530,7 +535,7 @@ export class CloudPrintService {
       if (candidateJob?.request_snapshot?.orderRequest?.transcation_no === paymentNo) job = candidateJob;
     }
     const order = job ? await this.orderRepository.findOne({ where: { id: job.order_id } }) : null;
-    if (!order) throw new NotFoundException('未找到对应业务订单');
+    if (!job || !order) throw new NotFoundException('未找到对应业务订单');
 
     const shipNo = String(body?.ship_no || '').trim();
     if (shipNo) {
@@ -545,9 +550,24 @@ export class CloudPrintService {
       orderState: body?.order_state,
       status: body?.status,
       hasException: body?.has_exception,
-      detail: Array.isArray(body?.detail) ? body.detail.slice(-100) : [],
+      detail: Array.isArray(body?.detail) ? body.detail : [],
+      rawCallback: this.toJsonSafe(body),
       queriedAt: new Date().toISOString(),
     };
+    const callbackHistory = Array.isArray(job?.response_snapshot?.providerCallbacks)
+      ? job.response_snapshot.providerCallbacks
+      : [];
+    job.response_snapshot = {
+      ...(job.response_snapshot || {}),
+      providerCallbacks: [
+        ...callbackHistory,
+        {
+          receivedAt: new Date().toISOString(),
+          body: this.toJsonSafe(body),
+        },
+      ],
+    };
+    await this.jobRepository.update(job.id, { response_snapshot: job.response_snapshot });
     await this.orderRepository.save(order);
     return { error_no: 0, error_msg: 'ok' };
   }
@@ -700,27 +720,63 @@ export class CloudPrintService {
     }
   }
 
-  private async requestApi<T>(method: 'GET' | 'POST' | 'PUT', path: string, data?: unknown): Promise<T> {
+  private async requestApi<T>(
+    method: 'GET' | 'POST' | 'PUT',
+    path: string,
+    data?: unknown,
+    auditJob?: CloudPrintJob,
+  ): Promise<T> {
     const body = method === 'GET' ? '' : JSON.stringify(data ?? {});
     const timestamp = Math.floor(Date.now() / 1000).toString();
+    const requestedAt = new Date().toISOString();
     const secret = crypto.createHash('sha1').update(`${this.getAppId()}${this.getAppKey()}${timestamp}${body}`).digest('hex');
-    const response = await axios.request({
-      method,
-      url: `${String(this.configService.get('CWY_BASE_URL') || 'https://ciweiyunyin.com').replace(/\/$/, '')}${path}`,
-      data: method === 'GET' ? undefined : body,
-      timeout: Math.max(3000, Number(this.configService.get('CWY_TIMEOUT_MS') || 15000)),
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-AUTH-APPID': this.getAppId(),
-        'X-AUTH-TIMESTAMP': timestamp,
-        'X-AUTH-SECRET': secret,
-      },
-      validateStatus: (status) => status >= 200 && status < 500,
-    });
+    let response: any;
+    try {
+      response = await axios.request({
+        method,
+        url: `${String(this.configService.get('CWY_BASE_URL') || 'https://ciweiyunyin.com').replace(/\/$/, '')}${path}`,
+        data: method === 'GET' ? undefined : body,
+        timeout: Math.max(3000, Number(this.configService.get('CWY_TIMEOUT_MS') || 15000)),
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-AUTH-APPID': this.getAppId(),
+          'X-AUTH-TIMESTAMP': timestamp,
+          'X-AUTH-SECRET': secret,
+        },
+        validateStatus: () => true,
+      });
+    } catch (error: any) {
+      if (auditJob) {
+        await this.recordProviderResponse(auditJob, {
+          method,
+          path,
+          requestedAt,
+          respondedAt: new Date().toISOString(),
+          requestBody: method === 'GET' ? null : this.toJsonSafe(data),
+          httpStatus: error?.response?.status ?? null,
+          headers: this.toJsonSafe(error?.response?.headers),
+          body: this.toJsonSafe(error?.response?.data),
+          transportError: String(error?.message || error),
+        });
+      }
+      throw error;
+    }
     const envelope = response.data;
+    if (auditJob) {
+      await this.recordProviderResponse(auditJob, {
+        method,
+        path,
+        requestedAt,
+        respondedAt: new Date().toISOString(),
+        requestBody: method === 'GET' ? null : this.toJsonSafe(data),
+        httpStatus: response.status,
+        headers: this.toJsonSafe(response.headers),
+        body: this.toJsonSafe(envelope),
+      });
+    }
     if (response.status >= 400 || (envelope && typeof envelope === 'object' && 'code' in envelope && Number(envelope.code) !== 0)) {
-      const error = new AxiosError(String(envelope?.message || `云打印接口响应 ${response.status}`));
+      const error = new Error(String(envelope?.message || `云打印接口响应 ${response.status}`)) as AxiosError;
       error.response = response as any;
       throw error;
     }
@@ -754,16 +810,53 @@ export class CloudPrintService {
   }
 
   private toPublicJob(job: CloudPrintJob) {
-    return {
+    const result: Record<string, any> = {
       status: job.status,
       triggerType: job.trigger_type,
+      externalPackageId: job.external_package_id || '',
       externalOrderId: job.external_order_id || '',
       attempts: job.attempts,
+      maxAttempts: job.max_attempts,
       lastError: job.last_error || '',
       quote: job.response_snapshot?.quote || null,
+      nextAttemptAt: job.next_attempt_at || null,
       submittedAt: job.submitted_at || null,
       updatedAt: job.update_time || null,
     };
+    return result;
+  }
+
+  private toAuditedPublicJob(job: CloudPrintJob) {
+    return {
+      ...this.toPublicJob(job),
+      responseSnapshot: job.response_snapshot || null,
+      providerResponses: Array.isArray(job.response_snapshot?.providerResponses)
+        ? job.response_snapshot.providerResponses
+        : [],
+      providerCallbacks: Array.isArray(job.response_snapshot?.providerCallbacks)
+        ? job.response_snapshot.providerCallbacks
+        : [],
+    };
+  }
+
+  private async recordProviderResponse(job: CloudPrintJob, response: Record<string, any>) {
+    const history = Array.isArray(job.response_snapshot?.providerResponses)
+      ? job.response_snapshot.providerResponses
+      : [];
+    job.response_snapshot = {
+      ...(job.response_snapshot || {}),
+      providerResponses: [...history, response],
+    };
+    await this.jobRepository.update(job.id, { response_snapshot: job.response_snapshot });
+  }
+
+  private toJsonSafe(value: any) {
+    if (value == null) return value ?? null;
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch {
+      return String(value);
+    }
   }
 
   private maskPayload(payload: any) {

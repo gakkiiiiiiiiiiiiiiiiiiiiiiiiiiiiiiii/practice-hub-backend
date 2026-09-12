@@ -41,6 +41,73 @@ describe('CloudPrintService', () => {
     });
   });
 
+  it('persists the complete provider request and response without auth credentials', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    service.configService = {
+      get: jest.fn((key: string) => ({
+        CWY_APPID: 'app-id',
+        CWY_APPKEY: 'app-key',
+        CWY_BASE_URL: 'https://ciweiyunyin.com',
+        CWY_TIMEOUT_MS: 15000,
+      })[key]),
+    };
+    service.jobRepository = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
+    (axios.request as jest.Mock).mockResolvedValue({
+      status: 200,
+      headers: { 'x-request-id': 'request-1' },
+      data: { code: 0, message: 'ok', data: { origin_price: { total_amount: 935 } } },
+    });
+    const job: any = { id: 8, response_snapshot: { upload: { cw_file_package_id: 'package-1' } } };
+    const payload = { goods: [{ file_id: 'file-1', bind_type: 0 }] };
+
+    await expect(service.requestApi('POST', '/api/svip/cart/calc-price', payload, job))
+      .resolves.toEqual({ origin_price: { total_amount: 935 } });
+
+    const audit = job.response_snapshot.providerResponses[0];
+    expect(audit).toMatchObject({
+      method: 'POST',
+      path: '/api/svip/cart/calc-price',
+      requestBody: payload,
+      httpStatus: 200,
+      headers: { 'x-request-id': 'request-1' },
+      body: { code: 0, message: 'ok', data: { origin_price: { total_amount: 935 } } },
+    });
+    expect(JSON.stringify(audit)).not.toContain('app-key');
+    expect(JSON.stringify(audit)).not.toContain('X-AUTH-SECRET');
+    expect(service.jobRepository.update).toHaveBeenCalledWith(8, {
+      response_snapshot: job.response_snapshot,
+    });
+  });
+
+  it('persists the complete provider error response before rejecting the request', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    service.configService = {
+      get: jest.fn((key: string) => ({
+        CWY_APPID: 'app-id',
+        CWY_APPKEY: 'app-key',
+        CWY_BASE_URL: 'https://ciweiyunyin.com',
+        CWY_TIMEOUT_MS: 15000,
+      })[key]),
+    };
+    service.jobRepository = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
+    (axios.request as jest.Mock).mockResolvedValue({
+      status: 422,
+      headers: { 'x-request-id': 'request-error-1' },
+      data: { code: 422, message: '包装费用计算失败', data: { bind_type: 1 } },
+    });
+    const job: any = { id: 9, response_snapshot: null };
+    const payload = { goods: [{ file_id: 'file-2', bind_type: 1 }] };
+
+    await expect(service.requestApi('POST', '/api/svip/cart/calc-price', payload, job))
+      .rejects.toThrow('包装费用计算失败');
+
+    expect(job.response_snapshot.providerResponses[0]).toMatchObject({
+      requestBody: payload,
+      httpStatus: 422,
+      body: { code: 422, message: '包装费用计算失败', data: { bind_type: 1 } },
+    });
+  });
+
   it('does not query jobs or call the provider while the worker safety gate is disabled', async () => {
     const service = Object.create(CloudPrintService.prototype) as any;
     service.workerRunning = false;
