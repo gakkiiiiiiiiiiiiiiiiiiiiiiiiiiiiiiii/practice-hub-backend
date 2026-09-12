@@ -28,7 +28,12 @@ describe('CloudPrintService', () => {
     maxSingleAmountCents: 5000,
   };
 
-  const buildPayload = (service: any, pages: number, config: any = printConfig) => service.buildOrderPayload(
+  const buildPayload = (
+    service: any,
+    pages: number,
+    config: any = printConfig,
+    payAfter = false,
+  ) => service.buildOrderPayload(
     {
       user_id: 10,
       order_no: 'ORDER-1',
@@ -39,6 +44,7 @@ describe('CloudPrintService', () => {
     [{ file_url: 'https://example.com/file.pdf', display_name: '测试资料', file_page_count: pages, quantity: 1 }],
     [{ url: 'https://example.com/file.pdf', file: { id: 'file-1', pages } }],
     config,
+    payAfter,
   );
 
   it('signs the exact JSON body required by Ciwei Cloud Print', async () => {
@@ -355,6 +361,20 @@ describe('CloudPrintService', () => {
       bind_type: 1,
       cover_media: 1,
       cover_color: 5,
+      cover_content: { type: '1' },
+    });
+  });
+
+  it('generates an unpaid provider order when pay_after is explicitly enabled', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    const payload = await buildPayload(service, 275, {
+      ...printConfig,
+      bindType: 1,
+    }, true);
+
+    expect(payload.pay_after).toBe(true);
+    expect(payload.goods[0]).toMatchObject({
+      bind_type: 1,
       cover_content: { type: '1' },
     });
   });

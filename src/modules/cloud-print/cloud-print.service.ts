@@ -183,11 +183,16 @@ export class CloudPrintService {
     return job;
   }
 
-  async enqueueAndProcessManual(orderId: number, operatorId?: number, expectedTotalAmountCents?: number) {
+  async enqueueAndProcessManual(
+    orderId: number,
+    operatorId?: number,
+    expectedTotalAmountCents?: number,
+    payAfter = false,
+  ) {
     const job = await this.enqueuePaidOrder(orderId, 'manual', operatorId);
     if (!job) throw new BadRequestException('无法创建云打印任务');
     if (job.status === CloudPrintJobStatus.SUBMITTED) return this.toPublicJob(job);
-    await this.processJobById(job.id, true, expectedTotalAmountCents);
+    await this.processJobById(job.id, true, expectedTotalAmountCents, payAfter);
     return this.getOrderJob(orderId);
   }
 
@@ -394,7 +399,12 @@ export class CloudPrintService {
     }
   }
 
-  private async processJobById(jobId: number, manual: boolean, expectedTotalAmountCents?: number) {
+  private async processJobById(
+    jobId: number,
+    manual: boolean,
+    expectedTotalAmountCents?: number,
+    payAfter = false,
+  ) {
     const claimed = await this.jobRepository
       .createQueryBuilder()
       .update(CloudPrintJob)
@@ -461,7 +471,7 @@ export class CloudPrintService {
         return true;
       }
 
-      const payload = await this.buildOrderPayload(order, this.getSourceFiles(job), packageRows, config);
+      const payload = await this.buildOrderPayload(order, this.getSourceFiles(job), packageRows, config, payAfter);
       const price = await this.requestApi<any>('POST', '/api/svip/cart/calc-price', { goods: payload.goods }, job);
       const settlement = price?.origin_price;
       const printAmountCents = Number(settlement?.total_amount);
@@ -517,6 +527,7 @@ export class CloudPrintService {
         ...(job.request_snapshot || {}),
         orderRequest: this.maskPayload(payload),
         confirmedQuote: quote,
+        payAfter: payload.pay_after,
       };
       // Persist the ambiguous boundary before the billable call. If the process
       // dies after the provider accepts the order, this state is never retried.
@@ -665,7 +676,13 @@ export class CloudPrintService {
     }
   }
 
-  private async buildOrderPayload(order: Order, files: any[], packageRows: any[], config: any) {
+  private async buildOrderPayload(
+    order: Order,
+    files: any[],
+    packageRows: any[],
+    config: any,
+    payAfter = false,
+  ) {
     const packageByUrl = new Map(packageRows.map((item) => [String(item.url || ''), item]));
     const goods = files.map((file) => {
       const uploaded = packageByUrl.get(file.file_url) || packageRows.find((item) => item?.file?.name === (file.display_name || file.file_name));
@@ -709,7 +726,7 @@ export class CloudPrintService {
         payment_method: 4,
         transcation_no: order.order_no,
       },
-      pay_after: false,
+      pay_after: payAfter,
     };
   }
 
