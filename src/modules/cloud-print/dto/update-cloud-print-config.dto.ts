@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsInt, Max, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class UpdateCloudPrintConfigDto {
   @IsBoolean()
@@ -21,6 +21,24 @@ export class UpdateCloudPrintConfigDto {
 
   @IsInt() @IsIn([0, 1, 2, 3, 4])
   bindType: number;
+
+  @IsOptional() @IsBoolean()
+  autoBindByPageCount?: boolean;
+
+  @IsOptional() @IsInt() @IsIn([1, 2])
+  coverMedia?: number;
+
+  @IsOptional() @IsInt() @IsIn([1, 2, 3, 4, 5, 6])
+  coverColor?: number;
+
+  @IsOptional() @IsInt() @IsIn([1, 2, 3, 4, 5, 6, 7, 8, 9])
+  coverContentType?: number;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  coverContentValue?: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  coverContentValue2?: string;
 
   @IsInt() @IsIn([0, 1])
   printCollate: number;

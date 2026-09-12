@@ -8,6 +8,39 @@ jest.mock('axios');
 describe('CloudPrintService', () => {
   afterEach(() => jest.resetAllMocks());
 
+  const printConfig = {
+    autoEnabled: false,
+    paperSize: 9,
+    duplex: 2,
+    color: 1,
+    paperMedia: 1,
+    pagesInOne: 1,
+    bindType: 3,
+    autoBindByPageCount: true,
+    coverMedia: 1,
+    coverColor: 5,
+    coverContentType: 1,
+    coverContentValue: '',
+    coverContentValue2: '',
+    printCollate: 0,
+    orientation: 0,
+    shipSupplierId: 82,
+    maxSingleAmountCents: 5000,
+  };
+
+  const buildPayload = (service: any, pages: number, config: any = printConfig) => service.buildOrderPayload(
+    {
+      user_id: 10,
+      order_no: 'ORDER-1',
+      shipping_address: {
+        name: '测试用户', phone: '13800000000', province: '广东省', city: '深圳市', district: '南山区', detail: '测试地址',
+      },
+    },
+    [{ file_url: 'https://example.com/file.pdf', display_name: '测试资料', file_page_count: pages, quantity: 1 }],
+    [{ url: 'https://example.com/file.pdf', file: { id: 'file-1', pages } }],
+    config,
+  );
+
   it('signs the exact JSON body required by Ciwei Cloud Print', async () => {
     const service = Object.create(CloudPrintService.prototype) as any;
     service.configService = {
@@ -161,5 +194,63 @@ describe('CloudPrintService', () => {
 
     expect(() => service.verifyCallback('callback-secret')).not.toThrow();
     expect(() => service.verifyCallback('wrong-secret')).toThrow('云打印回调安全令牌无效');
+  });
+
+  it('keeps the default staple binding at the 160-page boundary', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    const payload = await buildPayload(service, 160);
+    expect(payload.goods[0]).toMatchObject({ bind_type: 3, page_range: '1-160' });
+    expect(payload.goods[0]).not.toHaveProperty('cover_media');
+    expect(payload.goods[0]).not.toHaveProperty('cover_content');
+  });
+
+  it('upgrades a legacy saved binding default to staple without changing other settings', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    service.systemConfigRepository = {
+      findOne: jest.fn().mockResolvedValue({ configValue: JSON.stringify({ bindType: 1, color: 3 }) }),
+    };
+    service.configService = { get: jest.fn(() => '') };
+    await expect(service.getConfig()).resolves.toMatchObject({
+      bindType: 3,
+      color: 3,
+      autoBindByPageCount: true,
+      coverMedia: 1,
+      coverColor: 5,
+    });
+  });
+
+  it('automatically falls back to white leather-paper glue binding above 160 pages', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    const payload = await buildPayload(service, 161);
+    expect(payload.goods[0]).toMatchObject({
+      bind_type: 1,
+      cover_media: 1,
+      cover_color: 5,
+      cover_content: { type: '1' },
+      page_range: '1-161',
+    });
+  });
+
+  it('passes configured glue cover options to the provider', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    const payload = await buildPayload(service, 80, {
+      ...printConfig,
+      bindType: 1,
+      coverMedia: 2,
+      coverColor: 3,
+      coverContentType: 2,
+      coverContentValue: '研刷通资料',
+    });
+    expect(payload.goods[0]).toMatchObject({
+      bind_type: 1,
+      cover_media: 2,
+      cover_content: { type: '2', value: '研刷通资料' },
+    });
+    expect(payload.goods[0]).not.toHaveProperty('cover_color');
+  });
+
+  it('rejects files above the supplier glue-binding limit', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    await expect(buildPayload(service, 601)).rejects.toThrow('文件 601 页不符合当前装订范围 8-600 页');
   });
 });

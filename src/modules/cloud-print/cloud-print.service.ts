@@ -33,7 +33,7 @@ const RETRYABLE_STATUSES = [
   CloudPrintJobStatus.RETRYABLE_FAILED,
 ];
 
-type CloudPrintConfig = Omit<UpdateCloudPrintConfigDto, never>;
+type CloudPrintConfig = UpdateCloudPrintConfigDto;
 
 const DEFAULT_CONFIG: CloudPrintConfig = {
   autoEnabled: false,
@@ -42,7 +42,13 @@ const DEFAULT_CONFIG: CloudPrintConfig = {
   color: 1,
   paperMedia: 1,
   pagesInOne: 1,
-  bindType: 1,
+  bindType: 3,
+  autoBindByPageCount: true,
+  coverMedia: 1,
+  coverColor: 5,
+  coverContentType: 1,
+  coverContentValue: '',
+  coverContentValue2: '',
   printCollate: 0,
   orientation: 0,
   shipSupplierId: 82,
@@ -75,9 +81,11 @@ export class CloudPrintService {
     } catch {
       saved = {};
     }
+    const isLegacyBindingConfig = row?.configValue != null && !Object.prototype.hasOwnProperty.call(saved, 'autoBindByPageCount');
     return {
       ...DEFAULT_CONFIG,
       ...saved,
+      ...(isLegacyBindingConfig ? { bindType: 3 } : {}),
       configured: Boolean(this.getAppId() && this.getAppKey()),
       callbackConfigured: Boolean(this.configService.get<string>('CWY_CALLBACK_TOKEN')),
       workerEnabled: ['1', 'true', 'on', 'yes'].includes(
@@ -93,9 +101,10 @@ export class CloudPrintService {
     if (dto.autoEnabled && !this.configService.get<string>('CWY_CALLBACK_TOKEN')) {
       throw new BadRequestException('CWY_CALLBACK_TOKEN 未配置，不能开启自动云打印');
     }
-    this.validatePrintConfig(dto);
+    const normalized = { ...DEFAULT_CONFIG, ...dto };
+    this.validatePrintConfig(normalized);
     let row = await this.systemConfigRepository.findOne({ where: { configKey: CLOUD_PRINT_CONFIG_KEY } });
-    const value = JSON.stringify({ ...DEFAULT_CONFIG, ...dto });
+    const value = JSON.stringify(normalized);
     if (!row) {
       row = this.systemConfigRepository.create({
         configKey: CLOUD_PRINT_CONFIG_KEY,
@@ -592,7 +601,7 @@ export class CloudPrintService {
       }
       const pages = providerPages || localPages;
       if (!Number.isInteger(pages) || pages <= 0) throw new Error(`资料页数缺失：${file.display_name || file.file_name || file.id}`);
-      this.validateBinding(pages, config);
+      const binding = this.resolveBinding(pages, config);
       return {
         file_id: String(uploaded.file.id),
         page_range: `1-${pages}`,
@@ -602,8 +611,12 @@ export class CloudPrintService {
         color: config.color,
         paper_media: config.paperMedia,
         pages_in_one: config.pagesInOne,
-        bind_type: config.bindType,
-        ...(config.bindType === 1 ? { cover_media: 1, cover_color: 5 } : {}),
+        bind_type: binding.bindType,
+        ...(binding.bindType === 1 ? {
+          cover_media: binding.coverMedia,
+          ...(binding.coverMedia === 1 ? { cover_color: binding.coverColor } : {}),
+          cover_content: this.buildCoverContent(config),
+        } : {}),
         print_collate: config.printCollate,
         orientation: config.orientation,
       };
@@ -704,19 +717,64 @@ export class CloudPrintService {
     }
   }
 
-  private validateBinding(pages: number, config: CloudPrintConfig) {
-    const duplex = config.duplex === 2;
-    const range = config.bindType === 1
-      ? (duplex ? [16, 600] : [8, 300])
-      : config.bindType === 2
+  private resolveBinding(pages: number, config: CloudPrintConfig) {
+    const configuredBindType = Number(config.bindType);
+    const configuredRange = this.getBindingRange(configuredBindType);
+    const shouldFallbackToGlue = config.autoBindByPageCount !== false &&
+      configuredBindType !== 0 && configuredBindType !== 1 &&
+      Boolean(configuredRange && pages > configuredRange[1]);
+    const bindType = shouldFallbackToGlue ? 1 : configuredBindType;
+    const effectiveConfig = { ...config, bindType };
+    this.validatePrintConfig(effectiveConfig);
+    this.validateBinding(pages, bindType);
+    return {
+      bindType,
+      coverMedia: Number(config.coverMedia || 1),
+      coverColor: Number(config.coverColor || 5),
+    };
+  }
+
+  private getBindingRange(bindType: number): [number, number] | null {
+    return bindType === 1
+      ? [8, 600]
+      : bindType === 2
         ? [8, 60]
-        : config.bindType === 3
-          ? (duplex ? [4, config.color === 2 ? 100 : 160] : [2, config.color === 2 ? 50 : 80])
-          : config.bindType === 4
-            ? (duplex ? [16, 200] : [8, 100])
+        : bindType === 3
+          ? [2, 160]
+          : bindType === 4
+            ? [8, 200]
             : null;
+  }
+
+  private validateBinding(pages: number, bindType: number) {
+    const range = this.getBindingRange(bindType);
     if (range && (pages < range[0] || pages > range[1])) {
       throw new BadRequestException(`文件 ${pages} 页不符合当前装订范围 ${range[0]}-${range[1]} 页`);
+    }
+  }
+
+  private buildCoverContent(config: CloudPrintConfig) {
+    const type = Number(config.coverContentType || 1);
+    const value = String(config.coverContentValue || '').trim();
+    const value2 = String(config.coverContentValue2 || '').trim();
+    if (type === 2 && !value) throw new BadRequestException('文字封面必须填写封面文字');
+    if ([5, 7].includes(type) && !value) throw new BadRequestException('当前封面类型必须填写封面图片 URL');
+    if (type === 6 && (!value || !value2)) throw new BadRequestException('分离封面必须填写封面和封底图片 URL');
+    if ([5, 6, 7].includes(type) && ![value, ...(type === 6 ? [value2] : [])].every((item) => this.isHttpsUrl(item))) {
+      throw new BadRequestException('封面图片必须使用可公开访问的 HTTPS URL');
+    }
+    return {
+      type: String(type),
+      ...(value ? { value } : {}),
+      ...(value2 ? { value2 } : {}),
+    };
+  }
+
+  private isHttpsUrl(value: string) {
+    try {
+      return new URL(value).protocol === 'https:';
+    } catch {
+      return false;
     }
   }
 
