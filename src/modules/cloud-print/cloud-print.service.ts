@@ -211,8 +211,10 @@ export class CloudPrintService {
       ...this.getOrderPrintConfigOverride(order),
       ...(job?.request_snapshot?.config || {}),
     };
+    const estimateFiles = await this.getOrderEstimateFiles(order, job);
     return {
       config: this.pickOrderPrintConfig(config),
+      estimateFiles,
       customized: Boolean(job?.request_snapshot?.config || Object.keys(this.getOrderPrintConfigOverride(order)).length),
       editable: this.canEditOrderPrintConfig(job),
     };
@@ -773,6 +775,21 @@ export class CloudPrintService {
       : [];
     if (!files.length) throw new BadRequestException('云打印任务缺少下单时的文件快照，请人工核对');
     return files;
+  }
+
+  private async getOrderEstimateFiles(order: Order, job: CloudPrintJob | null) {
+    try {
+      const files = job ? this.getSourceFiles(job) : await this.createSourceSnapshot(order);
+      return files
+        .map((file) => ({
+          pageCount: Math.max(0, Math.floor(Number(file.file_page_count || 0))),
+          quantity: Math.max(1, Math.floor(Number(file.quantity || 1))),
+        }))
+        .filter((file) => file.pageCount > 0);
+    } catch (error: any) {
+      this.logger.warn(`订单 ${order.id} 暂无法生成本地价格预估：${error?.message || '资料页数缺失'}`);
+      return [];
+    }
   }
 
   private pickPrintConfig(config: any) {

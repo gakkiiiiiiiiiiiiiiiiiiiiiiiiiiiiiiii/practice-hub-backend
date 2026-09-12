@@ -379,6 +379,27 @@ describe('CloudPrintService', () => {
     });
   });
 
+  it('exposes page-count and quantity inputs for the local order estimate', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    const files = await service.getOrderEstimateFiles(
+      { id: 9 },
+      {
+        request_snapshot: {
+          sourceFiles: [
+            { file_page_count: 275, quantity: 1 },
+            { file_page_count: 80, quantity: 2 },
+            { file_page_count: 0, quantity: 1 },
+          ],
+        },
+      },
+    );
+
+    expect(files).toEqual([
+      { pageCount: 275, quantity: 1 },
+      { pageCount: 80, quantity: 2 },
+    ]);
+  });
+
   it('rejects files above the supplier glue-binding limit', async () => {
     const service = Object.create(CloudPrintService.prototype) as any;
     await expect(buildPayload(service, 601)).rejects.toThrow('文件 601 页不符合当前装订范围 8-600 页');
