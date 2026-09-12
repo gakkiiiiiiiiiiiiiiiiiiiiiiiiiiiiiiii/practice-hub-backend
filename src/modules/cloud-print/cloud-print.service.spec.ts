@@ -326,6 +326,39 @@ describe('CloudPrintService', () => {
     expect(payload.goods[0]).not.toHaveProperty('cover_color');
   });
 
+  it('serializes cover_content into every glue-binding provider request', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    service.configService = {
+      get: jest.fn((key: string) => ({
+        CWY_APPID: 'app-id',
+        CWY_APPKEY: 'app-key',
+        CWY_BASE_URL: 'https://ciweiyunyin.com',
+        CWY_TIMEOUT_MS: 15000,
+      })[key]),
+    };
+    (axios.request as jest.Mock).mockResolvedValue({
+      status: 200,
+      data: { code: 0, message: 'ok', data: { origin_price: { total_amount: 935 } } },
+    });
+    const payload = await buildPayload(service, 275, {
+      ...printConfig,
+      bindType: 1,
+      coverMedia: 1,
+      coverColor: 5,
+      coverContentType: 1,
+    });
+
+    await service.requestApi('POST', '/api/svip/cart/calc-price', { goods: payload.goods });
+
+    const request = (axios.request as jest.Mock).mock.calls[0][0];
+    expect(JSON.parse(request.data).goods[0]).toMatchObject({
+      bind_type: 1,
+      cover_media: 1,
+      cover_color: 5,
+      cover_content: { type: '1' },
+    });
+  });
+
   it('rejects files above the supplier glue-binding limit', async () => {
     const service = Object.create(CloudPrintService.prototype) as any;
     await expect(buildPayload(service, 601)).rejects.toThrow('文件 601 页不符合当前装订范围 8-600 页');

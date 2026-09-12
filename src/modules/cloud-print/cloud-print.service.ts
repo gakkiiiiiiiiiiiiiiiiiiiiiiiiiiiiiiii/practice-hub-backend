@@ -688,11 +688,7 @@ export class CloudPrintService {
         paper_media: config.paperMedia,
         pages_in_one: config.pagesInOne,
         bind_type: binding.bindType,
-        ...(binding.bindType === 1 ? {
-          cover_media: binding.coverMedia,
-          ...(binding.coverMedia === 1 ? { cover_color: binding.coverColor } : {}),
-          cover_content: this.buildCoverContent(config),
-        } : {}),
+        ...(binding.bindType === 1 ? this.buildGlueBindingPayload(binding, config) : {}),
         print_collate: config.printCollate,
         orientation: config.orientation,
       };
@@ -878,6 +874,18 @@ export class CloudPrintService {
     };
   }
 
+  private buildGlueBindingPayload(
+    binding: { coverMedia: number; coverColor: number },
+    config: CloudPrintConfig,
+  ) {
+    return {
+      cover_media: binding.coverMedia,
+      ...(binding.coverMedia === 1 ? { cover_color: binding.coverColor } : {}),
+      // The provider requires this object whenever bind_type is glue binding.
+      cover_content: this.buildCoverContent(config),
+    };
+  }
+
   private isHttpsUrl(value: string) {
     try {
       return new URL(value).protocol === 'https:';
@@ -893,6 +901,7 @@ export class CloudPrintService {
     auditJob?: CloudPrintJob,
   ): Promise<T> {
     const body = method === 'GET' ? '' : JSON.stringify(data ?? {});
+    const requestBody = method === 'GET' ? null : JSON.parse(body);
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const requestedAt = new Date().toISOString();
     const secret = crypto.createHash('sha1').update(`${this.getAppId()}${this.getAppKey()}${timestamp}${body}`).digest('hex');
@@ -919,7 +928,7 @@ export class CloudPrintService {
           path,
           requestedAt,
           respondedAt: new Date().toISOString(),
-          requestBody: method === 'GET' ? null : this.toJsonSafe(data),
+          requestBody,
           httpStatus: error?.response?.status ?? null,
           headers: this.toJsonSafe(error?.response?.headers),
           body: this.toJsonSafe(error?.response?.data),
@@ -935,7 +944,7 @@ export class CloudPrintService {
         path,
         requestedAt,
         respondedAt: new Date().toISOString(),
-        requestBody: method === 'GET' ? null : this.toJsonSafe(data),
+        requestBody,
         httpStatus: response.status,
         headers: this.toJsonSafe(response.headers),
         body: this.toJsonSafe(envelope),
