@@ -25,6 +25,7 @@ import {
 import { SystemConfig } from '../../database/entities/system-config.entity';
 import { UploadService } from '../upload/upload.service';
 import { UpdateCloudPrintConfigDto } from './dto/update-cloud-print-config.dto';
+import { UpdateOrderCloudPrintConfigDto } from './dto/update-order-cloud-print-config.dto';
 
 const CLOUD_PRINT_CONFIG_KEY = 'cloud_print';
 const RETRYABLE_STATUSES = [
@@ -129,7 +130,10 @@ export class CloudPrintService {
     this.assertPrintableOrder(order);
 
     if (triggerType === 'automatic') {
-      const config = await this.getConfig();
+      const config = {
+        ...(await this.getConfig()),
+        ...this.getOrderPrintConfigOverride(order),
+      };
       if (!config.autoEnabled) return null;
     }
 
@@ -140,7 +144,10 @@ export class CloudPrintService {
     }
     if (!job) {
       const sourceFiles = await this.createSourceSnapshot(order);
-      const config = await this.getConfig();
+      const config = {
+        ...(await this.getConfig()),
+        ...this.getOrderPrintConfigOverride(order),
+      };
       job = this.jobRepository.create({
         order_id: orderId,
         status: CloudPrintJobStatus.PENDING,
@@ -187,6 +194,75 @@ export class CloudPrintService {
   async getOrderJob(orderId: number) {
     const job = await this.jobRepository.findOne({ where: { order_id: orderId } });
     return job ? this.toAuditedPublicJob(job) : null;
+  }
+
+  async getOrderPrintConfig(orderId: number) {
+    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('订单不存在');
+    this.assertPrintableOrder(order);
+    const job = await this.jobRepository.findOne({ where: { order_id: orderId } });
+    const config = {
+      ...(await this.getConfig()),
+      ...this.getOrderPrintConfigOverride(order),
+      ...(job?.request_snapshot?.config || {}),
+    };
+    return {
+      config: this.pickOrderPrintConfig(config),
+      customized: Boolean(job?.request_snapshot?.config || Object.keys(this.getOrderPrintConfigOverride(order)).length),
+      editable: this.canEditOrderPrintConfig(job),
+    };
+  }
+
+  async updateOrderPrintConfig(
+    orderId: number,
+    dto: UpdateOrderCloudPrintConfigDto,
+    operatorId?: number,
+  ) {
+    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('订单不存在');
+    this.assertPrintableOrder(order);
+    const config = { ...(await this.getConfig()), ...dto };
+    this.validatePrintConfig(config);
+    if (config.bindType === 1 || (config.autoBindByPageCount && [2, 3, 4].includes(config.bindType))) {
+      this.buildCoverContent(config);
+    }
+    const printConfig = this.pickOrderPrintConfig(config);
+    const job = await this.jobRepository.findOne({ where: { order_id: orderId } });
+    if (!this.canEditOrderPrintConfig(job)) {
+      throw new ConflictException('云打印已进入不可修改阶段，请先核对或取消供应商订单');
+    }
+
+    let savedJob = job;
+    if (job) {
+      const { quote: _quote, price: _price, shipping: _shipping, ...responseSnapshot } = job.response_snapshot || {};
+      savedJob = await this.updateClaimedJob(job, job.status, {
+        status: CloudPrintJobStatus.PENDING,
+        trigger_type: 'manual',
+        operator_id: operatorId || job.operator_id,
+        request_snapshot: {
+          ...(job.request_snapshot || {}),
+          config: { ...(job.request_snapshot?.config || {}), ...printConfig },
+        },
+        response_snapshot: responseSnapshot,
+        next_attempt_at: new Date(),
+        locked_at: null,
+        last_error: null,
+      });
+      if (!savedJob) throw new ConflictException('云打印状态已变化，请刷新后重试');
+    }
+
+    order.pay_payload = {
+      ...(this.parseJson(order.pay_payload) || {}),
+      cloud_print_config_override: printConfig,
+    };
+    await this.orderRepository.save(order);
+    if (savedJob) await this.syncOrderSnapshot(order, savedJob);
+    return {
+      config: printConfig,
+      customized: true,
+      editable: true,
+      quoteInvalidated: Boolean(job?.response_snapshot?.quote),
+    };
   }
 
   async confirmProviderCancelled(orderId: number, operatorId?: number) {
@@ -695,6 +771,38 @@ export class CloudPrintService {
       ...printConfig
     } = config;
     return printConfig;
+  }
+
+  private pickOrderPrintConfig(config: any) {
+    const {
+      paperSize, duplex, color, paperMedia, pagesInOne, bindType,
+      autoBindByPageCount, coverMedia, coverColor, coverContentType,
+      coverContentValue, coverContentValue2, printCollate, orientation, shipSupplierId,
+    } = config;
+    return {
+      paperSize, duplex, color, paperMedia, pagesInOne, bindType,
+      autoBindByPageCount, coverMedia, coverColor, coverContentType,
+      coverContentValue: coverContentValue || '',
+      coverContentValue2: coverContentValue2 || '',
+      printCollate, orientation, shipSupplierId,
+    };
+  }
+
+  private getOrderPrintConfigOverride(order: Order) {
+    const payload = this.parseJson(order.pay_payload) || {};
+    const override = payload.cloud_print_config_override;
+    return override && typeof override === 'object' && !Array.isArray(override) ? override : {};
+  }
+
+  private canEditOrderPrintConfig(job: CloudPrintJob | null) {
+    if (!job) return true;
+    return !job.external_order_id && ![
+      CloudPrintJobStatus.PROCESSING,
+      CloudPrintJobStatus.SUBMITTING,
+      CloudPrintJobStatus.SUBMITTED,
+      CloudPrintJobStatus.REVIEW_REQUIRED,
+      CloudPrintJobStatus.REFUND_RESERVED,
+    ].includes(job.status);
   }
 
   private assertPrintableOrder(order: Order) {

@@ -8,6 +8,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { AdminRole } from '../../database/entities/sys-user.entity';
 import { CloudPrintService } from './cloud-print.service';
 import { UpdateCloudPrintConfigDto } from './dto/update-cloud-print-config.dto';
+import { UpdateOrderCloudPrintConfigDto } from './dto/update-order-cloud-print-config.dto';
 import { SubmitCloudPrintDto } from './dto/submit-cloud-print.dto';
 
 @ApiTags('云打印管理')
@@ -53,6 +54,26 @@ export class AdminCloudPrintController {
   @ApiOperation({ summary: '获取订单云打印状态' })
   async getOrderJob(@Param('id', ParseIntPipe) id: number) {
     return CommonResponseDto.success(await this.cloudPrintService.getOrderJob(id));
+  }
+
+  @Get('orders/:id/cloud-print/config')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取单笔订单的有效打印参数' })
+  async getOrderConfig(@Param('id', ParseIntPipe) id: number) {
+    return CommonResponseDto.success(await this.cloudPrintService.getOrderPrintConfig(id));
+  }
+
+  @Put('orders/:id/cloud-print/config')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '设置单笔订单的打印参数覆盖' })
+  async updateOrderConfig(
+    @CurrentUser() user: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateOrderCloudPrintConfigDto,
+  ) {
+    return CommonResponseDto.success(
+      await this.cloudPrintService.updateOrderPrintConfig(id, dto, user.userId || user.adminId),
+    );
   }
 
   @Post('orders/:id/cloud-print/confirm-cancelled')

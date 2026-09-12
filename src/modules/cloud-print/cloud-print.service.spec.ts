@@ -188,6 +188,83 @@ describe('CloudPrintService', () => {
     expect(service.syncOrderSnapshot).toHaveBeenCalledWith(order, job);
   });
 
+  it('uses a saved order-specific print configuration when creating the job snapshot', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    const order: any = {
+      id: 11,
+      pay_payload: { fulfillment_type: 'paper', cloud_print_config_override: { color: 3, bindType: 4 } },
+    };
+    service.orderRepository = { findOne: jest.fn().mockResolvedValue(order) };
+    service.jobRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((value) => ({ id: 12, ...value })),
+      save: jest.fn((value) => Promise.resolve(value)),
+    };
+    service.assertPrintableOrder = jest.fn();
+    service.createSourceSnapshot = jest.fn().mockResolvedValue([{ id: 1 }]);
+    service.getConfig = jest.fn().mockResolvedValue(printConfig);
+    service.syncOrderSnapshot = jest.fn();
+
+    const job = await service.enqueuePaidOrder(11, 'manual', 7);
+
+    expect(job.request_snapshot.config).toMatchObject({ color: 3, bindType: 4 });
+    expect(service.syncOrderSnapshot).toHaveBeenCalledWith(order, job);
+  });
+
+  it('invalidates an existing quote when order-specific print parameters change', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    const order: any = { id: 13, pay_payload: { fulfillment_type: 'paper' } };
+    const job: any = {
+      id: 14,
+      status: CloudPrintJobStatus.AWAITING_CONFIRM,
+      trigger_type: 'manual',
+      operator_id: 2,
+      external_order_id: null,
+      request_snapshot: { sourceFiles: [{ id: 1 }], config: printConfig },
+      response_snapshot: {
+        quote: { totalAmountCents: 100 },
+        price: { total: 80 },
+        shipping: { price: 0.2 },
+        providerResponses: [{ path: '/price' }],
+      },
+    };
+    service.orderRepository = {
+      findOne: jest.fn().mockResolvedValue(order),
+      save: jest.fn((value) => Promise.resolve(value)),
+    };
+    service.jobRepository = { findOne: jest.fn().mockResolvedValue(job) };
+    service.assertPrintableOrder = jest.fn();
+    service.getConfig = jest.fn().mockResolvedValue(printConfig);
+    service.updateClaimedJob = jest.fn((_job, _status, update) => Promise.resolve({ ...job, ...update }));
+    service.syncOrderSnapshot = jest.fn();
+
+    const result = await service.updateOrderPrintConfig(13, { ...printConfig, color: 3 }, 9);
+
+    const update = service.updateClaimedJob.mock.calls[0][2];
+    expect(update.status).toBe(CloudPrintJobStatus.PENDING);
+    expect(update.request_snapshot.config.color).toBe(3);
+    expect(update.response_snapshot).toEqual({ providerResponses: [{ path: '/price' }] });
+    expect(order.pay_payload.cloud_print_config_override.color).toBe(3);
+    expect(result.quoteInvalidated).toBe(true);
+  });
+
+  it('rejects print-parameter changes after a provider order exists', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    const order: any = { id: 15, pay_payload: { fulfillment_type: 'paper' } };
+    service.orderRepository = { findOne: jest.fn().mockResolvedValue(order) };
+    service.jobRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        status: CloudPrintJobStatus.SUBMITTED,
+        external_order_id: 'CWY-15',
+      }),
+    };
+    service.assertPrintableOrder = jest.fn();
+    service.getConfig = jest.fn().mockResolvedValue(printConfig);
+
+    await expect(service.updateOrderPrintConfig(15, printConfig, 9))
+      .rejects.toThrow('云打印已进入不可修改阶段');
+  });
+
   it('requires an exact high-entropy callback token', () => {
     const service = Object.create(CloudPrintService.prototype) as any;
     service.configService = { get: jest.fn(() => 'callback-secret') };
