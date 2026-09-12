@@ -10,6 +10,7 @@ import { UserReferral } from '../../database/entities/user-referral.entity';
 import { UserPointsLog, UserPointsLogType } from '../../database/entities/user-points-log.entity';
 import { UserCheckin } from '../../database/entities/user-checkin.entity';
 import { Question } from '../../database/entities/question.entity';
+import { Distributor } from '../../database/entities/distributor.entity';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
 import { GetUserListDto } from './dto/get-user-list.dto';
 import { GrantUserPointsDto } from './dto/grant-user-points.dto';
@@ -250,21 +251,36 @@ export class AdminService {
 			throw new BadRequestException('小程序用户角色无效');
 		}
 
-		const user = await this.appUserRepository.findOne({ where: { id: userId } });
-		if (!user) {
-			throw new NotFoundException('用户不存在');
-		}
+		return this.dataSource.transaction(async (manager) => {
+			const user = await manager.findOne(AppUser, {
+				where: { id: userId },
+				lock: { mode: 'pessimistic_write' },
+			});
+			if (!user) {
+				throw new NotFoundException('用户不存在');
+			}
 
-		user.role = role;
-		await this.appUserRepository.save(user);
+			user.role = role;
+			await manager.save(AppUser, user);
 
-		return {
-			success: true,
-			id: user.id,
-			role: user.role,
-			isAppAdmin: user.role === AppUserRole.ADMIN,
-			isBankAdmin: user.role === AppUserRole.BANK_ADMIN,
-		};
+			let clearedDistributorApplicationCount = 0;
+			if (role === AppUserRole.ADMIN) {
+				const deleteResult = await manager.delete(Distributor, {
+					user_id: userId,
+					status: In([0, 2]),
+				});
+				clearedDistributorApplicationCount = deleteResult.affected || 0;
+			}
+
+			return {
+				success: true,
+				id: user.id,
+				role: user.role,
+				isAppAdmin: user.role === AppUserRole.ADMIN,
+				isBankAdmin: user.role === AppUserRole.BANK_ADMIN,
+				clearedDistributorApplicationCount,
+			};
+		});
 	}
 
 	/**
