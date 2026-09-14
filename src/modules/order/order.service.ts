@@ -1063,7 +1063,7 @@ export class OrderService {
     clientIp?: string;
     responseExtras: Record<string, unknown>;
   }) {
-    const config = this.getCloudPayConfig();
+    const config = this.getCloudPayConfigForOrder(order);
     const paymentParams = await this.createWechatPayPaymentParams({
       user,
       order,
@@ -1364,10 +1364,17 @@ export class OrderService {
 
   private getCloudPayConfigForOrder(order: Pick<Order, 'pay_payload'> | null | undefined) {
     const config = this.getCloudPayConfig();
+    const wechatPay = order?.pay_payload?.wechat_pay;
     const orderSubMchId = this.getWechatPaySubMchIdFromOrder(order);
     return {
       ...config,
       subMchId: orderSubMchId || config.subMchId,
+      callbackEnvId:
+        this.pickPayloadString(wechatPay, ['callback_env_id', 'callbackEnvId']) || config.callbackEnvId,
+      callbackService:
+        this.pickPayloadString(wechatPay, ['callback_service', 'callbackService']) || config.callbackService,
+      callbackPath:
+        this.pickPayloadString(wechatPay, ['callback_path', 'callbackPath']) || config.callbackPath,
     };
   }
 

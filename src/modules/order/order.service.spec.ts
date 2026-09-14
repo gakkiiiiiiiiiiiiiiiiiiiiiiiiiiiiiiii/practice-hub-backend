@@ -465,6 +465,64 @@ describe('OrderService WeChat Pay refund', () => {
     );
   });
 
+  it('reuses the original callback route when retrying the same WeChat Pay order', async () => {
+    const service = createService();
+    service.getCloudPayConfig = jest.fn(() => ({
+      subAppid: 'wx-test',
+      subMchId: 'current-sub-mch',
+      callbackEnvId: 'current-env',
+      callbackService: 'current-service',
+      callbackPath: '/current/notify',
+      spbillCreateIp: '127.0.0.1',
+    }));
+    service.createWechatPayPaymentParams = jest.fn().mockResolvedValue({
+      timeStamp: '2',
+      nonceStr: 'retry-nonce',
+      package: 'prepay_id=retry',
+      signType: 'MD5',
+      paySign: 'retry-sign',
+    });
+
+    const order: any = {
+      order_no: 'ORDER_RETRY',
+      amount: 19,
+      status: OrderStatus.PENDING,
+      pay_payload: {
+        wechat_pay: {
+          sub_mch_id: 'original-sub-mch',
+          callback_env_id: 'original-env',
+          callback_service: 'original-service',
+          callback_path: '/original/notify',
+        },
+      },
+    };
+
+    await service.processWechatPayPayment({
+      user: { id: 1, openid: 'openid' },
+      order,
+      goodsTitle: '纸质资料',
+      responseExtras: {},
+    });
+
+    expect(service.createWechatPayPaymentParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          subMchId: 'original-sub-mch',
+          callbackEnvId: 'original-env',
+          callbackService: 'original-service',
+          callbackPath: '/original/notify',
+        }),
+      }),
+    );
+    expect(order.pay_payload.wechat_pay).toEqual(
+      expect.objectContaining({
+        callback_env_id: 'original-env',
+        callback_service: 'original-service',
+        callback_path: '/original/notify',
+      }),
+    );
+  });
+
   it('maps WeChat Pay refund authorization errors to an actionable message', () => {
     const service = createService();
 
