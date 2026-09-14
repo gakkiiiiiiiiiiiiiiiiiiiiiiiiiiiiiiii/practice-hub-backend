@@ -35,6 +35,7 @@ type ShipOrderActor = {
 };
 
 const PAPER_MATERIAL_MAX_QUANTITY = 99;
+const ORDER_PAYMENT_TIMEOUT_MS = 10 * 60_000;
 
 type CloudPayConfig = {
   subAppid: string;
@@ -1252,6 +1253,10 @@ export class OrderService {
     if (order.status !== OrderStatus.PENDING) {
       throw new BadRequestException('当前订单不可支付');
     }
+    if (this.isOrderPaymentExpired(order)) {
+      await this.cancelOrderIfPending(order.id, order.user_id);
+      throw new BadRequestException('订单已超过10分钟支付时限，请重新下单');
+    }
 
     const user = await this.appUserRepository.findOne({ where: { id: userId } });
     if (!user) {
@@ -1429,12 +1434,15 @@ export class OrderService {
     order: Order,
     user: AppUser,
     clientIp?: string,
-    options?: { allowMissingSessionKey?: boolean; rechargeQueryAttempts?: number },
+    options?: { allowMissingSessionKey?: boolean; rechargeQueryAttempts?: number; allowCancelledPayment?: boolean },
   ) {
     if (order.status === OrderStatus.PAID) {
       return { fulfilled: true, order_no: order.order_no, status: order.status };
     }
-    if (order.status !== OrderStatus.PENDING) {
+    if (
+      order.status !== OrderStatus.PENDING &&
+      !(options?.allowCancelledPayment && order.status === OrderStatus.CANCELLED)
+    ) {
       return { fulfilled: false, reason: '订单状态不可完成支付' };
     }
     if (!['virtual_payment', 'wechat_coin'].includes(String(order.pay_provider || ''))) {
@@ -1545,6 +1553,7 @@ export class OrderService {
         await this.tryFulfillVirtualPaymentOrder(order, user, undefined, {
           allowMissingSessionKey: true,
           rechargeQueryAttempts: 1,
+          allowCancelledPayment: true,
         });
       }
       return { errcode: 0 };
@@ -1812,7 +1821,7 @@ export class OrderService {
     if (order.status === OrderStatus.PAID) {
       return { message: '订单已支付', order_no: order.order_no, status: order.status };
     }
-    if (order.status !== OrderStatus.PENDING) {
+    if (![OrderStatus.PENDING, OrderStatus.CANCELLED].includes(order.status)) {
       throw new BadRequestException('当前订单状态不可确认支付');
     }
     if (!['virtual_payment', 'wechat_coin', 'wechat_pay'].includes(String(order.pay_provider || ''))) {
@@ -1855,6 +1864,7 @@ export class OrderService {
 
     const result = await this.tryFulfillVirtualPaymentOrder(order, user, clientIp, {
       rechargeQueryAttempts: Number(this.configService.get<string>('WECHAT_COIN_RECHARGE_QUERY_ATTEMPTS') || 5),
+      allowCancelledPayment: true,
     });
     if (!result.fulfilled) {
       throw new BadRequestException(result.reason || '充值尚未到账，请稍后再试');
@@ -2033,8 +2043,8 @@ export class OrderService {
         synced: false,
       };
     }
-    if (order.status !== OrderStatus.PENDING) {
-      throw new BadRequestException('仅待支付订单可同步支付状态');
+    if (![OrderStatus.PENDING, OrderStatus.CANCELLED].includes(order.status)) {
+      throw new BadRequestException('当前订单不可同步支付状态');
     }
 
     const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
@@ -2074,6 +2084,7 @@ export class OrderService {
     const result = await this.tryFulfillVirtualPaymentOrder(order, user, undefined, {
       allowMissingSessionKey: true,
       rechargeQueryAttempts: 8,
+      allowCancelledPayment: true,
     });
     if (!result.fulfilled) {
       throw new BadRequestException(result.reason || '暂未查询到微信支付成功记录');
@@ -2226,6 +2237,7 @@ export class OrderService {
     await this.tryFulfillVirtualPaymentOrder(order, user, undefined, {
       allowMissingSessionKey: true,
       rechargeQueryAttempts: 3,
+      allowCancelledPayment: true,
     });
   }
 
@@ -2520,6 +2532,10 @@ export class OrderService {
     ) {
       throw new BadRequestException('当前订单不可继续支付');
     }
+    if (this.isOrderPaymentExpired(order)) {
+      await this.cancelOrderIfPending(order.id, order.user_id);
+      throw new BadRequestException('订单已超过10分钟支付时限，请重新下单');
+    }
 
     const user = await this.appUserRepository.findOne({ where: { id: userId } });
     if (!user) {
@@ -2656,6 +2672,45 @@ export class OrderService {
         order_type: order.order_type,
       },
     });
+  }
+
+  private isOrderPaymentExpired(order: Pick<Order, 'create_time'>) {
+    const createdAt = new Date(order?.create_time).getTime();
+    return Number.isFinite(createdAt) && createdAt <= Date.now() - ORDER_PAYMENT_TIMEOUT_MS;
+  }
+
+  private async cancelOrderIfPending(orderId: number, userId: number) {
+    return this.orderRepository.update(
+      { id: orderId, user_id: userId, status: OrderStatus.PENDING },
+      { status: OrderStatus.CANCELLED },
+    );
+  }
+
+  async cancelPendingOrder(userId: number, orderId: number) {
+    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+    if (order.user_id !== userId) {
+      throw new ForbiddenException('无权取消该订单');
+    }
+    if (order.status === OrderStatus.CANCELLED) {
+      return { message: '订单已取消', order_no: order.order_no, status: order.status };
+    }
+    if (order.status !== OrderStatus.PENDING) {
+      throw new BadRequestException('仅待支付订单可取消');
+    }
+
+    const result = await this.cancelOrderIfPending(order.id, userId);
+    if (Number(result.affected || 0) !== 1) {
+      const latest = await this.orderRepository.findOne({ where: { id: order.id } });
+      if (latest?.status === OrderStatus.CANCELLED) {
+        return { message: '订单已取消', order_no: latest.order_no, status: latest.status };
+      }
+      throw new BadRequestException('订单状态已变化，请刷新后重试');
+    }
+
+    return { message: '订单已取消', order_no: order.order_no, status: OrderStatus.CANCELLED };
   }
 
   private getOrderPayAmountYuan(order: Order) {

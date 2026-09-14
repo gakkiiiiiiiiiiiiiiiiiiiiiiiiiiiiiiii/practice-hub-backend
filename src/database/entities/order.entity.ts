@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
 export enum OrderStatus {
 	PENDING = 'pending', // 待支付
@@ -25,6 +25,7 @@ export type OrderShippingAddress = {
 };
 
 @Entity('order')
+@Index('idx_order_status_create_time', ['status', 'create_time'])
 export class Order {
 	@PrimaryGeneratedColumn()
 	id: number;

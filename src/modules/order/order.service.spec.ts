@@ -1,7 +1,58 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import axios from 'axios';
 import { OrderService } from './order.service';
 import { OrderStatus } from '../../database/entities/order.entity';
+
+describe('OrderService pending order cancellation', () => {
+  const createService = (order: Record<string, unknown>, affected = 1) => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.orderRepository = {
+      findOne: jest.fn().mockResolvedValue(order),
+      update: jest.fn().mockResolvedValue({ affected }),
+    };
+    return service;
+  };
+
+  it('cancels only the authenticated user pending order with a conditional update', async () => {
+    const order = { id: 10, user_id: 7, order_no: 'ORDER10', status: OrderStatus.PENDING };
+    const service = createService(order);
+
+    await expect(service.cancelPendingOrder(7, 10)).resolves.toEqual({
+      message: '订单已取消',
+      order_no: 'ORDER10',
+      status: OrderStatus.CANCELLED,
+    });
+    expect(service.orderRepository.update).toHaveBeenCalledWith(
+      { id: 10, user_id: 7, status: OrderStatus.PENDING },
+      { status: OrderStatus.CANCELLED },
+    );
+  });
+
+  it('does not cancel another user order', async () => {
+    const service = createService({ id: 10, user_id: 8, order_no: 'ORDER10', status: OrderStatus.PENDING });
+
+    await expect(service.cancelPendingOrder(7, 10)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(service.orderRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('treats repeated cancellation as idempotent', async () => {
+    const service = createService({ id: 10, user_id: 7, order_no: 'ORDER10', status: OrderStatus.CANCELLED });
+
+    await expect(service.cancelPendingOrder(7, 10)).resolves.toEqual({
+      message: '订单已取消',
+      order_no: 'ORDER10',
+      status: OrderStatus.CANCELLED,
+    });
+    expect(service.orderRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects cancellation after payment', async () => {
+    const service = createService({ id: 10, user_id: 7, order_no: 'ORDER10', status: OrderStatus.PAID });
+
+    await expect(service.cancelPendingOrder(7, 10)).rejects.toBeInstanceOf(BadRequestException);
+    expect(service.orderRepository.update).not.toHaveBeenCalled();
+  });
+});
 
 describe('OrderService paper material checkout', () => {
   it('recalculates the paper price on the server and stores the pricing snapshot', async () => {

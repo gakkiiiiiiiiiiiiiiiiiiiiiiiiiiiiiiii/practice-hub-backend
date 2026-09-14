@@ -80,6 +80,13 @@ export class OrderController {
     return CommonResponseDto.success(result);
   }
 
+  @Post(':id/cancel')
+  @ApiOperation({ summary: '取消本人待支付订单' })
+  async cancelPendingOrder(@CurrentUser() user: any, @Param('id', ParseIntPipe) id: number) {
+    const result = await this.orderService.cancelPendingOrder(user.userId, id);
+    return CommonResponseDto.success(result);
+  }
+
   @Post(':id/ship')
   @ApiOperation({ summary: '小程序超管录入纸质订单发货信息' })
   async shipOrder(@CurrentUser() user: any, @Param('id', ParseIntPipe) id: number, @Body() dto: ShipOrderDto) {
