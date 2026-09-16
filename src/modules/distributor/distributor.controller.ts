@@ -14,6 +14,7 @@ import { BuyActivationCodesDto } from './dto/buy-activation-codes.dto';
 import { GenerateAppActivationCodesDto } from './dto/generate-app-activation-codes.dto';
 import { UpdateAgentPriceExclusionsDto } from './dto/update-agent-price-exclusions.dto';
 import { AgentPricePolicyService } from './agent-price-policy.service';
+import { CreateWithdrawalDto } from './dto/create-withdrawal.dto';
 
 @ApiTags('分销')
 @Controller('app/distributor')
@@ -58,6 +59,22 @@ export class DistributorController {
 	async getDistributorStats(@CurrentUser() user: any) {
 		const result = await this.distributorService.getDistributorStats(user.userId);
 		return CommonResponseDto.success(result);
+	}
+
+	@Post('withdrawals')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '提交代理佣金提现申请' })
+	async createWithdrawal(@CurrentUser() user: any, @Body() dto: CreateWithdrawalDto) {
+		return CommonResponseDto.success(await this.distributorService.createWithdrawal(user.userId, dto));
+	}
+
+	@Get('withdrawals')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '获取本人的佣金提现记录' })
+	async getWithdrawals(@CurrentUser() user: any) {
+		return CommonResponseDto.success(await this.distributorService.getWithdrawals(user.userId));
 	}
 
 	@Get('agent-price-exclusions')

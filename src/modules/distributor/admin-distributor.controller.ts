@@ -25,6 +25,7 @@ import { AgentPricePolicyService } from "./agent-price-policy.service";
 import { RolesGuard } from "../../common/guards/roles.guard";
 import { Roles } from "../../common/decorators/roles.decorator";
 import { AdminRole } from "../../database/entities/sys-user.entity";
+import { UpdateWithdrawalStatusDto } from "./dto/update-withdrawal-status.dto";
 
 @ApiTags("后台-分销管理")
 @Controller("admin/distributor")
@@ -94,6 +95,26 @@ export class AdminDistributorController {
   async getDistributionStats() {
     const result = await this.distributorService.getAdminStats();
     return CommonResponseDto.success(result);
+  }
+
+  @Get("withdrawals")
+  @ApiOperation({ summary: "获取代理提现申请" })
+  async getWithdrawals(@Query("status") status?: string) {
+    const parsed = status === undefined || status === "" ? undefined : Number(status);
+    return CommonResponseDto.success(await this.distributorService.getAdminWithdrawals(parsed));
+  }
+
+  @Patch("withdrawals/:id")
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: "人工确认或驳回代理提现" })
+  async updateWithdrawal(
+    @CurrentUser() user: any,
+    @Param("id") id: string,
+    @Body() dto: UpdateWithdrawalStatusDto,
+  ) {
+    return CommonResponseDto.success(
+      await this.distributorService.updateWithdrawalStatus(Number(id), dto.status, user.userId, dto.remark),
+    );
   }
 
   // 动态路由放在最后

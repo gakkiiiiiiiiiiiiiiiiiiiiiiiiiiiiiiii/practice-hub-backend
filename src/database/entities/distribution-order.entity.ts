@@ -9,6 +9,7 @@ import {
 @Entity('distribution_order')
 @Index(['order_id']) // 用于查询订单的分成记录
 @Index(['distributor_id', 'status']) // 用于查询分销商的收益
+@Index(['order_id', 'distributor_id', 'commission_type'], { unique: true })
 export class DistributionOrder {
 	@PrimaryGeneratedColumn()
 	id: number;
@@ -34,13 +35,18 @@ export class DistributionOrder {
 	@Column({ type: 'decimal', precision: 10, scale: 2, comment: '分成金额（元）' })
 	commission_amount: number;
 
+	@Column({ type: 'varchar', length: 24, default: 'base', comment: '佣金类型：base/direct_team/indirect_team/paper' })
+	commission_type: 'base' | 'direct_team' | 'indirect_team' | 'paper';
+
 	@Column({ type: 'tinyint', default: 0, comment: '状态：0-待结算, 1-已结算, 2-已取消' })
 	status: number;
 
 	@Column({ type: 'datetime', nullable: true, comment: '结算时间' })
 	settle_time: Date;
 
+	@Column({ type: 'datetime', nullable: true, comment: '佣金可提现时间' })
+	available_at: Date | null;
+
 	@CreateDateColumn()
 	create_time: Date;
 }
-

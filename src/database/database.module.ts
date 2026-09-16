@@ -21,6 +21,7 @@ import { Distributor } from './entities/distributor.entity';
 import { DistributionRelation } from './entities/distribution-relation.entity';
 import { DistributionOrder } from './entities/distribution-order.entity';
 import { DistributionConfig } from './entities/distribution-config.entity';
+import { DistributorWithdrawal } from './entities/distributor-withdrawal.entity';
 import { ExamConfig } from './entities/exam-config.entity';
 import { ExamRecord } from './entities/exam-record.entity';
 import { Role } from './entities/role.entity';
@@ -74,6 +75,7 @@ import { CloudPrintJob } from './entities/cloud-print-job.entity';
 			DistributionRelation,
 			DistributionOrder,
 			DistributionConfig,
+			DistributorWithdrawal,
 			ExamConfig,
 			ExamRecord,
 			Role,

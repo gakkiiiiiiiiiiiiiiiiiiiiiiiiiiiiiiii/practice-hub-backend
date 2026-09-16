@@ -4,6 +4,7 @@ import { Distributor } from '../../database/entities/distributor.entity';
 import { DistributionRelation } from '../../database/entities/distribution-relation.entity';
 import { DistributionOrder } from '../../database/entities/distribution-order.entity';
 import { DistributionConfig } from '../../database/entities/distribution-config.entity';
+import { DistributorWithdrawal } from '../../database/entities/distributor-withdrawal.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { Order } from '../../database/entities/order.entity';
 import { ActivationCode } from '../../database/entities/activation-code.entity';
@@ -28,6 +29,7 @@ import { AgentPricePolicyService } from './agent-price-policy.service';
 			DistributionRelation,
 			DistributionOrder,
 			DistributionConfig,
+			DistributorWithdrawal,
 			AppUser,
 			Order,
 			ActivationCode,

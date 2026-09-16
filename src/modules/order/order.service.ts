@@ -1704,6 +1704,11 @@ export class OrderService {
       // Repeated paper payment notifications must not schedule digital preview work.
       if (order.pay_payload?.fulfillment_type === 'paper') {
         try {
+          await this.distributorService.processOrderCommission(orderId);
+        } catch (error) {
+          this.logger.error(`纸质订单分成补偿处理失败 ${order.order_no}: ${error?.message || error}`);
+        }
+        try {
           await this.cloudPrintService.enqueuePaidOrder(orderId, 'automatic');
         } catch (error) {
           this.logger.error(`纸质资料云打印补充入队失败 ${order.order_no}: ${error?.message || error}`);
@@ -1712,6 +1717,13 @@ export class OrderService {
       }
       if (order.order_type === 'category') {
         await this.categoryBundleAccessService.grantOrderAccess(order);
+      }
+      if (!order.pay_payload?.activation_code_purchase) {
+        try {
+          await this.distributorService.processOrderCommission(orderId);
+        } catch (error) {
+          this.logger.error(`订单分成补偿处理失败 ${order.order_no}: ${error?.message || error}`);
+        }
       }
       await requestUserPreviewDemand(this.orderRepository.manager, order.user_id);
       return { message: '订单已支付' };
@@ -1732,6 +1744,7 @@ export class OrderService {
       if (order.coupon_id) {
         await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
       }
+      await this.distributorService.processOrderCommission(orderId);
       return { message: '套餐订单支付成功' };
     }
 
@@ -1741,6 +1754,7 @@ export class OrderService {
       if (order.coupon_id) {
         await this.referralCouponService.markCouponUsed(order.coupon_id, order.id);
       }
+      await this.distributorService.processOrderCommission(orderId);
       return { message: '分类课程订单支付成功' };
     }
 
@@ -2022,6 +2036,12 @@ export class OrderService {
       },
     };
     await this.orderRepository.save(order);
+
+    try {
+      await this.distributorService.cancelOrderCommission(order.id);
+    } catch (error) {
+      this.logger.error(`退款佣金撤销失败 ${order.order_no}: ${error?.message || error}`);
+    }
 
     return {
       message: '退款成功',

@@ -42,6 +42,15 @@ export class Distributor {
 	@Column({ type: 'decimal', precision: 10, scale: 2, default: 0, comment: '可提现金额（元）' })
 	withdrawable_amount: number;
 
+	@Column({ type: 'decimal', precision: 10, scale: 2, default: 0, comment: '冻结中佣金（元）' })
+	frozen_amount: number;
+
+	@Column({ type: 'varchar', length: 120, nullable: true, comment: '提现支付宝账号' })
+	alipay_account: string | null;
+
+	@Column({ type: 'varchar', length: 50, nullable: true, comment: '提现实名' })
+	real_name: string | null;
+
 	@Column({ type: 'int', default: 0, comment: '下级用户数量' })
 	subordinate_count: number;
 

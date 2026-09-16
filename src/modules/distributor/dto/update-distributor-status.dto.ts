@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export enum DistributorStatus {
 	PENDING = 0, // 待审核
@@ -18,5 +18,11 @@ export class UpdateDistributorStatusDto {
 	@IsString()
 	@MaxLength(500)
 	reject_reason?: string;
-}
 
+	@ApiProperty({ description: '代理等级：1-初级，2-中级，3-高级', required: false })
+	@IsOptional()
+	@IsInt()
+	@Min(1)
+	@Max(3)
+	agent_level?: number;
+}

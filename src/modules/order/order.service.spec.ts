@@ -394,6 +394,9 @@ describe('OrderService category bundle access', () => {
     service.categoryBundleAccessService = {
       grantOrderAccess: jest.fn().mockResolvedValue(undefined),
     };
+    service.distributorService = {
+      processOrderCommission: jest.fn().mockResolvedValue(undefined),
+    };
     service.grantCourseAccess = jest.fn();
 
     await service.handlePaymentSuccess(order.id);
@@ -636,6 +639,9 @@ describe('OrderService WeChat Pay refund', () => {
       findOne: jest.fn().mockResolvedValue(null),
     };
     service.refundWechatPayOrder = jest.fn().mockResolvedValue({ return_code: 'SUCCESS' });
+    service.distributorService = {
+      cancelOrderCommission: jest.fn().mockResolvedValue(undefined),
+    };
 
     const result = await service.refundOrder(88, 1, { remark: '管理员直接退款' });
 
