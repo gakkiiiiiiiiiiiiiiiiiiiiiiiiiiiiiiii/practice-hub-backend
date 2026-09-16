@@ -3574,6 +3574,13 @@ export class OrderService {
         contentTypeConditions.push('o.shipping_address IS NOT NULL');
       }
       query.andWhere(`(${contentTypeConditions.join(' OR ')})`, { contentType: dto.content_type });
+
+      if (dto.content_type !== 'paper_exam') {
+        query.andWhere(
+          "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.fulfillment_type')), 'digital') <> :excludedPaperFulfillmentType",
+          { excludedPaperFulfillmentType: 'paper' },
+        );
+      }
     }
 
     if (dto.paper_only) {

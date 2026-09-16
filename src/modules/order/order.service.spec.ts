@@ -686,6 +686,34 @@ describe('OrderService WeChat Pay refund', () => {
 });
 
 describe('OrderService admin pagination', () => {
+  it('excludes paper fulfillment orders from digital course content filters', async () => {
+    const query: any = {
+      leftJoin: jest.fn(),
+      select: jest.fn(),
+      orderBy: jest.fn(),
+      andWhere: jest.fn(),
+      clone: jest.fn(),
+      getCount: jest.fn().mockResolvedValue(0),
+      offset: jest.fn(),
+      limit: jest.fn(),
+      getRawMany: jest.fn().mockResolvedValue([]),
+    };
+    Object.keys(query).forEach((key) => {
+      if (!['getCount', 'getRawMany'].includes(key)) query[key].mockReturnValue(query);
+    });
+
+    const service = Object.create(OrderService.prototype) as any;
+    service.orderRepository = { createQueryBuilder: jest.fn().mockReturnValue(query) };
+    service.getLatestAfterSaleMap = jest.fn().mockResolvedValue(new Map());
+
+    await service.getAdminOrderList({ page: 1, pageSize: 10, content_type: 'file' });
+
+    expect(query.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining("$.fulfillment_type"),
+      { excludedPaperFulfillmentType: 'paper' },
+    );
+  });
+
   it('honors the 100-row page size exposed by the admin table', async () => {
     const query: any = {
       leftJoin: jest.fn(),
