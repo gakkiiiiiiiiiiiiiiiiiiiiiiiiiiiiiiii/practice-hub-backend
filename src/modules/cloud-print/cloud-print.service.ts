@@ -432,7 +432,7 @@ export class CloudPrintService {
         const files = this.getSourceFiles(job);
         const payload = files.map((file) => ({
           url: this.uploadService.getCloudPrintDownloadUrl(file.file_url),
-          name: file.display_name || file.file_name || `资料-${file.id}.${file.file_type}`,
+          name: this.getCloudPrintUploadName(file),
         }));
         const response = await this.requestApi<any>('POST', '/api/svip/storage/create-package', payload, job);
         job.external_package_id = String(response?.cw_file_package_id || '');
@@ -687,7 +687,8 @@ export class CloudPrintService {
   ) {
     const packageByUrl = new Map(packageRows.map((item) => [String(item.url || ''), item]));
     const goods = files.map((file) => {
-      const uploaded = packageByUrl.get(file.file_url) || packageRows.find((item) => item?.file?.name === (file.display_name || file.file_name));
+      const uploadName = this.getCloudPrintUploadName(file);
+      const uploaded = packageByUrl.get(file.file_url) || packageRows.find((item) => item?.file?.name === uploadName);
       if (!uploaded?.file?.id) throw new Error(`云打印文件未就绪：${file.display_name || file.file_name || file.id}`);
       const localPages = Number(file.file_page_count || 0);
       const providerPages = Number(uploaded.file.pages || 0);
@@ -775,6 +776,25 @@ export class CloudPrintService {
       : [];
     if (!files.length) throw new BadRequestException('云打印任务缺少下单时的文件快照，请人工核对');
     return files;
+  }
+
+  private getCloudPrintUploadName(file: any) {
+    const displayName = String(file.display_name || file.file_name || `资料-${file.id || '文件'}`).trim();
+    if (/\.(pdf|doc|docx)$/i.test(displayName)) return displayName;
+
+    const declaredType = String(file.file_type || '').trim().toLowerCase().replace(/^\./, '');
+    const fileNameType = String(file.file_name || '').match(/\.(pdf|doc|docx)$/i)?.[1]?.toLowerCase();
+    let urlType: string | undefined;
+    try {
+      urlType = new URL(String(file.file_url || '')).pathname.match(/\.(pdf|doc|docx)$/i)?.[1]?.toLowerCase();
+    } catch {
+      urlType = undefined;
+    }
+    const fileType = ['pdf', 'doc', 'docx'].includes(declaredType)
+      ? declaredType
+      : fileNameType || urlType;
+    if (!fileType) throw new Error(`云打印文件类型缺失：${displayName}`);
+    return `${displayName}.${fileType}`;
   }
 
   private async getOrderEstimateFiles(order: Order, job: CloudPrintJob | null) {

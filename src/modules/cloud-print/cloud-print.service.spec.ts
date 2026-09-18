@@ -400,6 +400,38 @@ describe('CloudPrintService', () => {
     ]);
   });
 
+  it('adds the source extension to the provider upload name and reuses it for package matching', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    const sourceUrl = 'https://example.com/course-files/history.pdf';
+    const signedUrl = `${sourceUrl}?Expires=1789711913&Signature=test`;
+    const files = [{
+      id: 7,
+      file_url: sourceUrl,
+      file_name: 'history.pdf',
+      file_type: 'pdf',
+      display_name: '中国近代史纲要 -- 【100页】',
+      file_page_count: 100,
+      quantity: 1,
+    }];
+
+    expect(service.getCloudPrintUploadName(files[0])).toBe('中国近代史纲要 -- 【100页】.pdf');
+
+    await expect(service.buildOrderPayload(
+      {
+        user_id: 10,
+        order_no: 'ORDER-EXTENSION',
+        shipping_address: {
+          name: '测试用户', phone: '13800000000', province: '广东省', city: '深圳市', district: '南山区', detail: '测试地址',
+        },
+      },
+      files,
+      [{ url: signedUrl, downloaded: true, file: { id: 'provider-file-7', name: '中国近代史纲要 -- 【100页】.pdf', pages: 100 } }],
+      printConfig,
+    )).resolves.toMatchObject({
+      goods: [{ file_id: 'provider-file-7', page_range: '1-100' }],
+    });
+  });
+
   it('rejects files above the supplier glue-binding limit', async () => {
     const service = Object.create(CloudPrintService.prototype) as any;
     await expect(buildPayload(service, 601)).rejects.toThrow('文件 601 页不符合当前装订范围 8-600 页');
