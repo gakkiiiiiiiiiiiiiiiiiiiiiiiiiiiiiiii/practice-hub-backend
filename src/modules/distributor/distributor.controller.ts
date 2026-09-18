@@ -43,6 +43,14 @@ export class DistributorController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Get('status')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '获取代理功能开关状态' })
+	async getDistributionStatus() {
+		return CommonResponseDto.success(await this.distributorService.getDistributionStatus());
+	}
+
 	@Get('qr-code')
 	@UseGuards(JwtAuthGuard)
 	@ApiBearerAuth()
@@ -104,79 +112,65 @@ export class DistributorController {
 		return CommonResponseDto.success(result);
 	}
 
-		@Post('buy-codes')
-		@UseGuards(JwtAuthGuard)
-		@ApiBearerAuth()
+	@Post('buy-codes')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
 	@ApiOperation({ summary: '购买激活码（分销商）' })
 	async buyCodes(@CurrentUser() user: any, @Body() body: BuyActivationCodesDto) {
-			const result = await this.distributorService.buyActivationCodes(user.userId, body.course_id, body.count);
-			return CommonResponseDto.success(result);
-		}
+		const result = await this.distributorService.buyActivationCodes(user.userId, body.course_id, body.count);
+		return CommonResponseDto.success(result);
+	}
 
-		@Post('admin/generate-codes')
-		@UseGuards(JwtAuthGuard)
-		@ApiBearerAuth()
-		@ApiOperation({ summary: '小程序管理员生成激活码' })
-		async generateAdminCodes(@CurrentUser() user: any, @Body() body: GenerateAppActivationCodesDto) {
-			const result = await this.distributorService.generateAdminActivationCodes(user.userId, body);
-			return CommonResponseDto.success(result);
-		}
+	@Post('admin/generate-codes')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '小程序管理员生成激活码' })
+	async generateAdminCodes(@CurrentUser() user: any, @Body() body: GenerateAppActivationCodesDto) {
+		const result = await this.distributorService.generateAdminActivationCodes(user.userId, body);
+		return CommonResponseDto.success(result);
+	}
 
-		@Get('admin/users/:id')
-		@UseGuards(JwtAuthGuard)
-		@ApiBearerAuth()
-		@ApiOperation({ summary: '小程序超级管理员查询奖励接收用户' })
-		async getAdminRewardUser(@CurrentUser() user: any, @Param('id') id: string) {
-			const result = await this.appAdminRewardService.getTargetUser(user.userId, parseInt(id, 10));
-			return CommonResponseDto.success(result);
-		}
+	@Get('admin/users/:id')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '小程序超级管理员查询奖励接收用户' })
+	async getAdminRewardUser(@CurrentUser() user: any, @Param('id') id: string) {
+		const result = await this.appAdminRewardService.getTargetUser(user.userId, parseInt(id, 10));
+		return CommonResponseDto.success(result);
+	}
 
-		@Post('admin/users/:id/points/grant')
-		@UseGuards(JwtAuthGuard)
-		@ApiBearerAuth()
-		@ApiOperation({ summary: '小程序超级管理员向指定用户赠送积分' })
-		async grantAdminUserPoints(
-			@CurrentUser() user: any,
-			@Param('id') id: string,
-			@Body() dto: GrantAppUserPointsDto,
-		) {
-			const result = await this.appAdminRewardService.grantPoints(
-				user.userId,
-				parseInt(id, 10),
-				dto,
-			);
-			return CommonResponseDto.success(result);
-		}
+	@Post('admin/users/:id/points/grant')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '小程序超级管理员向指定用户赠送积分' })
+	async grantAdminUserPoints(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: GrantAppUserPointsDto) {
+		const result = await this.appAdminRewardService.grantPoints(user.userId, parseInt(id, 10), dto);
+		return CommonResponseDto.success(result);
+	}
 
-		@Post('admin/coupons/issue')
-		@UseGuards(JwtAuthGuard)
-		@ApiBearerAuth()
-		@ApiOperation({ summary: '小程序超级管理员向指定用户赠送优惠券' })
-		async issueAdminUserCoupons(@CurrentUser() user: any, @Body() dto: IssueCouponDto) {
-			const result = await this.appAdminRewardService.issueCoupons(user.userId, dto);
-			return CommonResponseDto.success(result);
-		}
+	@Post('admin/coupons/issue')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '小程序超级管理员向指定用户赠送优惠券' })
+	async issueAdminUserCoupons(@CurrentUser() user: any, @Body() dto: IssueCouponDto) {
+		const result = await this.appAdminRewardService.issueCoupons(user.userId, dto);
+		return CommonResponseDto.success(result);
+	}
 
-		@Post('codes/:id/invalidate')
-		@UseGuards(JwtAuthGuard)
-		@ApiBearerAuth()
-		@ApiOperation({ summary: '禁用已激活激活码并撤销课程权限' })
-		async invalidateCode(@CurrentUser() user: any, @Param('id') id: string) {
-			const result = await this.distributorService.invalidateAppActivationCode(user.userId, parseInt(id, 10));
-			return CommonResponseDto.success(result);
-		}
+	@Post('codes/:id/invalidate')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '禁用已激活激活码并撤销课程权限' })
+	async invalidateCode(@CurrentUser() user: any, @Param('id') id: string) {
+		const result = await this.distributorService.invalidateAppActivationCode(user.userId, parseInt(id, 10));
+		return CommonResponseDto.success(result);
+	}
 
 	@Get('codes')
 	@UseGuards(JwtAuthGuard)
 	@ApiBearerAuth()
 	@ApiOperation({ summary: '获取分销商购买的激活码列表' })
-	async getDistributorCodes(
-		@CurrentUser() user: any,
-		@Query('page') page?: string,
-		@Query('pageSize') pageSize?: string,
-		@Query('batch_id') batchId?: string,
-		@Query('status') status?: string,
-	) {
+	async getDistributorCodes(@CurrentUser() user: any, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('batch_id') batchId?: string, @Query('status') status?: string) {
 		// 解析并校验分页与状态，避免 NaN 传入查询
 		const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
 		const pageSizeNum = Math.min(100, Math.max(1, parseInt(String(pageSize), 10) || 20));
@@ -187,13 +181,7 @@ export class DistributorController {
 				statusNum = parsed;
 			}
 		}
-		const result = await this.distributorService.getDistributorCodes(
-			user.userId,
-			pageNum,
-			pageSizeNum,
-			batchId,
-			statusNum,
-		);
+		const result = await this.distributorService.getDistributorCodes(user.userId, pageNum, pageSizeNum, batchId, statusNum);
 		return CommonResponseDto.success(result);
 	}
 }

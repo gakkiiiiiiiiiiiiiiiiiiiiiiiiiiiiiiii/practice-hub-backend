@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Inject, forwardRef, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -137,14 +137,21 @@ export class OrderService {
       throw new BadRequestException('单次最多购买20门课程');
     }
 
-    const courses = await this.courseRepository.find({ where: { id: In(courseIds) } });
+    const courses = await this.courseRepository.find({
+      where: { id: In(courseIds) },
+    });
     const courseMap = new Map(courses.map((course) => [course.id, course]));
     if (courses.length !== courseIds.length) {
       throw new NotFoundException('部分课程不存在或已下架');
     }
 
     const shippingAddress = this.resolveShippingAddressForCourses(courses, dto.shipping_address);
-    const cartItems: Array<{ course_id: number; name: string; price: number; content_type: string }> = [];
+    const cartItems: Array<{
+      course_id: number;
+      name: string;
+      price: number;
+      content_type: string;
+    }> = [];
     let originalAmount = 0;
 
     for (const courseId of courseIds) {
@@ -193,11 +200,7 @@ export class OrderService {
     let discountAmount = 0;
     let couponId: number | null = null;
     if (dto.coupon_id && originalAmount > 0) {
-      const couponResult = await this.referralCouponService.validateCouponForOrder(
-        userId,
-        dto.coupon_id,
-        originalAmount,
-      );
+      const couponResult = await this.referralCouponService.validateCouponForOrder(userId, dto.coupon_id, originalAmount);
       discountAmount = couponResult.discount;
       couponId = couponResult.coupon.id;
     }
@@ -236,7 +239,9 @@ export class OrderService {
       };
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: userId },
+    });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
@@ -294,46 +299,47 @@ export class OrderService {
     if (!Array.isArray(items) || items.length < 1 || items.length > 20) {
       throw new BadRequestException('请选择1-20种纸质资料');
     }
-    if (items.some((item) => !item || !Number.isSafeInteger(item.course_id) || item.course_id < 1 ||
-      !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > PAPER_MATERIAL_MAX_QUANTITY)) {
+    if (items.some((item) => !item || !Number.isSafeInteger(item.course_id) || item.course_id < 1 || !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > PAPER_MATERIAL_MAX_QUANTITY)) {
       throw new BadRequestException('课程ID必须为正整数，纸质资料数量必须为1-99份');
     }
     const courseIds = items.map((item) => item.course_id);
     if (new Set(courseIds).size !== courseIds.length) {
       throw new BadRequestException('同一纸质资料不能重复提交');
     }
-    if (!Number.isFinite(dto.expected_amount) || dto.expected_amount <= 0 ||
-      normalizeThresholdYuan(dto.expected_amount) !== dto.expected_amount) {
+    if (!Number.isFinite(dto.expected_amount) || dto.expected_amount <= 0 || normalizeThresholdYuan(dto.expected_amount) !== dto.expected_amount) {
       throw new BadRequestException('请提交有效的合计金额');
     }
     if ('coupon_id' in dto) {
       throw new BadRequestException('纸质资料不能使用优惠券，优惠券仅限电子资料使用');
     }
     const shippingAddress = this.normalizeShippingAddress(dto.shipping_address, true);
-    const courses = await this.courseRepository.find({ where: { id: In(courseIds) } });
+    const courses = await this.courseRepository.find({
+      where: { id: In(courseIds) },
+    });
     if (courses.length !== courseIds.length) {
       throw new NotFoundException('部分资料不存在或已下架，请刷新后重试');
     }
-    if (courses.some((course) => course.status !== 1 || course.content_type !== 'file' ||
-      course.is_free === 1 || !(Number(course.price) > 0))) {
+    if (courses.some((course) => course.status !== 1 || course.content_type !== 'file' || course.is_free === 1 || !(Number(course.price) > 0))) {
       throw new BadRequestException('仅支持已上架的付费文件课程购买纸质资料，请刷新后重试');
     }
 
     const [auths, packageAccessMap, categoryAccessMap, files, user] = await Promise.all([
-      this.userCourseAuthRepository.find({ where: { user_id: userId, course_id: In(courseIds) } }),
+      this.userCourseAuthRepository.find({
+        where: { user_id: userId, course_id: In(courseIds) },
+      }),
       this.packageService.batchUserHasCourseAccessViaPackage(userId, courses),
       this.categoryBundleAccessService.batchUserHasCourseAccess(userId, courses),
       // Only use cached page counts/file names; never probe remote files while checking out.
-      this.courseFileRepository.find({ where: { course_id: In(courseIds), status: 1 }, order: { sort: 'ASC', id: 'ASC' } }),
+      this.courseFileRepository.find({
+        where: { course_id: In(courseIds), status: 1 },
+        order: { sort: 'ASC', id: 'ASC' },
+      }),
       this.appUserRepository.findOne({ where: { id: userId } }),
     ]);
     if (!user) throw new NotFoundException('用户不存在');
     const now = Date.now();
-    const activeCourseIds = new Set(auths.filter((auth) =>
-      !auth.expire_time || new Date(auth.expire_time).getTime() > now,
-    ).map((auth) => auth.course_id));
-    if (courses.some((course) => !activeCourseIds.has(course.id) &&
-      packageAccessMap.get(course.id)?.hasAccess !== true && !categoryAccessMap.has(course.id))) {
+    const activeCourseIds = new Set(auths.filter((auth) => !auth.expire_time || new Date(auth.expire_time).getTime() > now).map((auth) => auth.course_id));
+    if (courses.some((course) => !activeCourseIds.has(course.id) && packageAccessMap.get(course.id)?.hasAccess !== true && !categoryAccessMap.has(course.id))) {
       throw new BadRequestException('仅支持购买当前已拥有课程的纸质资料，请刷新已购资料后重试');
     }
     const courseMap = new Map(courses.map((course) => [course.id, course]));
@@ -400,15 +406,27 @@ export class OrderService {
       },
     });
     await this.orderRepository.save(order);
-    const responseExtras = { order_type: 'course', course_ids: courseIds, is_cart: true, fulfillment_type: 'paper' };
+    const responseExtras = {
+      order_type: 'course',
+      course_ids: courseIds,
+      is_cart: true,
+      fulfillment_type: 'paper',
+    };
     try {
       return await this.processWechatPayPayment({
-        user, order, goodsTitle: this.getPaperCartTitle(cartItems), clientIp, responseExtras,
+        user,
+        order,
+        goodsTitle: this.getPaperCartTitle(cartItems),
+        clientIp,
+        responseExtras,
       });
     } catch {
       // The order already exists. Return its identity so clients resume it rather
       // than treating a payment-provider failure as an uncreated checkout.
-      this.logger.warn({ event: 'PAPER_CART_PAYMENT_PREPARATION_FAILED', orderId: order.id });
+      this.logger.warn({
+        event: 'PAPER_CART_PAYMENT_PREPARATION_FAILED',
+        orderId: order.id,
+      });
       return {
         order_no: order.order_no,
         amount: order.amount,
@@ -426,17 +444,16 @@ export class OrderService {
       throw new BadRequestException('课程ID不能为空');
     }
 
-    const course = await this.courseRepository.findOne({ where: { id: dto.course_id } });
+    const course = await this.courseRepository.findOne({
+      where: { id: dto.course_id },
+    });
 
     if (!course) {
       throw new NotFoundException('课程不存在');
     }
     const isPaperMaterial = dto.fulfillment_type === 'paper';
     const paperMaterialQuantity = isPaperMaterial ? Number(dto.quantity ?? 1) : 1;
-    if (
-      isPaperMaterial &&
-      (!Number.isInteger(paperMaterialQuantity) || paperMaterialQuantity < 1 || paperMaterialQuantity > PAPER_MATERIAL_MAX_QUANTITY)
-    ) {
+    if (isPaperMaterial && (!Number.isInteger(paperMaterialQuantity) || paperMaterialQuantity < 1 || paperMaterialQuantity > PAPER_MATERIAL_MAX_QUANTITY)) {
       throw new BadRequestException(`纸质资料购买数量必须为1-${PAPER_MATERIAL_MAX_QUANTITY}份`);
     }
     const isPhysicalCourse = isPaperMaterial || course.content_type === 'paper_exam';
@@ -457,19 +474,11 @@ export class OrderService {
         throw new BadRequestException('资料页数核算中，暂时无法购买纸质版，请稍后再试');
       }
     }
-    const shippingAddress = isPaperMaterial
-      ? this.normalizeShippingAddress(dto.shipping_address, true)
-      : this.resolveShippingAddressForCourses([course], dto.shipping_address);
+    const shippingAddress = isPaperMaterial ? this.normalizeShippingAddress(dto.shipping_address, true) : this.resolveShippingAddressForCourses([course], dto.shipping_address);
 
-    const paperMaterialAmount = isPaperMaterial
-      ? normalizeThresholdYuan(Number(paperMaterialPricing?.price || 0) * paperMaterialQuantity)
-      : 0;
-    const regionalShipping = isPaperMaterial
-      ? resolvePaperMaterialRegionalShipping(shippingAddress)
-      : { fee: 0, region: null };
-    const originalAmount = isPaperMaterial
-      ? normalizeThresholdYuan(paperMaterialAmount + regionalShipping.fee)
-      : Number(course.price || 0);
+    const paperMaterialAmount = isPaperMaterial ? normalizeThresholdYuan(Number(paperMaterialPricing?.price || 0) * paperMaterialQuantity) : 0;
+    const regionalShipping = isPaperMaterial ? resolvePaperMaterialRegionalShipping(shippingAddress) : { fee: 0, region: null };
+    const originalAmount = isPaperMaterial ? normalizeThresholdYuan(paperMaterialAmount + regionalShipping.fee) : Number(course.price || 0);
     if (!isPaperMaterial && course.is_free !== 1 && originalAmount > 0) {
       assertIntegerYuanPrice(originalAmount, '课程价格');
     }
@@ -483,43 +492,39 @@ export class OrderService {
     }
 
     const discountedAmount = Math.max(0, originalAmount - discountAmount);
-    const amount = isPaperMaterial
-      ? normalizeThresholdYuan(discountedAmount)
-      : normalizePayAmountYuan(discountedAmount);
-    if (isPaperMaterial && (
-      !Number.isFinite(dto.expected_amount) ||
-      normalizeThresholdYuan(Number(dto.expected_amount)) !== amount
-    )) {
+    const amount = isPaperMaterial ? normalizeThresholdYuan(discountedAmount) : normalizePayAmountYuan(discountedAmount);
+    if (isPaperMaterial && (!Number.isFinite(dto.expected_amount) || normalizeThresholdYuan(Number(dto.expected_amount)) !== amount)) {
       throw new BadRequestException('纸质资料价格已变化，请重新选择收货地址并确认金额');
     }
     const requiresWechatPay = isPaperMaterial || course.content_type === 'paper_exam';
-    const paperMaterialPayload = isPaperMaterial && paperMaterialPricing
-      ? {
-          fulfillment_type: 'paper',
-          paper_material: {
-            total_pages: paperMaterialPricing.totalPages,
-            price: paperMaterialPricing.price,
-            unit_price: paperMaterialPricing.price,
-            quantity: paperMaterialQuantity,
-            material_total_price: paperMaterialAmount,
-            regional_shipping_fee: regionalShipping.fee,
-            regional_shipping_region: regionalShipping.region,
-            total_price: originalAmount,
-            pricing_formula: {
-              base_fee: paperMaterialPricing.baseFee,
-              per_page_fee: paperMaterialPricing.perPageFee,
-              page_threshold: paperMaterialPricing.pageThreshold,
-              over_threshold_base_fee: paperMaterialPricing.overThresholdBaseFee,
-              over_threshold_per_page_fee: paperMaterialPricing.overThresholdPerPageFee,
-              binding_fee: paperMaterialPricing.bindingFee,
-              shipping_fee: paperMaterialPricing.shippingFee,
+    const paperMaterialPayload =
+      isPaperMaterial && paperMaterialPricing
+        ? {
+            fulfillment_type: 'paper',
+            paper_material: {
+              total_pages: paperMaterialPricing.totalPages,
+              price: paperMaterialPricing.price,
+              unit_price: paperMaterialPricing.price,
+              quantity: paperMaterialQuantity,
+              material_total_price: paperMaterialAmount,
               regional_shipping_fee: regionalShipping.fee,
-              multiplier: paperMaterialPricing.multiplier,
-              rounding_mode: paperMaterialPricing.roundingMode,
+              regional_shipping_region: regionalShipping.region,
+              total_price: originalAmount,
+              pricing_formula: {
+                base_fee: paperMaterialPricing.baseFee,
+                per_page_fee: paperMaterialPricing.perPageFee,
+                page_threshold: paperMaterialPricing.pageThreshold,
+                over_threshold_base_fee: paperMaterialPricing.overThresholdBaseFee,
+                over_threshold_per_page_fee: paperMaterialPricing.overThresholdPerPageFee,
+                binding_fee: paperMaterialPricing.bindingFee,
+                shipping_fee: paperMaterialPricing.shippingFee,
+                regional_shipping_fee: regionalShipping.fee,
+                multiplier: paperMaterialPricing.multiplier,
+                rounding_mode: paperMaterialPricing.roundingMode,
+              },
             },
-          },
-        }
-      : null;
+          }
+        : null;
 
     if (amount <= 0 || (!isPaperMaterial && course.is_free === 1)) {
       const freeOrder = this.orderRepository.create({
@@ -549,7 +554,9 @@ export class OrderService {
       };
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: userId },
+    });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
@@ -576,9 +583,7 @@ export class OrderService {
       return this.processWechatPayPayment({
         user,
         order,
-        goodsTitle: isPaperMaterial
-          ? `${course.name || '资料'}（纸质版${paperMaterialQuantity > 1 ? `×${paperMaterialQuantity}` : ''}）`
-          : course.name || '纸质专业真题',
+        goodsTitle: isPaperMaterial ? `${course.name || '资料'}（纸质版${paperMaterialQuantity > 1 ? `×${paperMaterialQuantity}` : ''}）` : course.name || '纸质专业真题',
         clientIp,
         responseExtras: {
           course_id: order.course_id,
@@ -608,7 +613,9 @@ export class OrderService {
       throw new BadRequestException('分类ID不能为空');
     }
 
-    const category = await this.courseCategoryRepository.findOne({ where: { id: categoryId } });
+    const category = await this.courseCategoryRepository.findOne({
+      where: { id: categoryId },
+    });
     if (!category) {
       throw new NotFoundException('分类不存在');
     }
@@ -620,7 +627,9 @@ export class OrderService {
     }
 
     const parentCategory = category.parent_id
-      ? await this.courseCategoryRepository.findOne({ where: { id: category.parent_id } })
+      ? await this.courseCategoryRepository.findOne({
+          where: { id: category.parent_id },
+        })
       : null;
     if (category.parent_id && !parentCategory) {
       throw new BadRequestException('上级分类不存在');
@@ -652,11 +661,7 @@ export class OrderService {
       this.categoryBundleAccessService.batchUserHasCourseAccess(userId, courses),
     ]);
     const now = Date.now();
-    const authMap = new Map(
-      auths
-        .filter((auth) => !auth.expire_time || new Date(auth.expire_time).getTime() > now)
-        .map((auth) => [auth.course_id, auth]),
-    );
+    const authMap = new Map(auths.filter((auth) => !auth.expire_time || new Date(auth.expire_time).getTime() > now).map((auth) => [auth.course_id, auth]));
     const unownedCourses = courses.filter((course) => {
       if (Number(course.price || 0) === 0 || course.is_free === 1) return false;
       if (authMap.has(course.id)) return false;
@@ -711,7 +716,9 @@ export class OrderService {
       };
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: userId },
+    });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
@@ -784,10 +791,7 @@ export class OrderService {
     }
   }
 
-  private resolveShippingAddressForCourses(
-    courses: Array<Pick<Course, 'content_type' | 'name'>>,
-    input?: Record<string, any>,
-  ): OrderShippingAddress | null {
+  private resolveShippingAddressForCourses(courses: Array<Pick<Course, 'content_type' | 'name'>>, input?: Record<string, any>): OrderShippingAddress | null {
     const hasPaperExamCourse = courses.some((course) => course.content_type === 'paper_exam');
     if (!hasPaperExamCourse) {
       return input ? this.normalizeShippingAddress(input, false) : null;
@@ -895,7 +899,9 @@ export class OrderService {
       };
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: userId },
+    });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
@@ -934,23 +940,7 @@ export class OrderService {
   /**
    * 官方代币购课：query_user_balance → 不足则 short_series_coin 充值 → currency_pay 扣代币 → 发货
    */
-  private async processCoinBasedPayment({
-    user,
-    userId,
-    order,
-    payAmountYuan,
-    goodsTitle,
-    clientIp,
-    responseExtras,
-  }: {
-    user: AppUser;
-    userId: number;
-    order: Order;
-    payAmountYuan: number;
-    goodsTitle: string;
-    clientIp?: string;
-    responseExtras: Record<string, unknown>;
-  }) {
+  private async processCoinBasedPayment({ user, userId, order, payAmountYuan, goodsTitle, clientIp, responseExtras }: { user: AppUser; userId: number; order: Order; payAmountYuan: number; goodsTitle: string; clientIp?: string; responseExtras: Record<string, unknown> }) {
     const { balance, fromCache } = await this.coinService.resolveBalanceForOrder(user, clientIp);
     const coinCost = this.coinService.yuanToCoinInt(payAmountYuan);
     const coinPurchase = this.coinService.buildCoinPurchasePlan(coinCost, balance);
@@ -1051,19 +1041,7 @@ export class OrderService {
     };
   }
 
-  private async processWechatPayPayment({
-    user,
-    order,
-    goodsTitle,
-    clientIp,
-    responseExtras,
-  }: {
-    user: AppUser;
-    order: Order;
-    goodsTitle: string;
-    clientIp?: string;
-    responseExtras: Record<string, unknown>;
-  }) {
+  private async processWechatPayPayment({ user, order, goodsTitle, clientIp, responseExtras }: { user: AppUser; order: Order; goodsTitle: string; clientIp?: string; responseExtras: Record<string, unknown> }) {
     const config = this.getCloudPayConfigForOrder(order);
     const paymentParams = await this.createWechatPayPaymentParams({
       user,
@@ -1100,19 +1078,7 @@ export class OrderService {
     };
   }
 
-  private async createWechatPayPaymentParams({
-    user,
-    order,
-    goodsTitle,
-    clientIp,
-    config,
-  }: {
-    user: AppUser;
-    order: Order;
-    goodsTitle: string;
-    clientIp?: string;
-    config?: CloudPayConfig;
-  }) {
+  private async createWechatPayPaymentParams({ user, order, goodsTitle, clientIp, config }: { user: AppUser; order: Order; goodsTitle: string; clientIp?: string; config?: CloudPayConfig }) {
     if (!user.openid) {
       throw new BadRequestException('用户 openid 缺失，请重新登录后再试');
     }
@@ -1163,19 +1129,7 @@ export class OrderService {
   }
 
   /** 官方 short_series_coin 充值参数（无 productId / goodsPrice） */
-  private createCoinRechargePaymentParams({
-    user,
-    order,
-    rechargeCoins,
-    rechargeOrderNo,
-    goodsTitle,
-  }: {
-    user: AppUser;
-    order: Order;
-    rechargeCoins: number;
-    rechargeOrderNo: string;
-    goodsTitle: string;
-  }) {
+  private createCoinRechargePaymentParams({ user, order, rechargeCoins, rechargeOrderNo, goodsTitle }: { user: AppUser; order: Order; rechargeCoins: number; rechargeOrderNo: string; goodsTitle: string }) {
     const config = this.xpayService.getVirtualPayConfig();
     const attach = JSON.stringify({
       type: 'coin_recharge',
@@ -1221,20 +1175,19 @@ export class OrderService {
    */
   private generateOrderNo(): string {
     const timestamp = Date.now();
-    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+    const random = Math.floor(Math.random() * 10000)
+      .toString()
+      .padStart(4, '0');
     return `ORDER${timestamp}${random}`;
   }
 
   /**
    * 为已创建订单拉起代币支付（课程/套餐/激活码等）
    */
-  async startCoinPaymentForOrder(
-    userId: number,
-    orderNo: string,
-    clientIp?: string,
-    options?: { goodsTitle?: string },
-  ) {
-    const order = await this.orderRepository.findOne({ where: { order_no: orderNo } });
+  async startCoinPaymentForOrder(userId: number, orderNo: string, clientIp?: string, options?: { goodsTitle?: string }) {
+    const order = await this.orderRepository.findOne({
+      where: { order_no: orderNo },
+    });
     if (!order) {
       throw new NotFoundException('订单不存在');
     }
@@ -1258,7 +1211,9 @@ export class OrderService {
       throw new BadRequestException('订单已超过10分钟支付时限，请重新下单');
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: userId },
+    });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
@@ -1270,15 +1225,14 @@ export class OrderService {
     };
 
     if (order.order_type === 'package') {
-      const plan =
-        order.package_plan_id && order.package_section_id
-          ? await this.packageService.getPlanForOrder(order.package_section_id, order.package_plan_id)
-          : null;
+      const plan = order.package_plan_id && order.package_section_id ? await this.packageService.getPlanForOrder(order.package_section_id, order.package_plan_id) : null;
       goodsTitle = plan ? `${plan.section.name}-${plan.name}` : '套餐';
       responseExtras.package_section_id = order.package_section_id;
       responseExtras.package_plan_id = order.package_plan_id;
     } else if (order.course_id) {
-      const course = await this.courseRepository.findOne({ where: { id: order.course_id } });
+      const course = await this.courseRepository.findOne({
+        where: { id: order.course_id },
+      });
       if (order.pay_payload?.activation_code_purchase) {
         goodsTitle = course?.name ? `${course.name}-激活码` : '激活码';
       } else {
@@ -1307,11 +1261,7 @@ export class OrderService {
   private getCloudPayConfig(): CloudPayConfig {
     const subAppid = this.configService.get<string>('WECHAT_APPID') || this.configService.get<string>('AppID');
     const subMchId = this.configService.get<string>('WECHAT_PAY_MCH_ID') || this.configService.get<string>('MCH_ID') || '1111726570';
-    const callbackEnvId =
-      this.configService.get<string>('WECHAT_PAY_CLOUDRUN_ENV_ID') ||
-      this.configService.get<string>('WX_CLOUDRUN_ENV_ID') ||
-      this.configService.get<string>('WX_CLOUDBASE_ENV') ||
-      'prod-d1gguk4ie589126ba';
+    const callbackEnvId = this.configService.get<string>('WECHAT_PAY_CLOUDRUN_ENV_ID') || this.configService.get<string>('WX_CLOUDRUN_ENV_ID') || this.configService.get<string>('WX_CLOUDBASE_ENV') || 'prod-d1gguk4ie589126ba';
     const callbackService = this.configService.get<string>('WECHAT_PAY_CALLBACK_SERVICE') || 'prod';
     const callbackPath = this.configService.get<string>('WECHAT_PAY_CALLBACK_PATH') || '/api/app/order/pay/notify';
     const spbillCreateIp = this.configService.get<string>('WECHAT_PAY_SPBILL_CREATE_IP') || '127.0.0.1';
@@ -1349,22 +1299,12 @@ export class OrderService {
 
   private getWechatPaySubMchIdFromOrder(order: Pick<Order, 'pay_payload'> | null | undefined) {
     const payPayload = order?.pay_payload || {};
-    return (
-      this.pickPayloadString(payPayload.wechat_pay, ['sub_mch_id', 'subMchId']) ||
-      this.pickPayloadString(payPayload.wechat_pay_callback, ['sub_mch_id', 'subMchId']) ||
-      this.pickPayloadString(payPayload.wechat_pay_confirm?.query_result, ['sub_mch_id', 'subMchId']) ||
-      this.pickPayloadString(payPayload.wechat_pay_admin_sync?.query_result, ['sub_mch_id', 'subMchId'])
-    );
+    return this.pickPayloadString(payPayload.wechat_pay, ['sub_mch_id', 'subMchId']) || this.pickPayloadString(payPayload.wechat_pay_callback, ['sub_mch_id', 'subMchId']) || this.pickPayloadString(payPayload.wechat_pay_confirm?.query_result, ['sub_mch_id', 'subMchId']) || this.pickPayloadString(payPayload.wechat_pay_admin_sync?.query_result, ['sub_mch_id', 'subMchId']);
   }
 
   private getWechatPayTransactionIdFromOrder(order: Pick<Order, 'pay_payload'> | null | undefined) {
     const payPayload = order?.pay_payload || {};
-    return (
-      this.pickPayloadString(payPayload.wechat_pay, ['transaction_id', 'transactionId']) ||
-      this.pickPayloadString(payPayload.wechat_pay_callback, ['transaction_id', 'transactionId']) ||
-      this.pickPayloadString(payPayload.wechat_pay_confirm?.query_result, ['transaction_id', 'transactionId']) ||
-      this.pickPayloadString(payPayload.wechat_pay_admin_sync?.query_result, ['transaction_id', 'transactionId'])
-    );
+    return this.pickPayloadString(payPayload.wechat_pay, ['transaction_id', 'transactionId']) || this.pickPayloadString(payPayload.wechat_pay_callback, ['transaction_id', 'transactionId']) || this.pickPayloadString(payPayload.wechat_pay_confirm?.query_result, ['transaction_id', 'transactionId']) || this.pickPayloadString(payPayload.wechat_pay_admin_sync?.query_result, ['transaction_id', 'transactionId']);
   }
 
   private getCloudPayConfigForOrder(order: Pick<Order, 'pay_payload'> | null | undefined) {
@@ -1374,12 +1314,9 @@ export class OrderService {
     return {
       ...config,
       subMchId: orderSubMchId || config.subMchId,
-      callbackEnvId:
-        this.pickPayloadString(wechatPay, ['callback_env_id', 'callbackEnvId']) || config.callbackEnvId,
-      callbackService:
-        this.pickPayloadString(wechatPay, ['callback_service', 'callbackService']) || config.callbackService,
-      callbackPath:
-        this.pickPayloadString(wechatPay, ['callback_path', 'callbackPath']) || config.callbackPath,
+      callbackEnvId: this.pickPayloadString(wechatPay, ['callback_env_id', 'callbackEnvId']) || config.callbackEnvId,
+      callbackService: this.pickPayloadString(wechatPay, ['callback_service', 'callbackService']) || config.callbackService,
+      callbackPath: this.pickPayloadString(wechatPay, ['callback_path', 'callbackPath']) || config.callbackPath,
     };
   }
 
@@ -1389,7 +1326,9 @@ export class OrderService {
       return null;
     }
 
-    const directOrder = await this.orderRepository.findOne({ where: { order_no: normalized } });
+    const directOrder = await this.orderRepository.findOne({
+      where: { order_no: normalized },
+    });
     if (directOrder) {
       return directOrder;
     }
@@ -1434,22 +1373,29 @@ export class OrderService {
     order: Order,
     user: AppUser,
     clientIp?: string,
-    options?: { allowMissingSessionKey?: boolean; rechargeQueryAttempts?: number; allowCancelledPayment?: boolean },
+    options?: {
+      allowMissingSessionKey?: boolean;
+      rechargeQueryAttempts?: number;
+      allowCancelledPayment?: boolean;
+    },
   ) {
     if (order.status === OrderStatus.PAID) {
-      return { fulfilled: true, order_no: order.order_no, status: order.status };
+      return {
+        fulfilled: true,
+        order_no: order.order_no,
+        status: order.status,
+      };
     }
-    if (
-      order.status !== OrderStatus.PENDING &&
-      !(options?.allowCancelledPayment && order.status === OrderStatus.CANCELLED)
-    ) {
+    if (order.status !== OrderStatus.PENDING && !(options?.allowCancelledPayment && order.status === OrderStatus.CANCELLED)) {
       return { fulfilled: false, reason: '订单状态不可完成支付' };
     }
     if (!['virtual_payment', 'wechat_coin'].includes(String(order.pay_provider || ''))) {
       return { fulfilled: false, reason: '订单支付方式不匹配' };
     }
 
-    const coinPurchase = { ...(order.pay_payload?.coin_purchase || {}) } as Record<string, any>;
+    const coinPurchase = {
+      ...(order.pay_payload?.coin_purchase || {}),
+    } as Record<string, any>;
     const coinCost = Number(coinPurchase.coin_cost || this.coinService.yuanToCoinInt(Number(order.amount || 0)));
 
     if (Number(coinPurchase.recharge_coins || 0) > 0 && !coinPurchase.recharge_settled) {
@@ -1548,7 +1494,9 @@ export class OrderService {
 
     const rechargeOrderNo = String(order.pay_payload?.coin_purchase?.recharge_order_no || '');
     if (rechargeOrderNo && String(orderNo) === rechargeOrderNo) {
-      const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
+      const user = await this.appUserRepository.findOne({
+        where: { id: order.user_id },
+      });
       if (user) {
         await this.tryFulfillVirtualPaymentOrder(order, user, undefined, {
           allowMissingSessionKey: true,
@@ -1623,11 +1571,7 @@ export class OrderService {
         request: this.maskWechatPayRequest(data),
         error: error?.message || error,
       });
-      throw new BadRequestException(
-        this.getWechatPayErrorMessage(responseData, '', apiName) ||
-        error?.message ||
-        `微信支付${apiName}接口调用失败`,
-      );
+      throw new BadRequestException(this.getWechatPayErrorMessage(responseData, '', apiName) || error?.message || `微信支付${apiName}接口调用失败`);
     }
   }
 
@@ -1644,18 +1588,7 @@ export class OrderService {
   private getWechatPayErrorMessage(result: Record<string, any> | undefined, fallback: string, apiName?: string) {
     if (!result) return fallback;
     const code = String(result.err_code || result.errCode || result.code || '').trim();
-    const message = String(
-      result.err_code_des ||
-      result.errCodeDes ||
-      result.return_msg ||
-      result.returnMsg ||
-      result.err_msg ||
-      result.errMsg ||
-      result.message ||
-      result.msg ||
-      fallback ||
-      '',
-    );
+    const message = String(result.err_code_des || result.errCodeDes || result.return_msg || result.returnMsg || result.err_msg || result.errMsg || result.message || result.msg || fallback || '');
 
     if (code === 'NO_AUTH' || message.includes('特约子商户商户号未授权服务商的产品权限')) {
       if (apiName === 'refund') {
@@ -1833,7 +1766,11 @@ export class OrderService {
       throw new ForbiddenException('无权确认该订单');
     }
     if (order.status === OrderStatus.PAID) {
-      return { message: '订单已支付', order_no: order.order_no, status: order.status };
+      return {
+        message: '订单已支付',
+        order_no: order.order_no,
+        status: order.status,
+      };
     }
     if (![OrderStatus.PENDING, OrderStatus.CANCELLED].includes(order.status)) {
       throw new BadRequestException('当前订单状态不可确认支付');
@@ -1842,17 +1779,15 @@ export class OrderService {
       throw new BadRequestException('订单支付方式不匹配');
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: userId },
+    });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
 
     if (order.pay_provider === 'wechat_pay') {
-      const result = await this.waitForWechatPaySuccess(
-        order.order_no,
-        Number(this.configService.get<string>('WECHAT_PAY_QUERY_ATTEMPTS') || 5),
-        order,
-      );
+      const result = await this.waitForWechatPaySuccess(order.order_no, Number(this.configService.get<string>('WECHAT_PAY_QUERY_ATTEMPTS') || 5), order);
       const tradeState = result?.trade_state || result?.tradeState;
       if (tradeState !== 'SUCCESS') {
         throw new BadRequestException('暂未查询到微信支付成功记录，请稍后再试');
@@ -1950,12 +1885,51 @@ export class OrderService {
     }
   }
 
+  private async finalizeCommissionReversal(order: Order) {
+    try {
+      await this.distributorService.cancelOrderCommission(order.id);
+      order.pay_payload = {
+        ...(order.pay_payload || {}),
+        refund: {
+          ...(order.pay_payload?.refund || {}),
+          commission_reversal_status: 'completed',
+          commission_reversed_at: new Date().toISOString(),
+          commission_reversal_error: null,
+        },
+      };
+      await this.orderRepository.save(order);
+    } catch (error) {
+      const message = error?.message || String(error);
+      order.pay_payload = {
+        ...(order.pay_payload || {}),
+        refund: {
+          ...(order.pay_payload?.refund || {}),
+          commission_reversal_status: 'pending',
+          commission_reversal_error: message.slice(0, 500),
+        },
+      };
+      await this.orderRepository.save(order);
+      this.logger.error(`退款佣金撤销待重试 ${order.order_no}: ${message}`);
+      throw new ServiceUnavailableException('退款已完成，佣金撤销暂未完成，请重试该退款操作');
+    }
+  }
+
   async refundOrder(orderId: number, adminId: number, dto?: RefundOrderDto) {
-    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+    });
     if (!order) {
       throw new NotFoundException('订单不存在');
     }
     if (order.pay_payload?.refund?.refunded_at) {
+      if (order.pay_payload?.refund?.commission_reversal_status === 'pending') {
+        await this.finalizeCommissionReversal(order);
+        return {
+          message: '退款佣金补偿已完成',
+          order_no: order.order_no,
+          status: order.status,
+        };
+      }
       throw new BadRequestException('该订单已退款');
     }
     if (![OrderStatus.PAID, OrderStatus.AFTER_SALE].includes(order.status)) {
@@ -1966,23 +1940,23 @@ export class OrderService {
     }
     await this.cloudPrintService.reserveRefund(orderId);
 
-    const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: order.user_id },
+    });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
 
-    const coinPurchase = { ...(order.pay_payload?.coin_purchase || {}) } as Record<string, any>;
+    const coinPurchase = {
+      ...(order.pay_payload?.coin_purchase || {}),
+    } as Record<string, any>;
     const coinCost = Number(coinPurchase.coin_cost || this.coinService.yuanToCoinInt(Number(order.amount || 0)));
     const refundRecords: Record<string, unknown> = {};
 
     if (Number(order.amount || 0) > 0) {
       if (order.pay_provider === 'wechat_pay') {
         const wechatPayRefundOrderId = this.generateRefundOrderId(order.order_no, 'WX_RF');
-        refundRecords.wechat_pay_refund = await this.refundWechatPayOrder(
-          order,
-          wechatPayRefundOrderId,
-          dto?.remark || '售后退款',
-        );
+        refundRecords.wechat_pay_refund = await this.refundWechatPayOrder(order, wechatPayRefundOrderId, dto?.remark || '售后退款');
         refundRecords.wechat_pay_refund_order_id = wechatPayRefundOrderId;
       } else if (coinPurchase.currency_paid) {
         const currencyPayOrderId = String(coinPurchase.currency_pay_order_id || `${order.order_no}_COIN`);
@@ -2037,11 +2011,7 @@ export class OrderService {
     };
     await this.orderRepository.save(order);
 
-    try {
-      await this.distributorService.cancelOrderCommission(order.id);
-    } catch (error) {
-      this.logger.error(`退款佣金撤销失败 ${order.order_no}: ${error?.message || error}`);
-    }
+    await this.finalizeCommissionReversal(order);
 
     return {
       message: '退款成功',
@@ -2051,7 +2021,9 @@ export class OrderService {
   }
 
   async syncOrderPaymentStatus(orderId: number) {
-    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+    });
     if (!order) {
       throw new NotFoundException('订单不存在');
     }
@@ -2067,17 +2039,15 @@ export class OrderService {
       throw new BadRequestException('当前订单不可同步支付状态');
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: order.user_id },
+    });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
 
     if (order.pay_provider === 'wechat_pay') {
-      const result = await this.waitForWechatPaySuccess(
-        order.order_no,
-        Number(this.configService.get<string>('WECHAT_PAY_QUERY_ATTEMPTS') || 5),
-        order,
-      );
+      const result = await this.waitForWechatPaySuccess(order.order_no, Number(this.configService.get<string>('WECHAT_PAY_QUERY_ATTEMPTS') || 5), order);
       const tradeState = result?.trade_state || result?.tradeState;
       if (tradeState !== 'SUCCESS') {
         throw new BadRequestException('暂未查询到微信支付成功记录');
@@ -2119,7 +2089,9 @@ export class OrderService {
   }
 
   async shipOrder(orderId: number, dto: ShipOrderDto, actor: ShipOrderActor) {
-    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+    });
     if (!order) {
       throw new NotFoundException('订单不存在');
     }
@@ -2185,13 +2157,18 @@ export class OrderService {
   }
 
   async queryOrderLogistics(orderId: number, requester?: { userId?: number; appUserId?: number; allowAdmin?: boolean }) {
-    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+    });
     if (!order) {
       throw new NotFoundException('订单不存在');
     }
 
     if (requester?.appUserId && order.user_id !== requester.appUserId) {
-      const user = await this.appUserRepository.findOne({ where: { id: requester.appUserId }, select: ['id', 'role'] });
+      const user = await this.appUserRepository.findOne({
+        where: { id: requester.appUserId },
+        select: ['id', 'role'],
+      });
       if (!requester.allowAdmin || user?.role !== AppUserRole.ADMIN) {
         throw new ForbiddenException('无权查看该订单物流');
       }
@@ -2249,7 +2226,9 @@ export class OrderService {
       return;
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: order.user_id },
+    });
     if (!user) {
       return;
     }
@@ -2280,7 +2259,9 @@ export class OrderService {
       return;
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: order.user_id } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: order.user_id },
+    });
     if (!user || (openId && user.openid !== openId)) {
       return;
     }
@@ -2336,11 +2317,7 @@ export class OrderService {
     await this.assertAppSuperAdmin(appUserId);
 
     const normalizedDeliveryStatus = String(deliveryStatus || 'pending').trim();
-    if (
-      normalizedDeliveryStatus &&
-      normalizedDeliveryStatus !== 'all' &&
-      !Object.values(OrderDeliveryStatus).includes(normalizedDeliveryStatus as OrderDeliveryStatus)
-    ) {
+    if (normalizedDeliveryStatus && normalizedDeliveryStatus !== 'all' && !Object.values(OrderDeliveryStatus).includes(normalizedDeliveryStatus as OrderDeliveryStatus)) {
       throw new BadRequestException('发货状态参数错误');
     }
 
@@ -2403,7 +2380,9 @@ export class OrderService {
           deliveryStatus: normalizedDeliveryStatus,
         });
       } else {
-        query.andWhere('o.delivery_status = :deliveryStatus', { deliveryStatus: normalizedDeliveryStatus });
+        query.andWhere('o.delivery_status = :deliveryStatus', {
+          deliveryStatus: normalizedDeliveryStatus,
+        });
       }
     }
 
@@ -2422,34 +2401,7 @@ export class OrderService {
       .leftJoin(Course, 'course', 'course.id = o.course_id')
       .leftJoin('package_section', 'packageSection', 'packageSection.id = o.package_section_id')
       .where('o.user_id = :userId', { userId })
-      .select([
-        'o.id AS id',
-        'o.order_no AS orderNo',
-        'o.amount AS amount',
-        'o.status AS status',
-        'o.order_type AS orderType',
-        'o.course_id AS courseId',
-        'o.package_section_id AS packageSectionId',
-        'o.package_plan_id AS packagePlanId',
-        'o.discount_amount AS discountAmount',
-        'o.create_time AS createTime',
-        'o.paid_time AS paidTime',
-        'o.pay_payload AS payPayload',
-        'o.shipping_address AS shippingAddress',
-        'o.delivery_status AS deliveryStatus',
-        'o.tracking_no AS trackingNo',
-        'o.shipper_code AS shipperCode',
-        'o.shipper_name AS shipperName',
-        'o.shipped_at AS shippedAt',
-        'o.shipment_remark AS shipmentRemark',
-        'o.logistics_snapshot AS logisticsSnapshot',
-        'course.name AS courseName',
-        'course.cover_img AS coverImg',
-        'course.content_type AS contentType',
-        'course.file_type AS fileType',
-        'packageSection.name AS packageSectionName',
-        'packageSection.cover_img AS packageCoverImg',
-      ])
+      .select(['o.id AS id', 'o.order_no AS orderNo', 'o.amount AS amount', 'o.status AS status', 'o.order_type AS orderType', 'o.course_id AS courseId', 'o.package_section_id AS packageSectionId', 'o.package_plan_id AS packagePlanId', 'o.discount_amount AS discountAmount', 'o.create_time AS createTime', 'o.paid_time AS paidTime', 'o.pay_payload AS payPayload', 'o.shipping_address AS shippingAddress', 'o.delivery_status AS deliveryStatus', 'o.tracking_no AS trackingNo', 'o.shipper_code AS shipperCode', 'o.shipper_name AS shipperName', 'o.shipped_at AS shippedAt', 'o.shipment_remark AS shipmentRemark', 'o.logistics_snapshot AS logisticsSnapshot', 'course.name AS courseName', 'course.cover_img AS coverImg', 'course.content_type AS contentType', 'course.file_type AS fileType', 'packageSection.name AS packageSectionName', 'packageSection.cover_img AS packageCoverImg'])
       .orderBy('o.create_time', 'DESC');
 
     if (status && status !== 'all') {
@@ -2471,26 +2423,11 @@ export class OrderService {
       }
       const cartCount = Array.isArray(payPayload?.cart_items) ? payPayload.cart_items.length : 0;
       const cartItems = this.mapCartItems(payPayload);
-      const requiresShipping =
-        payPayload?.fulfillment_type === 'paper' ||
-        row.contentType === 'paper_exam' ||
-        cartItems.some((item) => item.contentType === 'paper_exam') ||
-        Boolean(row.shippingAddress);
+      const requiresShipping = payPayload?.fulfillment_type === 'paper' || row.contentType === 'paper_exam' || cartItems.some((item) => item.contentType === 'paper_exam') || Boolean(row.shippingAddress);
       const categoryBundle = payPayload?.category_bundle || null;
       const isPaperMaterial = payPayload?.fulfillment_type === 'paper';
       const paperMaterialQuantity = Math.max(1, Number(payPayload?.paper_material?.quantity || 1));
-      const productName =
-        isPaperMaterial && cartCount > 0
-          ? this.getPaperCartTitle(cartItems)
-        : cartCount > 1
-          ? `购物车(${cartCount}门课程)`
-          : row.orderType === 'package'
-            ? row.packageSectionName || '套餐'
-            : row.orderType === 'category'
-              ? categoryBundle?.title || '分类全部课程'
-            : isPaperMaterial
-              ? `${row.courseName || '资料'}（纸质资料${paperMaterialQuantity > 1 ? ` × ${paperMaterialQuantity}` : ''}）`
-              : row.courseName || '课程';
+      const productName = isPaperMaterial && cartCount > 0 ? this.getPaperCartTitle(cartItems) : cartCount > 1 ? `购物车(${cartCount}门课程)` : row.orderType === 'package' ? row.packageSectionName || '套餐' : row.orderType === 'category' ? categoryBundle?.title || '分类全部课程' : isPaperMaterial ? `${row.courseName || '资料'}（纸质资料${paperMaterialQuantity > 1 ? ` × ${paperMaterialQuantity}` : ''}）` : row.courseName || '课程';
 
       return {
         id: Number(row.id),
@@ -2546,10 +2483,7 @@ export class OrderService {
         payment_params: null,
       };
     }
-    if (
-      order.status !== OrderStatus.PENDING ||
-      !['virtual_payment', 'wechat_pay'].includes(String(order.pay_provider || ''))
-    ) {
+    if (order.status !== OrderStatus.PENDING || !['virtual_payment', 'wechat_pay'].includes(String(order.pay_provider || ''))) {
       throw new BadRequestException('当前订单不可继续支付');
     }
     if (this.isOrderPaymentExpired(order)) {
@@ -2557,14 +2491,14 @@ export class OrderService {
       throw new BadRequestException('订单已超过10分钟支付时限，请重新下单');
     }
 
-    const user = await this.appUserRepository.findOne({ where: { id: userId } });
+    const user = await this.appUserRepository.findOne({
+      where: { id: userId },
+    });
     if (!user) {
       throw new NotFoundException('用户不存在');
     }
 
-    const course = order.course_id
-      ? await this.courseRepository.findOne({ where: { id: order.course_id } })
-      : null;
+    const course = order.course_id ? await this.courseRepository.findOne({ where: { id: order.course_id } }) : null;
     const payPayload = this.parseJsonColumn(order.pay_payload) || {};
     const requiresShipping = await this.orderRequiresShipping(order);
 
@@ -2575,13 +2509,7 @@ export class OrderService {
     if (order.pay_provider === 'wechat_pay' || requiresShipping) {
       const cartItems = Array.isArray(payPayload.cart_items) ? payPayload.cart_items : [];
       const cartCount = cartItems.length;
-      const goodsTitle = payPayload.fulfillment_type === 'paper' && cartCount > 0
-        ? this.getPaperCartTitle(cartItems)
-        : payPayload.is_cart
-        ? cartCount > 1
-          ? `购物车(${cartCount}门课程)`
-          : cartItems[0]?.name || course?.name || '纸质专业真题'
-        : course?.name || '纸质专业真题';
+      const goodsTitle = payPayload.fulfillment_type === 'paper' && cartCount > 0 ? this.getPaperCartTitle(cartItems) : payPayload.is_cart ? (cartCount > 1 ? `购物车(${cartCount}门课程)` : cartItems[0]?.name || course?.name || '纸质专业真题') : course?.name || '纸质专业真题';
 
       return this.processWechatPayPayment({
         user,
@@ -2594,11 +2522,7 @@ export class OrderService {
           ...(payPayload.fulfillment_type === 'paper' ? { fulfillment_type: 'paper' } : {}),
           ...(payPayload.is_cart
             ? {
-                course_ids: Array.isArray(payPayload.cart_items)
-                  ? payPayload.cart_items
-                      .map((item: Record<string, any>) => Number(item?.course_id))
-                      .filter((id) => id > 0)
-                  : [],
+                course_ids: Array.isArray(payPayload.cart_items) ? payPayload.cart_items.map((item: Record<string, any>) => Number(item?.course_id)).filter((id) => id > 0) : [],
                 is_cart: true,
               }
             : {}),
@@ -2630,9 +2554,7 @@ export class OrderService {
     }
 
     if (order.order_type === 'package') {
-      const plan = order.package_plan_id && order.package_section_id
-        ? await this.packageService.getPlanForOrder(order.package_section_id, order.package_plan_id)
-        : null;
+      const plan = order.package_plan_id && order.package_section_id ? await this.packageService.getPlanForOrder(order.package_section_id, order.package_plan_id) : null;
 
       return this.processCoinBasedPayment({
         user,
@@ -2672,13 +2594,7 @@ export class OrderService {
 
     const activationPurchase = payPayload.activation_code_purchase;
     const cartCount = Array.isArray(payPayload.cart_items) ? payPayload.cart_items.length : 0;
-    const goodsTitle = payPayload.is_cart
-      ? cartCount > 1
-        ? `购物车(${cartCount}门课程)`
-        : payPayload.cart_items?.[0]?.name || course?.name || '课程'
-      : activationPurchase
-        ? `${course?.name || '课程'}-激活码`
-        : course?.name || '课程';
+    const goodsTitle = payPayload.is_cart ? (cartCount > 1 ? `购物车(${cartCount}门课程)` : payPayload.cart_items?.[0]?.name || course?.name || '课程') : activationPurchase ? `${course?.name || '课程'}-激活码` : course?.name || '课程';
 
     return this.processCoinBasedPayment({
       user,
@@ -2700,14 +2616,13 @@ export class OrderService {
   }
 
   private async cancelOrderIfPending(orderId: number, userId: number) {
-    return this.orderRepository.update(
-      { id: orderId, user_id: userId, status: OrderStatus.PENDING },
-      { status: OrderStatus.CANCELLED },
-    );
+    return this.orderRepository.update({ id: orderId, user_id: userId, status: OrderStatus.PENDING }, { status: OrderStatus.CANCELLED });
   }
 
   async cancelPendingOrder(userId: number, orderId: number) {
-    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+    });
     if (!order) {
       throw new NotFoundException('订单不存在');
     }
@@ -2715,7 +2630,11 @@ export class OrderService {
       throw new ForbiddenException('无权取消该订单');
     }
     if (order.status === OrderStatus.CANCELLED) {
-      return { message: '订单已取消', order_no: order.order_no, status: order.status };
+      return {
+        message: '订单已取消',
+        order_no: order.order_no,
+        status: order.status,
+      };
     }
     if (order.status !== OrderStatus.PENDING) {
       throw new BadRequestException('仅待支付订单可取消');
@@ -2723,20 +2642,28 @@ export class OrderService {
 
     const result = await this.cancelOrderIfPending(order.id, userId);
     if (Number(result.affected || 0) !== 1) {
-      const latest = await this.orderRepository.findOne({ where: { id: order.id } });
+      const latest = await this.orderRepository.findOne({
+        where: { id: order.id },
+      });
       if (latest?.status === OrderStatus.CANCELLED) {
-        return { message: '订单已取消', order_no: latest.order_no, status: latest.status };
+        return {
+          message: '订单已取消',
+          order_no: latest.order_no,
+          status: latest.status,
+        };
       }
       throw new BadRequestException('订单状态已变化，请刷新后重试');
     }
 
-    return { message: '订单已取消', order_no: order.order_no, status: OrderStatus.CANCELLED };
+    return {
+      message: '订单已取消',
+      order_no: order.order_no,
+      status: OrderStatus.CANCELLED,
+    };
   }
 
   private getOrderPayAmountYuan(order: Order) {
-    return normalizePayAmountYuan(
-      Math.max(0, Number(order.original_amount || 0) - Number(order.discount_amount || 0)),
-    );
+    return normalizePayAmountYuan(Math.max(0, Number(order.original_amount || 0) - Number(order.discount_amount || 0)));
   }
 
   async getOrderCounts(userId: number) {
@@ -2841,10 +2768,7 @@ export class OrderService {
       return true;
     }
 
-    const courseIds = [
-      order.course_id ? Number(order.course_id) : 0,
-      ...cartItems.map((item: Record<string, any>) => Number(item.course_id || item.courseId || 0)),
-    ].filter((id) => id > 0);
+    const courseIds = [order.course_id ? Number(order.course_id) : 0, ...cartItems.map((item: Record<string, any>) => Number(item.course_id || item.courseId || 0))].filter((id) => id > 0);
 
     if (!courseIds.length) {
       return false;
@@ -2883,16 +2807,8 @@ export class OrderService {
 
   private getWechatPublicApiUrls(pathname: string) {
     const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
-    const useInternal = Boolean(
-      process.env.WX_CLOUD_RUN_ENV === 'true' ||
-      process.env.WX_CLOUD_ENV ||
-      process.env.WX_CLOUDBASE_ENV ||
-      process.env.CBR_ENV_ID ||
-      this.configService.get<string>('WECHAT_PAY_CLOUDRUN_ENV_ID'),
-    );
-    return useInternal
-      ? [`http://api.weixin.qq.com${normalizedPath}`, `https://api.weixin.qq.com${normalizedPath}`]
-      : [`https://api.weixin.qq.com${normalizedPath}`];
+    const useInternal = Boolean(process.env.WX_CLOUD_RUN_ENV === 'true' || process.env.WX_CLOUD_ENV || process.env.WX_CLOUDBASE_ENV || process.env.CBR_ENV_ID || this.configService.get<string>('WECHAT_PAY_CLOUDRUN_ENV_ID'));
+    return useInternal ? [`http://api.weixin.qq.com${normalizedPath}`, `https://api.weixin.qq.com${normalizedPath}`] : [`https://api.weixin.qq.com${normalizedPath}`];
   }
 
   private isWechatExpressEnabled() {
@@ -2909,19 +2825,12 @@ export class OrderService {
   }
 
   private buildWechatExpressOrderDetailPath(order: Pick<Order, 'id'>) {
-    const template = String(
-      this.configService.get<string>('WECHAT_EXPRESS_ORDER_DETAIL_PATH') ||
-      'pages/sub-pages/order/index?status=paid',
-    ).trim();
+    const template = String(this.configService.get<string>('WECHAT_EXPRESS_ORDER_DETAIL_PATH') || 'pages/sub-pages/order/index?status=paid').trim();
     return template.replace(/\{orderId\}/g, String(order.id));
   }
 
   private getWechatExpressGoodsImage(course?: Course | null) {
-    return (
-      this.normalizeWechatExpressImageUrl(course?.cover_img) ||
-      this.normalizeWechatExpressImageUrl(this.configService.get<string>('WECHAT_EXPRESS_GOODS_IMAGE_URL')) ||
-      this.normalizeWechatExpressImageUrl(this.configService.get<string>('WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL'))
-    );
+    return this.normalizeWechatExpressImageUrl(course?.cover_img) || this.normalizeWechatExpressImageUrl(this.configService.get<string>('WECHAT_EXPRESS_GOODS_IMAGE_URL')) || this.normalizeWechatExpressImageUrl(this.configService.get<string>('WECHAT_VIRTUAL_PAY_DEFAULT_ITEM_URL'));
   }
 
   private getWechatExpressGoodsName(order: Pick<Order, 'pay_payload'>, course?: Course | null) {
@@ -2935,7 +2844,9 @@ export class OrderService {
     if (cartItems.length > 1) {
       return `纸质真题合集(${cartItems.length}门)`;
     }
-    return String(cartItems[0]?.name || course?.name || '纸质专业真题').trim().slice(0, 60);
+    return String(cartItems[0]?.name || course?.name || '纸质专业真题')
+      .trim()
+      .slice(0, 60);
   }
 
   private getWechatExpressDeliveryId(shipperCode?: string | null) {
@@ -2944,9 +2855,7 @@ export class OrderService {
     const mapped = String(this.configService.get<string>(`WECHAT_EXPRESS_DELIVERY_ID_${code.toUpperCase()}`) || '').trim();
     if (mapped) return mapped;
 
-    const useShipperCode = String(
-      this.configService.get<string>('WECHAT_EXPRESS_USE_SHIPPER_CODE_AS_DELIVERY_ID') || 'false',
-    ).toLowerCase();
+    const useShipperCode = String(this.configService.get<string>('WECHAT_EXPRESS_USE_SHIPPER_CODE_AS_DELIVERY_ID') || 'false').toLowerCase();
     return ['1', 'true', 'on', 'yes'].includes(useShipperCode) ? code : '';
   }
 
@@ -2989,9 +2898,7 @@ export class OrderService {
       };
     }
 
-    const course = order.course_id
-      ? await this.courseRepository.findOne({ where: { id: order.course_id } })
-      : null;
+    const course = order.course_id ? await this.courseRepository.findOne({ where: { id: order.course_id } }) : null;
     const goodsImgUrl = this.getWechatExpressGoodsImage(course);
     if (!goodsImgUrl) {
       return {
@@ -3073,11 +2980,7 @@ export class OrderService {
     throw lastError;
   }
 
-  private async attachWechatExpressSnapshot(
-    order: Order,
-    snapshot: LogisticsSnapshot,
-    options: { syncMessage: boolean },
-  ): Promise<LogisticsSnapshot> {
+  private async attachWechatExpressSnapshot(order: Order, snapshot: LogisticsSnapshot, options: { syncMessage: boolean }): Promise<LogisticsSnapshot> {
     const queriedAt = new Date().toISOString();
     const previous = this.parseJsonColumn(order.logistics_snapshot) || {};
     const previousWechat = previous.wechat || {};
@@ -3185,11 +3088,7 @@ export class OrderService {
         success: Boolean(followWaybillToken),
         trackingSuccess: Boolean(waybillToken),
         messageSuccess: Boolean(followWaybillToken),
-        message: errors.length
-          ? errors.join('；')
-          : followWaybillToken
-            ? '微信物流消息已绑定'
-            : '微信物流消息尚未绑定',
+        message: errors.length ? errors.join('；') : followWaybillToken ? '微信物流消息已绑定' : '微信物流消息尚未绑定',
         reason: errors.join('；'),
         trackingError,
         messageError,
@@ -3207,31 +3106,24 @@ export class OrderService {
   }
 
   private getKdniaoConfig() {
-    const businessId = String(
-      this.configService.get<string>('KDNIAO_EBUSINESS_ID') ||
-      this.configService.get<string>('KDNIAO_BUSINESS_ID') ||
-      '',
-    ).trim();
-    const apiKey = String(
-      this.configService.get<string>('KDNIAO_API_KEY') ||
-      this.configService.get<string>('KDNIAO_APP_KEY') ||
-      '',
-    ).trim();
+    const businessId = String(this.configService.get<string>('KDNIAO_EBUSINESS_ID') || this.configService.get<string>('KDNIAO_BUSINESS_ID') || '').trim();
+    const apiKey = String(this.configService.get<string>('KDNIAO_API_KEY') || this.configService.get<string>('KDNIAO_APP_KEY') || '').trim();
 
     return {
       enabled: Boolean(businessId && apiKey),
       businessId,
       apiKey,
-      apiUrl:
-        this.configService.get<string>('KDNIAO_API_URL') ||
-        'https://api.kdniao.com/Ebusiness/EbusinessOrderHandle.aspx',
+      apiUrl: this.configService.get<string>('KDNIAO_API_URL') || 'https://api.kdniao.com/Ebusiness/EbusinessOrderHandle.aspx',
       queryRequestType: this.configService.get<string>('KDNIAO_QUERY_REQUEST_TYPE') || '1002',
       recognizeRequestType: this.configService.get<string>('KDNIAO_RECOGNIZE_REQUEST_TYPE') || '2002',
     };
   }
 
   private createKdniaoDataSign(requestData: string, apiKey: string) {
-    return crypto.createHash('md5').update(requestData + apiKey, 'utf8').digest('base64');
+    return crypto
+      .createHash('md5')
+      .update(requestData + apiKey, 'utf8')
+      .digest('base64');
   }
 
   private async callKdniaoApi(requestType: string, requestBody: Record<string, any>) {
@@ -3249,7 +3141,9 @@ export class OrderService {
     form.set('DataType', '2');
 
     const response = await axios.post(config.apiUrl, form.toString(), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8',
+      },
       timeout: 10000,
     });
     return typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
@@ -3265,11 +3159,7 @@ export class OrderService {
       const result = await this.callKdniaoApi(config.recognizeRequestType, {
         LogisticCode: trackingNo,
       });
-      const candidates = Array.isArray(result?.Shippers)
-        ? result.Shippers
-        : Array.isArray(result?.shippers)
-          ? result.shippers
-          : [];
+      const candidates = Array.isArray(result?.Shippers) ? result.Shippers : Array.isArray(result?.shippers) ? result.shippers : [];
       const first = candidates[0] || result;
       const shipperCode = String(first?.ShipperCode || first?.shipperCode || result?.ShipperCode || '').trim();
       const shipperName = String(first?.ShipperName || first?.shipperName || result?.ShipperName || '').trim();
@@ -3301,11 +3191,7 @@ export class OrderService {
     return state ? map[state] || state : '';
   }
 
-  private async queryLogisticsSnapshot(input: {
-    trackingNo: string;
-    shipperCode?: string;
-    shipperName?: string;
-  }): Promise<LogisticsSnapshot> {
+  private async queryLogisticsSnapshot(input: { trackingNo: string; shipperCode?: string; shipperName?: string }): Promise<LogisticsSnapshot> {
     const trackingNo = String(input.trackingNo || '').trim();
     const config = this.getKdniaoConfig();
     const queriedAt = new Date().toISOString();
@@ -3325,9 +3211,7 @@ export class OrderService {
     }
 
     try {
-      const recognized = input.shipperCode
-        ? null
-        : await this.recognizeKdniaoShipper(trackingNo);
+      const recognized = input.shipperCode ? null : await this.recognizeKdniaoShipper(trackingNo);
       const shipperCode = input.shipperCode || recognized?.shipperCode || '';
       const shipperName = input.shipperName || recognized?.shipperName || '';
 
@@ -3336,11 +3220,7 @@ export class OrderService {
         ShipperCode: shipperCode || undefined,
         LogisticCode: trackingNo,
       });
-      const traces = Array.isArray(result?.Traces)
-        ? result.Traces
-        : Array.isArray(result?.traces)
-          ? result.traces
-          : [];
+      const traces = Array.isArray(result?.Traces) ? result.Traces : Array.isArray(result?.traces) ? result.traces : [];
       const state = String(result?.State || result?.state || '').trim();
       const success = result?.Success !== false && result?.success !== false;
 
@@ -3441,18 +3321,7 @@ export class OrderService {
     const isPaperMaterial = payPayload?.fulfillment_type === 'paper';
     const paperMaterialQuantity = Math.max(1, Number(payPayload?.paper_material?.quantity || 1));
 
-    const productName =
-      isPaperMaterial && cartItems.length > 0
-        ? this.getPaperCartTitle(cartItems)
-      : cartItems.length > 1
-        ? `购物车(${cartItems.length}门课程)`
-        : row.orderType === 'package'
-          ? row.packageSectionName || '套餐'
-          : row.orderType === 'category'
-            ? categoryBundle?.title || '分类全部课程'
-          : isPaperMaterial
-            ? `${row.courseName || '资料'}（纸质资料${paperMaterialQuantity > 1 ? ` × ${paperMaterialQuantity}` : ''}）`
-            : row.courseName || '课程';
+    const productName = isPaperMaterial && cartItems.length > 0 ? this.getPaperCartTitle(cartItems) : cartItems.length > 1 ? `购物车(${cartItems.length}门课程)` : row.orderType === 'package' ? row.packageSectionName || '套餐' : row.orderType === 'category' ? categoryBundle?.title || '分类全部课程' : isPaperMaterial ? `${row.courseName || '资料'}（纸质资料${paperMaterialQuantity > 1 ? ` × ${paperMaterialQuantity}` : ''}）` : row.courseName || '课程';
 
     return {
       id: Number(row.id),
@@ -3483,11 +3352,7 @@ export class OrderService {
       cloudPrint: payPayload?.cloud_print || null,
       refundRemark: payPayload?.refund?.remark || '',
       shippingAddress: this.parseJsonColumn(row.shippingAddress),
-      requiresShipping:
-        isPaperMaterial ||
-        row.contentType === 'paper_exam' ||
-        cartItems.some((item) => item.contentType === 'paper_exam') ||
-        Boolean(row.shippingAddress),
+      requiresShipping: isPaperMaterial || row.contentType === 'paper_exam' || cartItems.some((item) => item.contentType === 'paper_exam') || Boolean(row.shippingAddress),
       deliveryStatus: row.deliveryStatus || OrderDeliveryStatus.PENDING,
       trackingNo: row.trackingNo || '',
       shipperCode: row.shipperCode || '',
@@ -3561,25 +3426,22 @@ export class OrderService {
     }
 
     if (dto.order_type) {
-      query.andWhere('o.order_type = :orderType', { orderType: dto.order_type });
+      query.andWhere('o.order_type = :orderType', {
+        orderType: dto.order_type,
+      });
     }
 
     if (dto.content_type) {
-      const contentTypeConditions = [
-        'course.content_type = :contentType',
-        "JSON_SEARCH(o.pay_payload, 'one', :contentType, NULL, '$.cart_items[*].content_type') IS NOT NULL",
-        "JSON_SEARCH(o.pay_payload, 'one', :contentType, NULL, '$.cart_items[*].contentType') IS NOT NULL",
-      ];
+      const contentTypeConditions = ['course.content_type = :contentType', "JSON_SEARCH(o.pay_payload, 'one', :contentType, NULL, '$.cart_items[*].content_type') IS NOT NULL", "JSON_SEARCH(o.pay_payload, 'one', :contentType, NULL, '$.cart_items[*].contentType') IS NOT NULL"];
       if (dto.content_type === 'paper_exam') {
         contentTypeConditions.push('o.shipping_address IS NOT NULL');
       }
-      query.andWhere(`(${contentTypeConditions.join(' OR ')})`, { contentType: dto.content_type });
+      query.andWhere(`(${contentTypeConditions.join(' OR ')})`, {
+        contentType: dto.content_type,
+      });
 
       if (dto.content_type !== 'paper_exam') {
-        query.andWhere(
-          "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.fulfillment_type')), 'digital') <> :excludedPaperFulfillmentType",
-          { excludedPaperFulfillmentType: 'paper' },
-        );
+        query.andWhere("COALESCE(JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.fulfillment_type')), 'digital') <> :excludedPaperFulfillmentType", { excludedPaperFulfillmentType: 'paper' });
       }
     }
 
@@ -3599,27 +3461,20 @@ export class OrderService {
     if (dto.cloud_print_status === 'unsubmitted') {
       query.andWhere("JSON_EXTRACT(o.pay_payload, '$.cloud_print.status') IS NULL");
     } else if (dto.cloud_print_status) {
-      query.andWhere(
-        "JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.cloud_print.status')) = :cloudPrintStatus",
-        { cloudPrintStatus: dto.cloud_print_status },
-      );
+      query.andWhere("JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.cloud_print.status')) = :cloudPrintStatus", {
+        cloudPrintStatus: dto.cloud_print_status,
+      });
     }
 
     const keyword = dto.keyword?.trim();
     if (keyword) {
       const userId = Number(keyword);
       if (!Number.isNaN(userId) && userId > 0) {
-        query.andWhere(
-          '(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR user.openid LIKE :keyword OR o.user_id = :userId OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, \'$.coin_purchase.recharge_order_no\')) LIKE :keyword)',
-          { keyword: `%${keyword}%`, userId },
-        );
+        query.andWhere("(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR user.openid LIKE :keyword OR o.user_id = :userId OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.coin_purchase.recharge_order_no')) LIKE :keyword)", { keyword: `%${keyword}%`, userId });
       } else {
-        query.andWhere(
-          `(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR user.openid LIKE :keyword OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.coin_purchase.recharge_order_no')) LIKE :keyword)`,
-          {
-            keyword: `%${keyword}%`,
-          },
-        );
+        query.andWhere(`(o.order_no LIKE :keyword OR user.nickname LIKE :keyword OR user.phone LIKE :keyword OR user.openid LIKE :keyword OR JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.coin_purchase.recharge_order_no')) LIKE :keyword)`, {
+          keyword: `%${keyword}%`,
+        });
       }
     }
 

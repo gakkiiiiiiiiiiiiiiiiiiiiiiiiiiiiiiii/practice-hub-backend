@@ -14,7 +14,12 @@ describe('OrderService pending order cancellation', () => {
   };
 
   it('cancels only the authenticated user pending order with a conditional update', async () => {
-    const order = { id: 10, user_id: 7, order_no: 'ORDER10', status: OrderStatus.PENDING };
+    const order = {
+      id: 10,
+      user_id: 7,
+      order_no: 'ORDER10',
+      status: OrderStatus.PENDING,
+    };
     const service = createService(order);
 
     await expect(service.cancelPendingOrder(7, 10)).resolves.toEqual({
@@ -22,21 +27,28 @@ describe('OrderService pending order cancellation', () => {
       order_no: 'ORDER10',
       status: OrderStatus.CANCELLED,
     });
-    expect(service.orderRepository.update).toHaveBeenCalledWith(
-      { id: 10, user_id: 7, status: OrderStatus.PENDING },
-      { status: OrderStatus.CANCELLED },
-    );
+    expect(service.orderRepository.update).toHaveBeenCalledWith({ id: 10, user_id: 7, status: OrderStatus.PENDING }, { status: OrderStatus.CANCELLED });
   });
 
   it('does not cancel another user order', async () => {
-    const service = createService({ id: 10, user_id: 8, order_no: 'ORDER10', status: OrderStatus.PENDING });
+    const service = createService({
+      id: 10,
+      user_id: 8,
+      order_no: 'ORDER10',
+      status: OrderStatus.PENDING,
+    });
 
     await expect(service.cancelPendingOrder(7, 10)).rejects.toBeInstanceOf(ForbiddenException);
     expect(service.orderRepository.update).not.toHaveBeenCalled();
   });
 
   it('treats repeated cancellation as idempotent', async () => {
-    const service = createService({ id: 10, user_id: 7, order_no: 'ORDER10', status: OrderStatus.CANCELLED });
+    const service = createService({
+      id: 10,
+      user_id: 7,
+      order_no: 'ORDER10',
+      status: OrderStatus.CANCELLED,
+    });
 
     await expect(service.cancelPendingOrder(7, 10)).resolves.toEqual({
       message: '订单已取消',
@@ -47,7 +59,12 @@ describe('OrderService pending order cancellation', () => {
   });
 
   it('rejects cancellation after payment', async () => {
-    const service = createService({ id: 10, user_id: 7, order_no: 'ORDER10', status: OrderStatus.PAID });
+    const service = createService({
+      id: 10,
+      user_id: 7,
+      order_no: 'ORDER10',
+      status: OrderStatus.PAID,
+    });
 
     await expect(service.cancelPendingOrder(7, 10)).rejects.toBeInstanceOf(BadRequestException);
     expect(service.orderRepository.update).not.toHaveBeenCalled();
@@ -68,7 +85,14 @@ describe('OrderService paper material checkout', () => {
     };
     service.courseFileRepository = {
       find: jest.fn().mockResolvedValue([
-        { id: 91, course_id: 9, status: 1, sort: 0, file_type: 'pdf', file_page_count: 22 },
+        {
+          id: 91,
+          course_id: 9,
+          status: 1,
+          sort: 0,
+          file_type: 'pdf',
+          file_page_count: 22,
+        },
       ]),
     };
     service.referralCouponService = {};
@@ -126,11 +150,20 @@ describe('OrderService paper material checkout', () => {
     };
     service.courseFileRepository = {
       find: jest.fn().mockResolvedValue([
-        { id: 91, course_id: 9, status: 1, sort: 0, file_type: 'pdf', file_page_count: 22 },
+        {
+          id: 91,
+          course_id: 9,
+          status: 1,
+          sort: 0,
+          file_type: 'pdf',
+          file_page_count: 22,
+        },
       ]),
     };
     service.referralCouponService = {};
-    service.appUserRepository = { findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }) };
+    service.appUserRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }),
+    };
     service.orderRepository = {
       create: jest.fn((value) => ({ id: 100, ...value })),
       save: jest.fn(async (value) => value),
@@ -178,7 +211,14 @@ describe('OrderService paper material checkout', () => {
     };
     service.courseFileRepository = {
       find: jest.fn().mockResolvedValue([
-        { id: 91, course_id: 9, status: 1, sort: 0, file_type: 'pdf', file_page_count: 22 },
+        {
+          id: 91,
+          course_id: 9,
+          status: 1,
+          sort: 0,
+          file_type: 'pdf',
+          file_page_count: 22,
+        },
       ]),
     };
     service.referralCouponService = {};
@@ -226,7 +266,12 @@ describe('OrderService paper material checkout', () => {
   it('rejects an invalid paper material quantity', async () => {
     const service = Object.create(OrderService.prototype) as any;
     service.courseRepository = {
-      findOne: jest.fn().mockResolvedValue({ id: 9, name: '诊断学资料', content_type: 'file', price: 5 }),
+      findOne: jest.fn().mockResolvedValue({
+        id: 9,
+        name: '诊断学资料',
+        content_type: 'file',
+        price: 5,
+      }),
     };
 
     await expect(
@@ -241,7 +286,12 @@ describe('OrderService paper material checkout', () => {
   it('rejects coupons for paper material orders before coupon validation', async () => {
     const service = Object.create(OrderService.prototype) as any;
     service.courseRepository = {
-      findOne: jest.fn().mockResolvedValue({ id: 9, name: '诊断学资料', content_type: 'file', price: 5 }),
+      findOne: jest.fn().mockResolvedValue({
+        id: 9,
+        name: '诊断学资料',
+        content_type: 'file',
+        price: 5,
+      }),
     };
     service.referralCouponService = { validateCouponForOrder: jest.fn() };
 
@@ -259,7 +309,13 @@ describe('OrderService paper material checkout', () => {
     const service = Object.create(OrderService.prototype) as any;
     service.courseRepository = {
       find: jest.fn().mockResolvedValue([
-        { id: 11, name: '纸质真题', content_type: 'paper_exam', price: 20, is_free: 0 },
+        {
+          id: 11,
+          name: '纸质真题',
+          content_type: 'paper_exam',
+          price: 20,
+          is_free: 0,
+        },
       ]),
     };
     service.referralCouponService = { validateCouponForOrder: jest.fn() };
@@ -299,7 +355,9 @@ describe('OrderService paper material checkout', () => {
     service.distributorService = {
       processOrderCommission: jest.fn().mockResolvedValue(undefined),
     };
-    service.cloudPrintService = { enqueuePaidOrder: jest.fn().mockResolvedValue(null) };
+    service.cloudPrintService = {
+      enqueuePaidOrder: jest.fn().mockResolvedValue(null),
+    };
     service.logger = { error: jest.fn() };
     service.grantCourseAccess = jest.fn();
     service.revokeCourseAccess = jest.fn();
@@ -329,7 +387,10 @@ describe('OrderService paper shipping list', () => {
         fulfillment_type: 'paper',
         paper_material: { quantity: 3 },
       }),
-      shippingAddress: JSON.stringify({ name: '测试用户', phone: '13800138000' }),
+      shippingAddress: JSON.stringify({
+        name: '测试用户',
+        phone: '13800138000',
+      }),
       deliveryStatus: 'pending',
     };
     const query: any = {
@@ -356,11 +417,7 @@ describe('OrderService paper shipping list', () => {
 
     const result = await service.getAppAdminShippingOrderList(1, 'pending');
 
-    expect(query.andWhere).toHaveBeenNthCalledWith(
-      1,
-      expect.stringContaining("JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.fulfillment_type'))"),
-      { paperType: 'paper_exam', paperFulfillmentType: 'paper' },
-    );
+    expect(query.andWhere).toHaveBeenNthCalledWith(1, expect.stringContaining("JSON_UNQUOTE(JSON_EXTRACT(o.pay_payload, '$.fulfillment_type'))"), { paperType: 'paper_exam', paperFulfillmentType: 'paper' });
     expect(result).toEqual([
       expect.objectContaining({
         id: 101,
@@ -381,7 +438,9 @@ describe('OrderService category bundle access', () => {
       order_type: 'category',
       status: OrderStatus.PENDING,
       coupon_id: null,
-      pay_payload: { category_bundle: { category_id: 12, course_ids: [101, 102] } },
+      pay_payload: {
+        category_bundle: { category_id: 12, course_ids: [101, 102] },
+      },
     };
     const service = Object.create(OrderService.prototype) as any;
     service.orderRepository = {
@@ -438,7 +497,9 @@ describe('OrderService WeChat Pay refund', () => {
     service.orderRepository = {
       save: jest.fn(async (order) => order),
     };
-    service.cloudPrintService = { reserveRefund: jest.fn().mockResolvedValue(null) };
+    service.cloudPrintService = {
+      reserveRefund: jest.fn().mockResolvedValue(null),
+    };
     return service;
   };
 
@@ -639,17 +700,16 @@ describe('OrderService WeChat Pay refund', () => {
       findOne: jest.fn().mockResolvedValue(null),
     };
     service.refundWechatPayOrder = jest.fn().mockResolvedValue({ return_code: 'SUCCESS' });
+    service.logger = { error: jest.fn() };
     service.distributorService = {
       cancelOrderCommission: jest.fn().mockResolvedValue(undefined),
     };
 
-    const result = await service.refundOrder(88, 1, { remark: '管理员直接退款' });
+    const result = await service.refundOrder(88, 1, {
+      remark: '管理员直接退款',
+    });
 
-    expect(service.refundWechatPayOrder).toHaveBeenCalledWith(
-      order,
-      'ORDER_PAID_REFUND_WX_RF',
-      '管理员直接退款',
-    );
+    expect(service.refundWechatPayOrder).toHaveBeenCalledWith(order, 'ORDER_PAID_REFUND_WX_RF', '管理员直接退款');
     expect(service.userCourseAuthRepository.delete).toHaveBeenCalledWith({
       user_id: 7,
       course_id: 10,
@@ -670,6 +730,45 @@ describe('OrderService WeChat Pay refund', () => {
         status: OrderStatus.CANCELLED,
       }),
     );
+  });
+
+  it('persists a pending commission reversal and completes it when the refund is retried', async () => {
+    const service = createService();
+    service.logger = { error: jest.fn() };
+    const order = {
+      id: 90,
+      order_no: 'ORDER_REFUND_RETRY',
+      user_id: 7,
+      course_id: 10,
+      amount: 80,
+      status: OrderStatus.PAID,
+      pay_provider: 'wechat_pay',
+      pay_payload: {},
+    };
+    service.orderRepository.findOne = jest.fn().mockResolvedValue(order);
+    service.orderRepository.save = jest.fn(async (payload) => payload);
+    service.appUserRepository = {
+      findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }),
+    };
+    service.coinService = { yuanToCoinInt: jest.fn(() => 8000) };
+    service.userCourseAuthRepository = {
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    service.afterSaleRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+    };
+    service.refundWechatPayOrder = jest.fn().mockResolvedValue({ return_code: 'SUCCESS' });
+    service.distributorService = {
+      cancelOrderCommission: jest.fn().mockRejectedValueOnce(new Error('temporary database error')).mockResolvedValueOnce(undefined),
+    };
+
+    await expect(service.refundOrder(90, 1, { remark: '退款重试' })).rejects.toThrow('退款已完成，佣金撤销暂未完成，请重试该退款操作');
+    expect((order.pay_payload as any).refund.commission_reversal_status).toBe('pending');
+
+    await expect(service.refundOrder(90, 1, { remark: '退款重试' })).resolves.toEqual(expect.objectContaining({ message: '退款佣金补偿已完成' }));
+    expect((order.pay_payload as any).refund.commission_reversal_status).toBe('completed');
+    expect(service.refundWechatPayOrder).toHaveBeenCalledTimes(1);
+    expect(service.distributorService.cancelOrderCommission).toHaveBeenCalledTimes(2);
   });
 
   it('rejects refunding unpaid orders', async () => {
@@ -703,15 +802,20 @@ describe('OrderService admin pagination', () => {
     });
 
     const service = Object.create(OrderService.prototype) as any;
-    service.orderRepository = { createQueryBuilder: jest.fn().mockReturnValue(query) };
+    service.orderRepository = {
+      createQueryBuilder: jest.fn().mockReturnValue(query),
+    };
     service.getLatestAfterSaleMap = jest.fn().mockResolvedValue(new Map());
 
-    await service.getAdminOrderList({ page: 1, pageSize: 10, content_type: 'file' });
+    await service.getAdminOrderList({
+      page: 1,
+      pageSize: 10,
+      content_type: 'file',
+    });
 
-    expect(query.andWhere).toHaveBeenCalledWith(
-      expect.stringContaining("$.fulfillment_type"),
-      { excludedPaperFulfillmentType: 'paper' },
-    );
+    expect(query.andWhere).toHaveBeenCalledWith(expect.stringContaining('$.fulfillment_type'), {
+      excludedPaperFulfillmentType: 'paper',
+    });
   });
 
   it('honors the 100-row page size exposed by the admin table', async () => {
@@ -733,7 +837,9 @@ describe('OrderService admin pagination', () => {
     });
 
     const service = Object.create(OrderService.prototype) as any;
-    service.orderRepository = { createQueryBuilder: jest.fn().mockReturnValue(query) };
+    service.orderRepository = {
+      createQueryBuilder: jest.fn().mockReturnValue(query),
+    };
     service.getLatestAfterSaleMap = jest.fn().mockResolvedValue(new Map());
 
     const result = await service.getAdminOrderList({ page: 1, pageSize: 100 });
@@ -759,7 +865,9 @@ describe('OrderService admin pagination', () => {
     });
 
     const service = Object.create(OrderService.prototype) as any;
-    service.orderRepository = { createQueryBuilder: jest.fn().mockReturnValue(query) };
+    service.orderRepository = {
+      createQueryBuilder: jest.fn().mockReturnValue(query),
+    };
     service.getLatestAfterSaleMap = jest.fn().mockResolvedValue(new Map());
 
     await service.getAdminOrderList({
@@ -769,14 +877,13 @@ describe('OrderService admin pagination', () => {
       cloud_print_status: 'retryable_failed',
     });
 
-    expect(query.andWhere).toHaveBeenCalledWith(
-      expect.stringContaining("$.fulfillment_type"),
-      { paperFulfillmentType: 'paper', paperContentType: 'paper_exam' },
-    );
-    expect(query.andWhere).toHaveBeenCalledWith(
-      expect.stringContaining("$.cloud_print.status"),
-      { cloudPrintStatus: 'retryable_failed' },
-    );
+    expect(query.andWhere).toHaveBeenCalledWith(expect.stringContaining('$.fulfillment_type'), {
+      paperFulfillmentType: 'paper',
+      paperContentType: 'paper_exam',
+    });
+    expect(query.andWhere).toHaveBeenCalledWith(expect.stringContaining('$.cloud_print.status'), {
+      cloudPrintStatus: 'retryable_failed',
+    });
     expect(query.offset).toHaveBeenCalledWith(0);
     expect(query.limit).toHaveBeenCalledWith(10);
   });
@@ -910,7 +1017,10 @@ describe('OrderService paper exam checkout', () => {
         pay_payload: expect.objectContaining({
           is_cart: true,
           cart_items: expect.arrayContaining([
-            expect.objectContaining({ course_id: 10, content_type: 'paper_exam' }),
+            expect.objectContaining({
+              course_id: 10,
+              content_type: 'paper_exam',
+            }),
             expect.objectContaining({ course_id: 11, content_type: 'normal' }),
           ]),
         }),
@@ -1006,7 +1116,11 @@ describe('OrderService WeChat express logistics', () => {
       findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }),
     };
     service.courseRepository = {
-      findOne: jest.fn().mockResolvedValue({ id: 10, name: '安徽理工大学812电路', cover_img: '' }),
+      findOne: jest.fn().mockResolvedValue({
+        id: 10,
+        name: '安徽理工大学812电路',
+        cover_img: '',
+      }),
     };
     service.xpayService = {
       getWechatAccessTokenForServerApi: jest.fn().mockResolvedValue('access-token'),
@@ -1160,9 +1274,7 @@ describe('OrderService WeChat express logistics', () => {
     );
 
     expect(service.callWechatExpressApi).toHaveBeenCalledTimes(2);
-    expect(service.callWechatExpressApi.mock.calls[0][0]).toBe(
-      '/cgi-bin/express/delivery/open_msg/follow_waybill',
-    );
+    expect(service.callWechatExpressApi.mock.calls[0][0]).toBe('/cgi-bin/express/delivery/open_msg/follow_waybill');
     expect(snapshot.wechat).toEqual(
       expect.objectContaining({
         success: true,
@@ -1180,11 +1292,7 @@ describe('OrderService WeChat express logistics', () => {
 
     await service.callWechatExpressApi('/cgi-bin/express/delivery/open_msg/follow_waybill', { waybill_id: 'SF1' });
 
-    expect(post).toHaveBeenCalledWith(
-      'https://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/follow_waybill',
-      { waybill_id: 'SF1' },
-      expect.objectContaining({ proxy: false }),
-    );
+    expect(post).toHaveBeenCalledWith('https://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/follow_waybill', { waybill_id: 'SF1' }, expect.objectContaining({ proxy: false }));
     post.mockRestore();
   });
 
@@ -1198,11 +1306,7 @@ describe('OrderService WeChat express logistics', () => {
     try {
       await service.callWechatExpressApi('/cgi-bin/express/delivery/open_msg/follow_waybill', { waybill_id: 'SF1' });
 
-      expect(post).toHaveBeenCalledWith(
-        'http://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/follow_waybill',
-        { waybill_id: 'SF1' },
-        expect.objectContaining({ proxy: false }),
-      );
+      expect(post).toHaveBeenCalledWith('http://api.weixin.qq.com/cgi-bin/express/delivery/open_msg/follow_waybill', { waybill_id: 'SF1' }, expect.objectContaining({ proxy: false }));
     } finally {
       if (previousCloudRunEnv === undefined) {
         delete process.env.WX_CLOUD_RUN_ENV;
@@ -1233,18 +1337,18 @@ describe('OrderService WeChat express logistics', () => {
     });
     service.attachWechatExpressSnapshot = jest.fn(async (currentOrder, snapshot, options) => ({
       ...snapshot,
-      wechat: { configured: true, success: true, queriedAt: snapshot.queriedAt },
+      wechat: {
+        configured: true,
+        success: true,
+        queriedAt: snapshot.queriedAt,
+      },
       carrierSeenByWechat: currentOrder.shipper_code,
       syncMessage: options.syncMessage,
     }));
 
     const snapshot = await service.queryOrderLogistics(order.id);
 
-    expect(service.attachWechatExpressSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ shipper_code: 'SF', shipper_name: '顺丰速运' }),
-      expect.any(Object),
-      { syncMessage: true },
-    );
+    expect(service.attachWechatExpressSnapshot).toHaveBeenCalledWith(expect.objectContaining({ shipper_code: 'SF', shipper_name: '顺丰速运' }), expect.any(Object), { syncMessage: true });
     expect(snapshot).toEqual(expect.objectContaining({ carrierSeenByWechat: 'SF', syncMessage: true }));
   });
 });

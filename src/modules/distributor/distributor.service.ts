@@ -10,13 +10,7 @@ import { DistributionOrder } from '../../database/entities/distribution-order.en
 import { DistributionConfig } from '../../database/entities/distribution-config.entity';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
-import {
-	ActivationCode,
-	ActivationCodeRewardPayload,
-	ActivationCodeSourceType,
-	ActivationCodeStatus,
-	ActivationCodeTargetType,
-} from '../../database/entities/activation-code.entity';
+import { ActivationCode, ActivationCodeRewardPayload, ActivationCodeSourceType, ActivationCodeStatus, ActivationCodeTargetType } from '../../database/entities/activation-code.entity';
 import { Course } from '../../database/entities/course.entity';
 import { PackagePlan } from '../../database/entities/package-plan.entity';
 import { CourseCategory } from '../../database/entities/course-category.entity';
@@ -27,10 +21,7 @@ import { UpdateDistributionConfigDto } from './dto/update-distribution-config.dt
 import { OrderService } from '../order/order.service';
 import { UploadService } from '../upload/upload.service';
 import { AgentPricePolicyService } from './agent-price-policy.service';
-import {
-	DistributorWithdrawal,
-	DistributorWithdrawalStatus,
-} from '../../database/entities/distributor-withdrawal.entity';
+import { DistributorWithdrawal, DistributorWithdrawalStatus } from '../../database/entities/distributor-withdrawal.entity';
 import { CreateWithdrawalDto } from './dto/create-withdrawal.dto';
 
 @Injectable()
@@ -63,68 +54,73 @@ export class DistributorService {
 		private configService: ConfigService,
 		@Inject(forwardRef(() => OrderService))
 		private orderService: OrderService,
-			@Inject(forwardRef(() => UploadService))
-			private uploadService: UploadService,
-			private dataSource: DataSource,
-			private agentPricePolicyService: AgentPricePolicyService,
-		) {}
+		@Inject(forwardRef(() => UploadService))
+		private uploadService: UploadService,
+		private dataSource: DataSource,
+		private agentPricePolicyService: AgentPricePolicyService,
+	) {}
 
 	/**
 	 * 申请成为分销用户
 	 */
 	async applyDistributor(userId: number) {
 		await this.assertDistributionEnabled();
-		// 检查是否已经是分销用户
-		const existing = await this.distributorRepository.findOne({
-			where: { user_id: userId },
-		});
+		return this.dataSource.transaction(async (manager) => {
+			const userRepository = manager.getRepository(AppUser);
+			const user = await userRepository.createQueryBuilder('user').setLock('pessimistic_write').where('user.id = :userId', { userId }).getOne();
+			if (!user) throw new NotFoundException('用户不存在');
 
-		if (existing) {
-			if (existing.status === 1) {
-				throw new BadRequestException('您已经是分销用户');
+			const repository = manager.getRepository(Distributor);
+			const existing = await repository.findOne({ where: { user_id: userId } });
+			if (existing) {
+				const wasActive = existing.status === 1;
+				if (existing.status === 3) {
+					throw new BadRequestException('代理资格已被禁用，请联系客服处理');
+				}
+				if (existing.status !== 1) {
+					existing.status = 1;
+					existing.agent_level = this.normalizeAgentLevel(existing.agent_level);
+					existing.reject_reason = null;
+					await repository.save(existing);
+				}
+				await this.evaluateUplinePromotion(userId, manager);
+				return {
+					message: wasActive ? '代理身份已开通' : '已免费开通初级代理',
+					distributor_code: existing.distributor_code,
+					agent_level: this.normalizeAgentLevel(existing.agent_level),
+				};
 			}
-			if (existing.status === 3) {
-				throw new BadRequestException('代理资格已被禁用，请联系客服处理');
-			}
-			existing.status = 1;
-			existing.agent_level = this.normalizeAgentLevel(existing.agent_level);
-			existing.reject_reason = null;
-			await this.distributorRepository.save(existing);
-			await this.evaluateUplinePromotion(userId);
-			return { message: '已免费开通初级代理', distributor_code: existing.distributor_code, agent_level: existing.agent_level };
-		}
 
-		// 生成分销商编号
-		const distributorCode = this.generateDistributorCode(userId);
-
-		// 创建分销用户
-		const distributor = this.distributorRepository.create({
-			user_id: userId,
-			distributor_code: distributorCode,
-			status: 1,
-			agent_level: 1,
+			const distributorCode = this.generateDistributorCode(userId);
+			const distributor = repository.create({
+				user_id: userId,
+				distributor_code: distributorCode,
+				status: 1,
+				agent_level: 1,
+			});
+			await repository.save(distributor);
+			await this.evaluateUplinePromotion(userId, manager);
+			return {
+				message: '已免费开通初级代理',
+				distributor_code: distributorCode,
+				agent_level: 1,
+			};
 		});
-
-		await this.distributorRepository.save(distributor);
-		await this.evaluateUplinePromotion(userId);
-
-		return {
-			message: '已免费开通初级代理',
-			distributor_code: distributorCode,
-			agent_level: 1,
-		};
 	}
 
 	/**
 	 * 生成专属小程序二维码
 	 */
 	async generateQRCode(userId: number, refresh = false) {
+		await this.assertDistributionEnabled();
 		let distributor = await this.distributorRepository.findOne({
 			where: { user_id: userId },
 		});
 
 		if (!distributor) {
-			const appUser = await this.appUserRepository.findOne({ where: { id: userId } });
+			const appUser = await this.appUserRepository.findOne({
+				where: { id: userId },
+			});
 			if (appUser?.role === AppUserRole.ADMIN) {
 				distributor = await this.createApprovedDistributorForUser(userId);
 			} else {
@@ -146,8 +142,7 @@ export class DistributorService {
 
 		// 调用微信小程序生成二维码接口
 		const appid = this.configService.get('WECHAT_APPID') || this.configService.get('AppID');
-		const secret =
-			this.configService.get('WECHAT_SECRET') || this.configService.get('WECHAT_APPSECRET') || this.configService.get('AppSecret');
+		const secret = this.configService.get('WECHAT_SECRET') || this.configService.get('WECHAT_APPSECRET') || this.configService.get('AppSecret');
 
 		if (!appid || !secret) {
 			throw new BadRequestException('微信配置缺失，无法生成二维码');
@@ -180,73 +175,44 @@ export class DistributorService {
 	 */
 	async bindDistributionRelation(userId: number, distributorCode: string) {
 		const config = await this.assertDistributionEnabled();
-		// 检查用户是否已经有上级
-		const existingRelation = await this.distributionRelationRepository.findOne({
-			where: { user_id: userId },
+		return this.dataSource.transaction(async (manager) => {
+			const distributorRepository = manager.getRepository(Distributor);
+			const relationRepository = manager.getRepository(DistributionRelation);
+			const distributor = await distributorRepository.findOne({
+				where: { distributor_code: distributorCode },
+			});
+			if (!distributor) throw new NotFoundException('分销商编号不存在');
+			if (distributor.status !== 1) throw new BadRequestException('该分销商状态异常');
+			if (distributor.user_id === userId) throw new BadRequestException('不能绑定自己为上级');
+
+			const lockUserIds = [userId, distributor.user_id].sort((a, b) => a - b);
+			await manager.getRepository(AppUser).createQueryBuilder('user').setLock('pessimistic_write').where('user.id IN (:...userIds)', { userIds: lockUserIds }).orderBy('user.id', 'ASC').getMany();
+
+			const existingRelation = await relationRepository.findOne({
+				where: { user_id: userId },
+			});
+			if (existingRelation) throw new BadRequestException('您已经绑定过上级分销商');
+			if (await this.checkIsSubordinate(distributor.user_id, userId, manager)) {
+				throw new BadRequestException('不能绑定自己的下级为上级');
+			}
+			const distributorRelation = await relationRepository.findOne({
+				where: { user_id: distributor.user_id },
+			});
+			const level = distributorRelation ? distributorRelation.level + 1 : 1;
+			const maxLevel = config.max_level ?? 3;
+			if (level > maxLevel) throw new BadRequestException(`最多支持 ${maxLevel} 级分销，无法继续绑定`);
+
+			await relationRepository.save(
+				relationRepository.create({
+					user_id: userId,
+					distributor_id: distributor.id,
+					level,
+					source_code: distributorCode,
+				}),
+			);
+			await distributorRepository.increment({ id: distributor.id }, 'subordinate_count', 1);
+			return { message: '绑定成功', distributor_id: distributor.id, level };
 		});
-
-		if (existingRelation) {
-			throw new BadRequestException('您已经绑定过上级分销商');
-		}
-
-		// 查找分销商
-		const distributor = await this.distributorRepository.findOne({
-			where: { distributor_code: distributorCode },
-		});
-
-		if (!distributor) {
-			throw new NotFoundException('分销商编号不存在');
-		}
-
-		if (distributor.status !== 1) {
-			throw new BadRequestException('该分销商状态异常');
-		}
-
-		// 不能绑定自己
-		if (distributor.user_id === userId) {
-			throw new BadRequestException('不能绑定自己为上级');
-		}
-
-		// 检查是否形成循环（不能绑定自己的下级）
-		const isSubordinate = await this.checkIsSubordinate(distributor.user_id, userId);
-		if (isSubordinate) {
-			throw new BadRequestException('不能绑定自己的下级为上级');
-		}
-
-		// 获取配置，确定最大层级
-		const maxLevel = config.max_level ?? 3;
-
-		// 查找分销商的层级
-		const distributorRelation = await this.distributionRelationRepository.findOne({
-			where: { user_id: distributor.user_id },
-		});
-
-		const level = distributorRelation ? distributorRelation.level + 1 : 1;
-
-		// 检查是否超过最大层级
-		if (level > maxLevel) {
-			throw new BadRequestException(`最多支持 ${maxLevel} 级分销，无法继续绑定`);
-		}
-
-		// 创建分销关系
-		const relation = this.distributionRelationRepository.create({
-			user_id: userId,
-			distributor_id: distributor.id,
-			level,
-			source_code: distributorCode,
-		});
-
-		await this.distributionRelationRepository.save(relation);
-
-		// 更新分销商的下级数量
-		distributor.subordinate_count += 1;
-		await this.distributorRepository.save(distributor);
-
-		return {
-			message: '绑定成功',
-			distributor_id: distributor.id,
-			level,
-		};
 	}
 
 	/**
@@ -280,26 +246,42 @@ export class DistributorService {
 		}
 		const paidAt = order.paid_time || new Date();
 		const availableAt = new Date(paidAt.getTime() + Number(config.commission_freeze_days ?? 15) * 86400000);
-		const entries: Array<{ distributor: Distributor; type: DistributionOrder['commission_type']; rate: number; amount: number; level: number }> = [];
+		const entries: Array<{
+			distributor: Distributor;
+			type: DistributionOrder['commission_type'];
+			rate: number;
+			amount: number;
+			level: number;
+		}> = [];
 		if (this.isPaperOrder(order)) {
 			const kindCount = this.getPaperKindCount(order);
 			const amount = this.roundMoney(kindCount * Number(config.paper_commission_per_kind ?? 1));
-			if (amount > 0) entries.push({ distributor: chain[0], type: 'paper', rate: 0, amount, level: 1 });
+			if (amount > 0)
+				entries.push({
+					distributor: chain[0],
+					type: 'paper',
+					rate: 0,
+					amount,
+					level: 1,
+				});
 		} else {
 			const baseRates = this.normalizeRates(config.base_commission_rates, [20, 25, 30]);
 			const directRates = this.normalizeRates(config.direct_commission_rates, [5, 6, 8]);
 			const indirectRates = this.normalizeRates(config.indirect_commission_rates, [0, 3, 4]);
 			const orderAmount = Number(order.amount || 0);
-			const rates = [
-				baseRates[this.normalizeAgentLevel(chain[0].agent_level) - 1],
-				chain[1] ? directRates[this.normalizeAgentLevel(chain[1].agent_level) - 1] : 0,
-				chain[2] ? indirectRates[this.normalizeAgentLevel(chain[2].agent_level) - 1] : 0,
-			];
+			const rates = [baseRates[this.normalizeAgentLevel(chain[0].agent_level) - 1], chain[1] ? directRates[this.normalizeAgentLevel(chain[1].agent_level) - 1] : 0, chain[2] ? indirectRates[this.normalizeAgentLevel(chain[2].agent_level) - 1] : 0];
 			const types: DistributionOrder['commission_type'][] = ['base', 'direct_team', 'indirect_team'];
 			for (let index = 0; index < Math.min(chain.length, 3); index += 1) {
 				const rate = Number(rates[index] || 0);
 				const amount = this.roundMoney((orderAmount * rate) / 100);
-				if (rate > 0 && amount > 0) entries.push({ distributor: chain[index], type: types[index], rate, amount, level: index + 1 });
+				if (rate > 0 && amount > 0)
+					entries.push({
+						distributor: chain[index],
+						type: types[index],
+						rate,
+						amount,
+						level: index + 1,
+					});
 			}
 		}
 
@@ -307,21 +289,27 @@ export class DistributorService {
 			for (const entry of entries) {
 				const repository = manager.getRepository(DistributionOrder);
 				const existing = await repository.findOne({
-					where: { order_id: orderId, distributor_id: entry.distributor.id, commission_type: entry.type },
+					where: {
+						order_id: orderId,
+						distributor_id: entry.distributor.id,
+						commission_type: entry.type,
+					},
 				});
 				if (existing) continue;
-				await repository.save(repository.create({
-					order_id: orderId,
-					distributor_id: entry.distributor.id,
-					buyer_id: order.user_id,
-					level: entry.level,
-					order_amount: Number(order.amount || 0),
-					commission_rate: entry.rate,
-					commission_amount: entry.amount,
-					commission_type: entry.type,
-					status: 0,
-					available_at: availableAt,
-				}));
+				await repository.save(
+					repository.create({
+						order_id: orderId,
+						distributor_id: entry.distributor.id,
+						buyer_id: order.user_id,
+						level: entry.level,
+						order_amount: Number(order.amount || 0),
+						commission_rate: entry.rate,
+						commission_amount: entry.amount,
+						commission_type: entry.type,
+						status: 0,
+						available_at: availableAt,
+					}),
+				);
 				await manager.increment(Distributor, { id: entry.distributor.id }, 'total_earnings', entry.amount);
 				await manager.increment(Distributor, { id: entry.distributor.id }, 'frozen_amount', entry.amount);
 				await manager.increment(Distributor, { id: entry.distributor.id }, 'total_orders', 1);
@@ -373,22 +361,26 @@ export class DistributorService {
 	}
 
 	async evaluateUplinePromotion(activatedUserId: number, manager?: EntityManager) {
-		const relationRepository = manager
-			? manager.getRepository(DistributionRelation)
-			: this.distributionRelationRepository;
-		const distributorRepository = manager
-			? manager.getRepository(Distributor)
-			: this.distributorRepository;
+		const relationRepository = manager ? manager.getRepository(DistributionRelation) : this.distributionRelationRepository;
+		const distributorRepository = manager ? manager.getRepository(Distributor) : this.distributorRepository;
 		let currentUserId = activatedUserId;
 		for (let depth = 0; depth < 10; depth += 1) {
-			const relation = await relationRepository.findOne({ where: { user_id: currentUserId } });
+			const relation = await relationRepository.findOne({
+				where: { user_id: currentUserId },
+			});
 			if (!relation) break;
-			const upline = await distributorRepository.findOne({ where: { id: relation.distributor_id } });
+			const upline = await distributorRepository.findOne({
+				where: { id: relation.distributor_id },
+			});
 			if (!upline || upline.status !== 1) break;
-			const directRelations = await relationRepository.find({ where: { distributor_id: upline.id } });
+			const directRelations = await relationRepository.find({
+				where: { distributor_id: upline.id },
+			});
 			const directUserIds = directRelations.map((item) => item.user_id);
 			const directAgents = directUserIds.length
-				? await distributorRepository.find({ where: { user_id: In(directUserIds), status: 1 } })
+				? await distributorRepository.find({
+						where: { user_id: In(directUserIds), status: 1 },
+					})
 				: [];
 			const juniorCount = directAgents.filter((item) => this.normalizeAgentLevel(item.agent_level) === 1).length;
 			const middleCount = directAgents.filter((item) => this.normalizeAgentLevel(item.agent_level) === 2).length;
@@ -406,60 +398,67 @@ export class DistributorService {
 	private async settleAvailableCommissions(distributorId: number) {
 		await this.dataSource.transaction(async (manager) => {
 			const repository = manager.getRepository(DistributionOrder);
-			const due = await repository
-				.createQueryBuilder('commission')
-				.setLock('pessimistic_write')
-				.where('commission.distributor_id = :distributorId', { distributorId })
-				.andWhere('commission.status = 0')
-				.andWhere('commission.available_at IS NOT NULL')
-				.andWhere('commission.available_at <= :now', { now: new Date() })
-				.orderBy('commission.id', 'ASC')
-				.getMany();
+			const distributorRepository = manager.getRepository(Distributor);
+			const due = await repository.createQueryBuilder('commission').setLock('pessimistic_write').where('commission.distributor_id = :distributorId', { distributorId }).andWhere('commission.status = 0').andWhere('commission.available_at IS NOT NULL').andWhere('commission.available_at <= :now', { now: new Date() }).orderBy('commission.id', 'ASC').getMany();
 			if (!due.length) return;
+			const distributor = await distributorRepository.createQueryBuilder('distributor').setLock('pessimistic_write').where('distributor.id = :distributorId', { distributorId }).getOne();
+			if (!distributor) throw new NotFoundException('分销商不存在');
 			const orders = await manager.getRepository(Order).find({ where: { id: In(due.map((item) => item.order_id)) } });
 			const orderStatus = new Map(orders.map((item) => [item.id, item.status]));
 			for (const commission of due) {
 				if (orderStatus.get(commission.order_id) !== OrderStatus.PAID) {
 					commission.status = 2;
 					await repository.save(commission);
-					await manager.decrement(Distributor, { id: distributorId }, 'frozen_amount', Number(commission.commission_amount));
-					await manager.decrement(Distributor, { id: distributorId }, 'total_earnings', Number(commission.commission_amount));
+					const amount = Number(commission.commission_amount || 0);
+					distributor.frozen_amount = this.roundMoney(Math.max(0, Number(distributor.frozen_amount || 0) - amount));
+					distributor.total_earnings = this.roundMoney(Math.max(0, Number(distributor.total_earnings || 0) - amount));
 					continue;
 				}
 				commission.status = 1;
 				commission.settle_time = new Date();
 				await repository.save(commission);
-				await manager.decrement(Distributor, { id: distributorId }, 'frozen_amount', Number(commission.commission_amount));
-				await manager.increment(Distributor, { id: distributorId }, 'withdrawable_amount', Number(commission.commission_amount));
+				const amount = Number(commission.commission_amount || 0);
+				distributor.frozen_amount = this.roundMoney(Math.max(0, Number(distributor.frozen_amount || 0) - amount));
+				const debtOffset = Math.min(Number(distributor.commission_debt_amount || 0), amount);
+				distributor.commission_debt_amount = this.roundMoney(Number(distributor.commission_debt_amount || 0) - debtOffset);
+				distributor.withdrawable_amount = this.roundMoney(Number(distributor.withdrawable_amount || 0) + amount - debtOffset);
 			}
+			await distributorRepository.save(distributor);
 		});
 	}
 
 	async cancelOrderCommission(orderId: number) {
 		await this.dataSource.transaction(async (manager) => {
 			const repository = manager.getRepository(DistributionOrder);
-			const commissions = await repository
-				.createQueryBuilder('commission')
-				.setLock('pessimistic_write')
-				.where('commission.order_id = :orderId', { orderId })
-				.orderBy('commission.id', 'ASC')
-				.getMany();
+			const distributorRepository = manager.getRepository(Distributor);
+			const commissions = await repository.createQueryBuilder('commission').setLock('pessimistic_write').where('commission.order_id = :orderId', { orderId }).orderBy('commission.id', 'ASC').getMany();
+			const distributorIds = [...new Set(commissions.filter((item) => item.status !== 2).map((item) => item.distributor_id))].sort((a, b) => a - b);
+			const distributors = distributorIds.length ? await distributorRepository.createQueryBuilder('distributor').setLock('pessimistic_write').where('distributor.id IN (:...distributorIds)', { distributorIds }).orderBy('distributor.id', 'ASC').getMany() : [];
+			const distributorMap = new Map(distributors.map((item) => [item.id, item]));
 			for (const commission of commissions.filter((item) => item.status !== 2)) {
 				const amount = Number(commission.commission_amount || 0);
-				await manager.decrement(Distributor, { id: commission.distributor_id }, 'total_earnings', amount);
+				const distributor = distributorMap.get(commission.distributor_id);
+				if (!distributor) throw new NotFoundException('佣金所属分销商不存在');
+				distributor.total_earnings = this.roundMoney(Math.max(0, Number(distributor.total_earnings || 0) - amount));
 				if (commission.status === 0) {
-					await manager.decrement(Distributor, { id: commission.distributor_id }, 'frozen_amount', amount);
+					distributor.frozen_amount = this.roundMoney(Math.max(0, Number(distributor.frozen_amount || 0) - amount));
 				} else {
-					await manager.decrement(Distributor, { id: commission.distributor_id }, 'withdrawable_amount', amount);
+					const withdrawable = Number(distributor.withdrawable_amount || 0);
+					const deducted = Math.min(withdrawable, amount);
+					distributor.withdrawable_amount = this.roundMoney(withdrawable - deducted);
+					distributor.commission_debt_amount = this.roundMoney(Number(distributor.commission_debt_amount || 0) + amount - deducted);
 				}
 				commission.status = 2;
 				await repository.save(commission);
 			}
+			if (distributors.length) await distributorRepository.save(distributors);
 		});
 	}
 
 	async createWithdrawal(userId: number, dto: CreateWithdrawalDto) {
-		const distributor = await this.distributorRepository.findOne({ where: { user_id: userId } });
+		const distributor = await this.distributorRepository.findOne({
+			where: { user_id: userId },
+		});
 		if (!distributor || distributor.status !== 1) throw new BadRequestException('请先免费开通代理');
 		await this.settleAvailableCommissions(distributor.id);
 		const config = await this.getDistributionConfig();
@@ -474,11 +473,7 @@ export class DistributorService {
 		const payoutAmount = this.roundMoney(amount - feeAmount);
 		return this.dataSource.transaction(async (manager) => {
 			const distributorRepository = manager.getRepository(Distributor);
-			const fresh = await distributorRepository
-				.createQueryBuilder('distributor')
-				.setLock('pessimistic_write')
-				.where('distributor.id = :id', { id: distributor.id })
-				.getOne();
+			const fresh = await distributorRepository.createQueryBuilder('distributor').setLock('pessimistic_write').where('distributor.id = :id', { id: distributor.id }).getOne();
 			if (!fresh || fresh.status !== 1) throw new BadRequestException('请先免费开通代理');
 			if (Number(fresh.withdrawable_amount || 0) - amount < reserve) {
 				throw new BadRequestException(`提现后账户至少需要保留 ${reserve} 元`);
@@ -488,34 +483,44 @@ export class DistributorService {
 			fresh.real_name = realName;
 			await distributorRepository.save(fresh);
 			const repository = manager.getRepository(DistributorWithdrawal);
-			const withdrawal = await repository.save(repository.create({
-				distributor_id: distributor.id,
-				amount,
-				fee_amount: feeAmount,
-				payout_amount: payoutAmount,
-				alipay_account: alipayAccount,
-				real_name: realName,
-				status: DistributorWithdrawalStatus.PENDING,
-			}));
+			const withdrawal = await repository.save(
+				repository.create({
+					distributor_id: distributor.id,
+					amount,
+					fee_amount: feeAmount,
+					payout_amount: payoutAmount,
+					alipay_account: alipayAccount,
+					real_name: realName,
+					status: DistributorWithdrawalStatus.PENDING,
+				}),
+			);
 			return { ...withdrawal, message: '提现申请已提交，等待人工打款' };
 		});
 	}
 
 	async getWithdrawals(userId: number) {
-		const distributor = await this.distributorRepository.findOne({ where: { user_id: userId } });
+		const distributor = await this.distributorRepository.findOne({
+			where: { user_id: userId },
+		});
 		if (!distributor) return [];
-		return this.distributorWithdrawalRepository.find({ where: { distributor_id: distributor.id }, order: { create_time: 'DESC' }, take: 100 });
+		return this.distributorWithdrawalRepository.find({
+			where: { distributor_id: distributor.id },
+			order: { create_time: 'DESC' },
+			take: 100,
+		});
 	}
 
 	/**
 	 * 检查是否是下级
 	 */
-	private async checkIsSubordinate(distributorUserId: number, checkUserId: number): Promise<boolean> {
+	private async checkIsSubordinate(distributorUserId: number, checkUserId: number, manager?: EntityManager): Promise<boolean> {
+		const relationRepository = manager ? manager.getRepository(DistributionRelation) : this.distributionRelationRepository;
+		const distributorRepository = manager ? manager.getRepository(Distributor) : this.distributorRepository;
 		let currentUserId = distributorUserId;
 
 		for (let i = 0; i < 10; i++) {
 			// 最多检查10层，防止无限循环
-			const relation = await this.distributionRelationRepository.findOne({
+			const relation = await relationRepository.findOne({
 				where: { user_id: currentUserId },
 			});
 
@@ -523,7 +528,7 @@ export class DistributorService {
 				return false; // 没有上级了，不是下级
 			}
 
-			const distributor = await this.distributorRepository.findOne({
+			const distributor = await distributorRepository.findOne({
 				where: { id: relation.distributor_id },
 			});
 
@@ -602,9 +607,7 @@ export class DistributorService {
 			const errorData = JSON.parse(responseText);
 			if (errorData.errcode) {
 				this.logger.error('微信生成二维码失败:', errorData);
-				throw new BadRequestException(
-					`生成二维码失败: ${errorData.errmsg || '未知错误'} (错误码: ${errorData.errcode})`,
-				);
+				throw new BadRequestException(`生成二维码失败: ${errorData.errmsg || '未知错误'} (错误码: ${errorData.errcode})`);
 			}
 		}
 		if (!fileBuffer.length || !contentType.startsWith('image/')) {
@@ -633,10 +636,8 @@ export class DistributorService {
 			this.logger.log(`二维码上传成功: ${imageUrl}`);
 			return imageUrl;
 		} catch (uploadError: any) {
-			this.logger.warn('二维码上传失败，使用 base64 方案:', uploadError?.message || uploadError);
-			// 临时方案：将图片转为 base64（如果上传失败）
-			const base64 = Buffer.from(response.data).toString('base64');
-			return `data:image/png;base64,${base64}`;
+			this.logger.error('二维码上传失败:', uploadError?.message || uploadError);
+			throw new BadRequestException('二维码图片上传失败，请稍后重试');
 		}
 	}
 
@@ -698,19 +699,26 @@ export class DistributorService {
 		return config;
 	}
 
+	async getDistributionStatus() {
+		const config = await this.getDistributionConfig();
+		return { is_enabled: Number(config.is_enabled ?? 1) === 1 };
+	}
+
 	/**
 	 * 获取分销用户信息
 	 */
 	async getDistributorInfo(userId: number) {
-		const [foundDistributor, appUser] = await Promise.all([
+		const [foundDistributor, appUser, config] = await Promise.all([
 			this.distributorRepository.findOne({
 				where: { user_id: userId },
 				relations: ['user'],
 			}),
 			this.appUserRepository.findOne({ where: { id: userId } }),
+			this.getDistributionConfig(),
 		]);
 		let distributor = foundDistributor;
 		const isAppAdmin = appUser?.role === AppUserRole.ADMIN;
+		const isEnabled = Number(config.is_enabled ?? 1) === 1;
 
 		if (!distributor) {
 			if (isAppAdmin) {
@@ -720,11 +728,19 @@ export class DistributorService {
 			}
 		}
 		await this.settleAvailableCommissions(distributor.id);
-		distributor = await this.distributorRepository.findOne({ where: { id: distributor.id }, relations: ['user'] });
-		const config = await this.getDistributionConfig();
-		const directRelations = await this.distributionRelationRepository.find({ where: { distributor_id: distributor.id } });
+		distributor = await this.distributorRepository.findOne({
+			where: { id: distributor.id },
+			relations: ['user'],
+		});
+		const directRelations = await this.distributionRelationRepository.find({
+			where: { distributor_id: distributor.id },
+		});
 		const directUserIds = directRelations.map((item) => item.user_id);
-		const directAgents = directUserIds.length ? await this.distributorRepository.find({ where: { user_id: In(directUserIds), status: 1 } }) : [];
+		const directAgents = directUserIds.length
+			? await this.distributorRepository.find({
+					where: { user_id: In(directUserIds), status: 1 },
+				})
+			: [];
 		const juniorCount = directAgents.filter((item) => this.normalizeAgentLevel(item.agent_level) === 1).length;
 		const middleCount = directAgents.filter((item) => this.normalizeAgentLevel(item.agent_level) === 2).length;
 
@@ -739,6 +755,7 @@ export class DistributorService {
 			subordinate_count: distributor.subordinate_count,
 			total_orders: distributor.total_orders,
 			is_app_admin: isAppAdmin,
+			is_enabled: isEnabled,
 			is_agent: distributor.status === 1,
 			agent_level: this.normalizeAgentLevel(distributor.agent_level),
 			agent_level_name: this.getAgentLevelName(distributor.agent_level),
@@ -752,10 +769,10 @@ export class DistributorService {
 				high_middle_target: 5,
 			},
 			withdraw_rules: {
-				minimum: Number(config.min_withdraw_amount || 100),
-				reserve: Number(config.withdraw_reserve_amount || 20),
-				fee_rate: Number(config.withdraw_fee_rate || 5),
-				freeze_days: Number(config.commission_freeze_days || 15),
+				minimum: Number(config.min_withdraw_amount ?? 100),
+				reserve: Number(config.withdraw_reserve_amount ?? 20),
+				fee_rate: Number(config.withdraw_fee_rate ?? 5),
+				freeze_days: Number(config.commission_freeze_days ?? 15),
 			},
 		};
 	}
@@ -772,7 +789,9 @@ export class DistributorService {
 			throw new NotFoundException('您还不是分销用户');
 		}
 		await this.settleAvailableCommissions(distributor.id);
-		const freshDistributor = await this.distributorRepository.findOne({ where: { id: distributor.id } });
+		const freshDistributor = await this.distributorRepository.findOne({
+			where: { id: distributor.id },
+		});
 
 		// 获取下级用户列表
 		const relations = await this.distributionRelationRepository.find({
@@ -869,11 +888,7 @@ export class DistributorService {
 	async updateDistributorStatus(id: number, dto: UpdateDistributorStatusDto) {
 		return this.dataSource.transaction(async (manager) => {
 			const repository = manager.getRepository(Distributor);
-			const distributor = await repository
-				.createQueryBuilder('distributor')
-				.setLock('pessimistic_write')
-				.where('distributor.id = :id', { id })
-				.getOne();
+			const distributor = await repository.createQueryBuilder('distributor').setLock('pessimistic_write').where('distributor.id = :id', { id }).getOne();
 
 			if (!distributor) throw new NotFoundException('分销用户不存在');
 
@@ -938,35 +953,44 @@ export class DistributorService {
 			where: { status: 1 },
 		});
 		const totalRelations = await this.distributionRelationRepository.count();
-		const totalCommissions = await this.distributionOrderRepository
-			.createQueryBuilder('do')
-			.select('SUM(do.commission_amount)', 'total')
-			.where('do.status = :status', { status: 1 })
-			.getRawOne();
-		const levelRows = await this.distributorRepository
-			.createQueryBuilder('distributor')
-			.select('distributor.agent_level', 'level')
-			.addSelect('COUNT(*)', 'count')
-			.where('distributor.status = 1')
-			.groupBy('distributor.agent_level')
-			.getRawMany();
+		const totalCommissions = await this.distributionOrderRepository.createQueryBuilder('do').select('SUM(do.commission_amount)', 'total').where('do.status = :status', { status: 1 }).getRawOne();
+		const levelRows = await this.distributorRepository.createQueryBuilder('distributor').select('distributor.agent_level', 'level').addSelect('COUNT(*)', 'count').where('distributor.status = 1').groupBy('distributor.agent_level').getRawMany();
 
 		return {
 			total_distributors: totalDistributors,
 			approved_distributors: approvedDistributors,
 			total_relations: totalRelations,
 			total_commissions: Number(totalCommissions?.total || 0),
-			level_counts: levelRows.reduce((result, row) => ({ ...result, [String(row.level)]: Number(row.count || 0) }), {}),
+			level_counts: levelRows.reduce(
+				(result, row) => ({
+					...result,
+					[String(row.level)]: Number(row.count || 0),
+				}),
+				{},
+			),
 		};
 	}
 
 	async getAdminWithdrawals(status?: number) {
 		const where = status === undefined ? {} : { status: Number(status) as DistributorWithdrawalStatus };
-		const list = await this.distributorWithdrawalRepository.find({ where, order: { create_time: 'DESC' }, take: 500 });
+		const list = await this.distributorWithdrawalRepository.find({
+			where,
+			order: { create_time: 'DESC' },
+			take: 500,
+		});
 		const distributorIds = Array.from(new Set(list.map((item) => item.distributor_id)));
-		const distributors = distributorIds.length ? await this.distributorRepository.find({ where: { id: In(distributorIds) }, relations: ['user'] }) : [];
+		const distributors = distributorIds.length
+			? await this.distributorRepository.find({
+					where: { id: In(distributorIds) },
+					relations: ['user'],
+				})
+			: [];
 		const map = new Map(distributors.map((item) => [item.id, item]));
-		return list.map((item) => ({ ...item, user_id: map.get(item.distributor_id)?.user_id, user_nickname: map.get(item.distributor_id)?.user?.nickname }));
+		return list.map((item) => ({
+			...item,
+			user_id: map.get(item.distributor_id)?.user_id,
+			user_nickname: map.get(item.distributor_id)?.user?.nickname,
+		}));
 	}
 
 	async updateWithdrawalStatus(id: number, status: DistributorWithdrawalStatus, adminId: number, remark?: string) {
@@ -975,11 +999,7 @@ export class DistributorService {
 		}
 		return this.dataSource.transaction(async (manager) => {
 			const repository = manager.getRepository(DistributorWithdrawal);
-			const withdrawal = await repository
-				.createQueryBuilder('withdrawal')
-				.setLock('pessimistic_write')
-				.where('withdrawal.id = :id', { id })
-				.getOne();
+			const withdrawal = await repository.createQueryBuilder('withdrawal').setLock('pessimistic_write').where('withdrawal.id = :id', { id }).getOne();
 			if (!withdrawal) throw new NotFoundException('提现申请不存在');
 			if (withdrawal.status !== DistributorWithdrawalStatus.PENDING) throw new BadRequestException('该提现申请已处理');
 			withdrawal.status = status;
@@ -990,7 +1010,10 @@ export class DistributorService {
 				await manager.increment(Distributor, { id: withdrawal.distributor_id }, 'withdrawable_amount', Number(withdrawal.amount));
 			}
 			await repository.save(withdrawal);
-			return { message: status === DistributorWithdrawalStatus.PAID ? '已标记人工打款完成' : '已驳回并退回可提现余额', withdrawal };
+			return {
+				message: status === DistributorWithdrawalStatus.PAID ? '已标记人工打款完成' : '已驳回并退回可提现余额',
+				withdrawal,
+			};
 		});
 	}
 
@@ -1027,15 +1050,19 @@ export class DistributorService {
 
 		const agentLevel = this.normalizeAgentLevel(distributor.agent_level);
 		// 兼容旧版小程序：接口保留且仍可完成购买，但新订单统一按课程原价，不再应用代理价。
-		const pricing = { unitPrice: Number(course.price || 0), excluded: true, pricingMode: 'original_compat' };
+		const pricing = {
+			unitPrice: Number(course.price || 0),
+			excluded: true,
+			pricingMode: 'original_compat',
+		};
 		const agentPrice = pricing.unitPrice;
 		const totalPrice = agentPrice * normalizedCount;
 		if (totalPrice <= 0) {
 			throw new BadRequestException('激活码购买金额异常，请检查课程代理商售价');
 		}
 
-			const batchPrefix = 'DST';
-			const batchId = `${batchPrefix}${distributor.distributor_code}${Date.now()}`;
+		const batchPrefix = 'DST';
+		const batchId = `${batchPrefix}${distributor.distributor_code}${Date.now()}`;
 		const order = this.orderRepository.create({
 			order_no: this.generateActivationCodeOrderNo(),
 			user_id: userId,
@@ -1048,11 +1075,11 @@ export class DistributorService {
 				activation_code_purchase: {
 					distributor_id: distributor.id,
 					distributor_code: distributor.distributor_code,
-						batch_id: batchId,
-						batch_prefix: batchPrefix,
-						source_type: ActivationCodeSourceType.DISTRIBUTOR,
-						source_id: distributor.id,
-						course_id: courseId,
+					batch_id: batchId,
+					batch_prefix: batchPrefix,
+					source_type: ActivationCodeSourceType.DISTRIBUTOR,
+					source_id: distributor.id,
+					course_id: courseId,
 					course_name: course.name,
 					count: normalizedCount,
 					unit_price: agentPrice,
@@ -1091,26 +1118,27 @@ export class DistributorService {
 			return { message: '非激活码订单' };
 		}
 
-		const existingCount = await this.activationCodeRepository.count({
-			where: {
-				batch_id: payload.batch_id,
-				agent_id: payload.distributor_id,
-			},
-		});
-		if (existingCount > 0) {
-			return {
-				message: '激活码已生成',
-				batch_no: payload.batch_id,
-				count: existingCount,
-			};
-		}
+		return this.dataSource.transaction(async (manager) => {
+			const lockedOrder = await manager.getRepository(Order).createQueryBuilder('order').setLock('pessimistic_write').where('order.id = :orderId', { orderId: order.id }).getOne();
+			if (!lockedOrder) throw new NotFoundException('订单不存在');
+			const repository = manager.getRepository(ActivationCode);
+			const existingCount = await repository.count({
+				where: { batch_id: payload.batch_id, agent_id: payload.distributor_id },
+			});
+			if (existingCount > 0) {
+				return {
+					message: '激活码已生成',
+					batch_no: payload.batch_id,
+					count: existingCount,
+				};
+			}
 
-		const codes = [];
-		for (let i = 0; i < Number(payload.count || 0); i++) {
-			codes.push(
-				this.activationCodeRepository.create({
-					code: this.generateActivationCode(),
-					course_id: payload.course_id,
+			const codes = [];
+			for (let i = 0; i < Number(payload.count || 0); i++) {
+				codes.push(
+					repository.create({
+						code: this.generateActivationCode(),
+						course_id: payload.course_id,
 						batch_id: payload.batch_id,
 						batch_prefix: payload.batch_prefix || this.getBatchPrefix(payload.batch_id),
 						agent_id: payload.distributor_id,
@@ -1119,49 +1147,56 @@ export class DistributorService {
 						status: ActivationCodeStatus.PENDING,
 					}),
 				);
-		}
-		await this.activationCodeRepository.save(codes);
-
-		return {
-			message: '激活码生成成功',
-			batch_no: payload.batch_id,
-			count: codes.length,
-		};
+			}
+			await repository.save(codes);
+			return {
+				message: '激活码生成成功',
+				batch_no: payload.batch_id,
+				count: codes.length,
+			};
+		});
 	}
 
 	/**
 	 * 获取分销商购买的激活码列表
 	 */
-		async getDistributorCodes(userId: number, page = 1, pageSize = 20, batchId?: string, status?: number) {
+	async getDistributorCodes(userId: number, page = 1, pageSize = 20, batchId?: string, status?: number) {
 		// 校验分页参数，避免 NaN 传入 TypeORM
 		const validPage = Number.isFinite(page) && Number.isInteger(page) && page > 0 ? page : 1;
-		const validPageSize =
-			Number.isFinite(pageSize) && Number.isInteger(pageSize) && pageSize > 0 ? Math.min(100, pageSize) : 20;
+		const validPageSize = Number.isFinite(pageSize) && Number.isInteger(pageSize) && pageSize > 0 ? Math.min(100, pageSize) : 20;
 
-			const appUser = await this.appUserRepository.findOne({ where: { id: userId } });
-			const isAppAdmin = appUser?.role === AppUserRole.ADMIN;
+		const appUser = await this.appUserRepository.findOne({
+			where: { id: userId },
+		});
+		const isAppAdmin = appUser?.role === AppUserRole.ADMIN;
 
-			// 检查是否是分销商
-			const distributor = await this.distributorRepository.findOne({
-				where: { user_id: userId },
+		// 检查是否是分销商
+		const distributor = await this.distributorRepository.findOne({
+			where: { user_id: userId },
+		});
+
+		if (!distributor && !isAppAdmin) {
+			throw new BadRequestException('您还不是分销用户');
+		}
+
+		const queryBuilder = this.activationCodeRepository.createQueryBuilder('code');
+
+		if (isAppAdmin) {
+			queryBuilder.where('code.source_type = :sourceType', {
+				sourceType: ActivationCodeSourceType.APP_ADMIN,
 			});
-
-			if (!distributor && !isAppAdmin) {
-				throw new BadRequestException('您还不是分销用户');
-			}
-
-			const queryBuilder = this.activationCodeRepository.createQueryBuilder('code');
-
-			if (isAppAdmin) {
-				queryBuilder.where('code.source_type = :sourceType', { sourceType: ActivationCodeSourceType.APP_ADMIN });
-			} else {
-				// 只查询该分销商购买的激活码（通过 agent_id 关联）
-				queryBuilder.where('code.agent_id = :agentId', { agentId: distributor.id });
-			}
+		} else {
+			// 只查询该分销商购买的激活码（通过 agent_id 关联）
+			queryBuilder.where('code.agent_id = :agentId', {
+				agentId: distributor.id,
+			});
+		}
 
 		// 批次号筛选
 		if (batchId && batchId.trim() !== '') {
-			queryBuilder.andWhere('code.batch_id = :batchId', { batchId: batchId.trim() });
+			queryBuilder.andWhere('code.batch_id = :batchId', {
+				batchId: batchId.trim(),
+			});
 		}
 
 		// 状态筛选（仅当 status 为有效数字时添加）
@@ -1178,18 +1213,22 @@ export class DistributorService {
 			.getManyAndCount();
 
 		// 统计激活码数量（不限制分页，统计所有数据）
-			const statsQueryBuilder = this.activationCodeRepository.createQueryBuilder('code');
-			if (isAppAdmin) {
-				statsQueryBuilder.where('code.source_type = :sourceType', { sourceType: ActivationCodeSourceType.APP_ADMIN });
-			} else {
-				statsQueryBuilder.where('code.agent_id = :agentId', { agentId: distributor.id });
-			}
+		const statsQueryBuilder = this.activationCodeRepository.createQueryBuilder('code');
+		if (isAppAdmin) {
+			statsQueryBuilder.where('code.source_type = :sourceType', {
+				sourceType: ActivationCodeSourceType.APP_ADMIN,
+			});
+		} else {
+			statsQueryBuilder.where('code.agent_id = :agentId', {
+				agentId: distributor.id,
+			});
+		}
 
-			const allCodes = await statsQueryBuilder.getMany();
-			const totalCount = allCodes.length;
-			const usedCount = allCodes.filter((c) => c.status === ActivationCodeStatus.USED).length;
-			const pendingCount = allCodes.filter((c) => c.status === ActivationCodeStatus.PENDING).length;
-			const invalidCount = allCodes.filter((c) => c.status === ActivationCodeStatus.INVALID).length;
+		const allCodes = await statsQueryBuilder.getMany();
+		const totalCount = allCodes.length;
+		const usedCount = allCodes.filter((c) => c.status === ActivationCodeStatus.USED).length;
+		const pendingCount = allCodes.filter((c) => c.status === ActivationCodeStatus.PENDING).length;
+		const invalidCount = allCodes.filter((c) => c.status === ActivationCodeStatus.INVALID).length;
 
 		// 获取使用激活码的用户信息
 		const usedUserIds = codes.filter((c) => c.used_by_uid).map((c) => c.used_by_uid);
@@ -1200,33 +1239,26 @@ export class DistributorService {
 					})
 				: [];
 		const userMap = new Map(usedUsers.map((u) => [u.id, u]));
-		const packagePlanIds = Array.from(
-			new Set(
-				codes
-					.filter((code) => (code.target_type || ActivationCodeTargetType.COURSE) === ActivationCodeTargetType.PACKAGE && code.target_id)
-					.map((code) => code.target_id),
-			),
-		);
+		const packagePlanIds = Array.from(new Set(codes.filter((code) => (code.target_type || ActivationCodeTargetType.COURSE) === ActivationCodeTargetType.PACKAGE && code.target_id).map((code) => code.target_id)));
 		const packagePlans =
 			packagePlanIds.length > 0
-				? await this.packagePlanRepository.find({ where: { id: In(packagePlanIds) }, relations: ['section'] })
+				? await this.packagePlanRepository.find({
+						where: { id: In(packagePlanIds) },
+						relations: ['section'],
+					})
 				: [];
 		const packagePlanMap = new Map(packagePlans.map((plan) => [plan.id, plan]));
-		const categoryIds = Array.from(
-			new Set(
-				codes
-					.filter((code) => code.target_type === ActivationCodeTargetType.CATEGORY_BUNDLE && code.target_id)
-					.map((code) => code.target_id),
-			),
-		);
+		const categoryIds = Array.from(new Set(codes.filter((code) => code.target_type === ActivationCodeTargetType.CATEGORY_BUNDLE && code.target_id).map((code) => code.target_id)));
 		const categories = categoryIds.length
-			? await this.courseCategoryRepository.find({ where: { id: In(categoryIds) } })
+			? await this.courseCategoryRepository.find({
+					where: { id: In(categoryIds) },
+				})
 			: [];
-		const parentIds = Array.from(
-			new Set(categories.map((item) => item.parent_id).filter((id): id is number => id !== null)),
-		);
+		const parentIds = Array.from(new Set(categories.map((item) => item.parent_id).filter((id): id is number => id !== null)));
 		const categoryParents = parentIds.length
-			? await this.courseCategoryRepository.find({ where: { id: In(parentIds) } })
+			? await this.courseCategoryRepository.find({
+					where: { id: In(parentIds) },
+				})
 			: [];
 		const categoryMap = new Map(categories.map((item) => [item.id, item]));
 		const categoryParentMap = new Map(categoryParents.map((item) => [item.id, item]));
@@ -1236,16 +1268,9 @@ export class DistributorService {
 			list: codes.map((code) => {
 				const targetType = code.target_type || ActivationCodeTargetType.COURSE;
 				const plan = targetType === ActivationCodeTargetType.PACKAGE && code.target_id ? packagePlanMap.get(code.target_id) : null;
-				const category =
-					targetType === ActivationCodeTargetType.CATEGORY_BUNDLE && code.target_id
-						? categoryMap.get(code.target_id)
-						: null;
+				const category = targetType === ActivationCodeTargetType.CATEGORY_BUNDLE && code.target_id ? categoryMap.get(code.target_id) : null;
 				const categoryParent = category?.parent_id ? categoryParentMap.get(category.parent_id) : null;
-				const targetName = plan
-					? `${plan.section?.name || '套餐/VIP'} - ${plan.name}`
-					: category
-						? `${categoryParent ? `${categoryParent.name} / ` : ''}${category.name}`
-						: this.getActivationRewardTargetName(code) || code.course?.name || '-';
+				const targetName = plan ? `${plan.section?.name || '套餐/VIP'} - ${plan.name}` : category ? `${categoryParent ? `${categoryParent.name} / ` : ''}${category.name}` : this.getActivationRewardTargetName(code) || code.course?.name || '-';
 				return {
 					id: code.id,
 					code: code.code,
@@ -1260,12 +1285,7 @@ export class DistributorService {
 					course_id: code.course_id,
 					course_name: targetName,
 					status: code.status,
-					status_text:
-						code.status === ActivationCodeStatus.PENDING
-							? '待用'
-							: code.status === ActivationCodeStatus.USED
-								? '已用'
-								: '作废',
+					status_text: code.status === ActivationCodeStatus.PENDING ? '待用' : code.status === ActivationCodeStatus.USED ? '已用' : '作废',
 					used_by_uid: code.used_by_uid,
 					used_by_name: code.used_by_uid ? userMap.get(code.used_by_uid)?.nickname || '未知用户' : null,
 					used_time: code.used_time,
@@ -1276,257 +1296,262 @@ export class DistributorService {
 			page: validPage,
 			pageSize: validPageSize,
 			stats: {
-					total_count: totalCount,
-					used_count: usedCount,
-					pending_count: pendingCount,
-					invalid_count: invalidCount,
+				total_count: totalCount,
+				used_count: usedCount,
+				pending_count: pendingCount,
+				invalid_count: invalidCount,
+			},
+		};
+	}
+
+	async generateAdminActivationCodes(
+		userId: number,
+		input:
+			| {
+					course_id?: number;
+					count: number;
+					target_type?: ActivationCodeTargetType;
+					target_id?: number;
+					reward_payload?: ActivationCodeRewardPayload;
+			  }
+			| number,
+		legacyCount?: number,
+	) {
+		const appUser = await this.appUserRepository.findOne({
+			where: { id: userId },
+		});
+		if (appUser?.role !== AppUserRole.ADMIN) {
+			throw new BadRequestException('仅小程序管理员可以生成激活码');
+		}
+
+		const payload =
+			typeof input === 'number'
+				? {
+						course_id: input,
+						count: legacyCount || 0,
+						target_type: ActivationCodeTargetType.COURSE,
+					}
+				: input;
+		const normalizedCount = Number(payload.count);
+		if (!Number.isInteger(normalizedCount) || normalizedCount < 1) {
+			throw new BadRequestException('生成数量需为大于 0 的整数');
+		}
+
+		const target = await this.resolveAppAdminActivationTarget(payload);
+
+		const batchPrefix = 'APP';
+		const batchId = `${batchPrefix}${userId}${Date.now()}`;
+		const codes = Array.from({ length: normalizedCount }, () =>
+			this.activationCodeRepository.create({
+				code: this.generateActivationCode(),
+				course_id: target.courseId,
+				target_type: target.type,
+				target_id: target.id,
+				reward_payload: target.rewardPayload,
+				batch_id: batchId,
+				batch_prefix: batchPrefix,
+				agent_id: null,
+				source_type: ActivationCodeSourceType.APP_ADMIN,
+				source_id: userId,
+				status: ActivationCodeStatus.PENDING,
+			}),
+		);
+		await this.activationCodeRepository.save(codes);
+
+		return {
+			message: '激活码生成成功',
+			batch_no: batchId,
+			batch_id: batchId,
+			count: codes.length,
+			codes: codes.map((item) => item.code),
+			target_type: target.type,
+			target_id: target.id,
+			course_id: target.courseId,
+			course_name: target.name,
+			target_name: target.name,
+		};
+	}
+
+	private async resolveAppAdminActivationTarget(input: { course_id?: number; target_type?: ActivationCodeTargetType; target_id?: number; reward_payload?: ActivationCodeRewardPayload }) {
+		const type = input.target_type || ActivationCodeTargetType.COURSE;
+		if (type === ActivationCodeTargetType.AGENT) {
+			const agentLevel = this.normalizeAgentLevel(input.reward_payload?.agent_level);
+			return {
+				type,
+				id: null,
+				courseId: null,
+				name: `${this.getAgentLevelName(agentLevel)}身份`,
+				rewardPayload: { agent_level: agentLevel },
+			};
+		}
+		if (type === ActivationCodeTargetType.POINTS) {
+			const amount = Number(input.reward_payload?.points_amount);
+			if (!Number.isInteger(amount) || amount < 1 || amount > 1000000) {
+				throw new BadRequestException('请输入 1 至 1000000 的积分数量');
+			}
+			return {
+				type,
+				id: null,
+				courseId: null,
+				name: `${amount}积分`,
+				rewardPayload: { points_amount: amount },
+			};
+		}
+		if (type === ActivationCodeTargetType.COUPON) {
+			const amount = Number(input.reward_payload?.coupon_amount);
+			const minAmount = Number(input.reward_payload?.coupon_min_amount || 0);
+			const rawValidDays = input.reward_payload?.coupon_valid_days;
+			const validDays = rawValidDays === null || rawValidDays === undefined ? null : Number(rawValidDays);
+			if (!Number.isFinite(amount) || amount < 1 || amount > 1000000) {
+				throw new BadRequestException('请输入有效的优惠券面额');
+			}
+			if (!Number.isFinite(minAmount) || minAmount < 0 || minAmount > 100000000) {
+				throw new BadRequestException('请输入有效的使用门槛');
+			}
+			if (validDays !== null && (!Number.isInteger(validDays) || validDays < 1 || validDays > 3650)) {
+				throw new BadRequestException('有效期需为 1 至 3650 天');
+			}
+			return {
+				type,
+				id: null,
+				courseId: null,
+				name: `${amount}元${minAmount > 0 ? `满${minAmount}元可用` : '无门槛'}优惠券`,
+				rewardPayload: {
+					coupon_amount: amount,
+					coupon_min_amount: minAmount,
+					coupon_valid_days: validDays,
 				},
 			};
 		}
-
-		async generateAdminActivationCodes(
-			userId: number,
-			input:
-				| {
-						course_id?: number;
-						count: number;
-						target_type?: ActivationCodeTargetType;
-						target_id?: number;
-						reward_payload?: ActivationCodeRewardPayload;
-				  }
-				| number,
-			legacyCount?: number,
-		) {
-			const appUser = await this.appUserRepository.findOne({ where: { id: userId } });
-			if (appUser?.role !== AppUserRole.ADMIN) {
-				throw new BadRequestException('仅小程序管理员可以生成激活码');
+		if (type === ActivationCodeTargetType.CATEGORY_BUNDLE) {
+			const categoryId = Number(input.target_id);
+			if (!Number.isInteger(categoryId) || categoryId <= 0) {
+				throw new BadRequestException('请选择类目套餐');
 			}
-
-			const payload =
-				typeof input === 'number'
-					? { course_id: input, count: legacyCount || 0, target_type: ActivationCodeTargetType.COURSE }
-					: input;
-			const normalizedCount = Number(payload.count);
-			if (!Number.isInteger(normalizedCount) || normalizedCount < 1) {
-				throw new BadRequestException('生成数量需为大于 0 的整数');
+			const category = await this.courseCategoryRepository.findOne({
+				where: { id: categoryId },
+			});
+			if (!category || category.status === 0 || Number(category.bundle_enabled ?? 1) !== 1) {
+				throw new NotFoundException('类目套餐不存在或已关闭');
 			}
-
-			const target = await this.resolveAppAdminActivationTarget(payload);
-
-			const batchPrefix = 'APP';
-			const batchId = `${batchPrefix}${userId}${Date.now()}`;
-			const codes = Array.from({ length: normalizedCount }, () =>
-				this.activationCodeRepository.create({
-					code: this.generateActivationCode(),
-					course_id: target.courseId,
-					target_type: target.type,
-					target_id: target.id,
-					reward_payload: target.rewardPayload,
-					batch_id: batchId,
-					batch_prefix: batchPrefix,
-					agent_id: null,
-					source_type: ActivationCodeSourceType.APP_ADMIN,
-					source_id: userId,
-					status: ActivationCodeStatus.PENDING,
-				}),
-			);
-			await this.activationCodeRepository.save(codes);
-
+			const parent = category.parent_id
+				? await this.courseCategoryRepository.findOne({
+						where: { id: category.parent_id },
+					})
+				: null;
+			if (category.parent_id && (!parent || parent.status === 0)) {
+				throw new NotFoundException('类目套餐所属一级分类不存在或已关闭');
+			}
+			const courseCount = await this.courseRepository.count({
+				where: parent ? { category: parent.name, sub_category: category.name, status: 1 } : { category: category.name, status: 1 },
+			});
+			if (courseCount === 0) {
+				throw new BadRequestException('该类目下暂无可激活资料');
+			}
 			return {
-				message: '激活码生成成功',
-				batch_no: batchId,
-				batch_id: batchId,
-				count: codes.length,
-				codes: codes.map((item) => item.code),
-				target_type: target.type,
-				target_id: target.id,
-				course_id: target.courseId,
-				course_name: target.name,
-				target_name: target.name,
+				type,
+				id: category.id,
+				courseId: null,
+				name: `${parent ? `${parent.name} / ` : ''}${category.name}`,
+				rewardPayload: null,
 			};
 		}
+		const id = Number(input.target_id || input.course_id);
+		if (!Number.isInteger(id) || id <= 0) {
+			throw new BadRequestException(type === ActivationCodeTargetType.PACKAGE ? '请选择套餐/VIP计划' : '请选择课程');
+		}
 
-		private async resolveAppAdminActivationTarget(input: {
-			course_id?: number;
-			target_type?: ActivationCodeTargetType;
-			target_id?: number;
-			reward_payload?: ActivationCodeRewardPayload;
-		}) {
-			const type = input.target_type || ActivationCodeTargetType.COURSE;
-			if (type === ActivationCodeTargetType.AGENT) {
-				const agentLevel = this.normalizeAgentLevel(input.reward_payload?.agent_level);
-				return {
-					type,
-					id: null,
-					courseId: null,
-					name: `${this.getAgentLevelName(agentLevel)}身份`,
-					rewardPayload: { agent_level: agentLevel },
-				};
+		if (type === ActivationCodeTargetType.PACKAGE) {
+			const plan = await this.packagePlanRepository.findOne({
+				where: { id },
+				relations: ['section'],
+			});
+			if (!plan || plan.status === 0) {
+				throw new NotFoundException('套餐计划不存在或已禁用');
 			}
-			if (type === ActivationCodeTargetType.POINTS) {
-				const amount = Number(input.reward_payload?.points_amount);
-				if (!Number.isInteger(amount) || amount < 1 || amount > 1000000) {
-					throw new BadRequestException('请输入 1 至 1000000 的积分数量');
-				}
-				return {
-					type,
-					id: null,
-					courseId: null,
-					name: `${amount}积分`,
-					rewardPayload: { points_amount: amount },
-				};
-			}
-			if (type === ActivationCodeTargetType.COUPON) {
-				const amount = Number(input.reward_payload?.coupon_amount);
-				const minAmount = Number(input.reward_payload?.coupon_min_amount || 0);
-				const rawValidDays = input.reward_payload?.coupon_valid_days;
-				const validDays = rawValidDays === null || rawValidDays === undefined ? null : Number(rawValidDays);
-				if (!Number.isFinite(amount) || amount < 1 || amount > 1000000) {
-					throw new BadRequestException('请输入有效的优惠券面额');
-				}
-				if (!Number.isFinite(minAmount) || minAmount < 0 || minAmount > 100000000) {
-					throw new BadRequestException('请输入有效的使用门槛');
-				}
-				if (validDays !== null && (!Number.isInteger(validDays) || validDays < 1 || validDays > 3650)) {
-					throw new BadRequestException('有效期需为 1 至 3650 天');
-				}
-				return {
-					type,
-					id: null,
-					courseId: null,
-					name: `${amount}元${minAmount > 0 ? `满${minAmount}元可用` : '无门槛'}优惠券`,
-					rewardPayload: {
-						coupon_amount: amount,
-						coupon_min_amount: minAmount,
-						coupon_valid_days: validDays,
-					},
-				};
-			}
-			if (type === ActivationCodeTargetType.CATEGORY_BUNDLE) {
-				const categoryId = Number(input.target_id);
-				if (!Number.isInteger(categoryId) || categoryId <= 0) {
-					throw new BadRequestException('请选择类目套餐');
-				}
-				const category = await this.courseCategoryRepository.findOne({ where: { id: categoryId } });
-				if (!category || category.status === 0 || Number(category.bundle_enabled ?? 1) !== 1) {
-					throw new NotFoundException('类目套餐不存在或已关闭');
-				}
-				const parent = category.parent_id
-					? await this.courseCategoryRepository.findOne({ where: { id: category.parent_id } })
-					: null;
-				if (category.parent_id && (!parent || parent.status === 0)) {
-					throw new NotFoundException('类目套餐所属一级分类不存在或已关闭');
-				}
-				const courseCount = await this.courseRepository.count({
-					where: parent
-						? { category: parent.name, sub_category: category.name, status: 1 }
-						: { category: category.name, status: 1 },
-				});
-				if (courseCount === 0) {
-					throw new BadRequestException('该类目下暂无可激活资料');
-				}
-				return {
-					type,
-					id: category.id,
-					courseId: null,
-					name: `${parent ? `${parent.name} / ` : ''}${category.name}`,
-					rewardPayload: null,
-				};
-			}
-			const id = Number(input.target_id || input.course_id);
-			if (!Number.isInteger(id) || id <= 0) {
-				throw new BadRequestException(type === ActivationCodeTargetType.PACKAGE ? '请选择套餐/VIP计划' : '请选择课程');
-			}
-
-			if (type === ActivationCodeTargetType.PACKAGE) {
-				const plan = await this.packagePlanRepository.findOne({ where: { id }, relations: ['section'] });
-				if (!plan || plan.status === 0) {
-					throw new NotFoundException('套餐计划不存在或已禁用');
-				}
-				if (!plan.section || plan.section.status === 0) {
-					throw new NotFoundException('套餐不存在或已禁用');
-				}
-				return {
-					type,
-					id: plan.id,
-					courseId: null,
-					name: `${plan.section.name} - ${plan.name}`,
-					rewardPayload: null,
-				};
-			}
-
-			const course = await this.courseRepository.findOne({ where: { id } });
-			if (!course) {
-				throw new NotFoundException('课程不存在');
+			if (!plan.section || plan.section.status === 0) {
+				throw new NotFoundException('套餐不存在或已禁用');
 			}
 			return {
-				type: ActivationCodeTargetType.COURSE,
-				id: course.id,
-				courseId: course.id,
-				name: course.name,
+				type,
+				id: plan.id,
+				courseId: null,
+				name: `${plan.section.name} - ${plan.name}`,
 				rewardPayload: null,
 			};
 		}
 
-		async invalidateAppActivationCode(userId: number, codeId: number) {
-			const appUser = await this.appUserRepository.findOne({ where: { id: userId } });
-			const isAppAdmin = appUser?.role === AppUserRole.ADMIN;
-			const distributor = isAppAdmin
-				? null
-				: await this.distributorRepository.findOne({
-						where: { user_id: userId },
-					});
-
-			if (!isAppAdmin && !distributor) {
-				throw new BadRequestException('您还不是分销用户');
-			}
-
-			const queryRunner = this.dataSource.createQueryRunner();
-			await queryRunner.connect();
-			await queryRunner.startTransaction();
-
-			try {
-				const queryBuilder = queryRunner.manager
-					.createQueryBuilder(ActivationCode, 'code')
-					.setLock('pessimistic_write')
-					.where('code.id = :codeId', { codeId });
-
-				if (!isAppAdmin) {
-					queryBuilder.andWhere('code.agent_id = :agentId', { agentId: distributor.id });
-				}
-
-				const code = await queryBuilder.getOne();
-				if (!code) {
-					throw new BadRequestException('激活码不存在');
-				}
-				if (code.status !== ActivationCodeStatus.USED || !code.used_by_uid) {
-					throw new BadRequestException('只能禁用已激活的激活码');
-				}
-				if (
-					code.target_type === ActivationCodeTargetType.POINTS ||
-					code.target_type === ActivationCodeTargetType.COUPON ||
-					code.target_type === ActivationCodeTargetType.AGENT
-				) {
-					throw new BadRequestException('积分、优惠券或代理商身份激活码使用后不可撤销');
-				}
-
-				code.status = ActivationCodeStatus.INVALID;
-				await queryRunner.manager.save(ActivationCode, code);
-				if (code.target_type === ActivationCodeTargetType.CATEGORY_BUNDLE) {
-					await queryRunner.manager.delete(UserCategoryBundleAccess, { activation_code_id: code.id });
-				} else {
-					await this.revokeCodeCourseAuth(queryRunner.manager, code);
-				}
-				await queryRunner.commitTransaction();
-
-				return { success: true };
-			} catch (error) {
-				await queryRunner.rollbackTransaction();
-				throw error;
-			} finally {
-				await queryRunner.release();
-			}
+		const course = await this.courseRepository.findOne({ where: { id } });
+		if (!course) {
+			throw new NotFoundException('课程不存在');
 		}
+		return {
+			type: ActivationCodeTargetType.COURSE,
+			id: course.id,
+			courseId: course.id,
+			name: course.name,
+			rewardPayload: null,
+		};
+	}
+
+	async invalidateAppActivationCode(userId: number, codeId: number) {
+		const appUser = await this.appUserRepository.findOne({
+			where: { id: userId },
+		});
+		const isAppAdmin = appUser?.role === AppUserRole.ADMIN;
+		const distributor = isAppAdmin
+			? null
+			: await this.distributorRepository.findOne({
+					where: { user_id: userId },
+				});
+
+		if (!isAppAdmin && !distributor) {
+			throw new BadRequestException('您还不是分销用户');
+		}
+
+		const queryRunner = this.dataSource.createQueryRunner();
+		await queryRunner.connect();
+		await queryRunner.startTransaction();
+
+		try {
+			const queryBuilder = queryRunner.manager.createQueryBuilder(ActivationCode, 'code').setLock('pessimistic_write').where('code.id = :codeId', { codeId });
+
+			if (!isAppAdmin) {
+				queryBuilder.andWhere('code.agent_id = :agentId', {
+					agentId: distributor.id,
+				});
+			}
+
+			const code = await queryBuilder.getOne();
+			if (!code) {
+				throw new BadRequestException('激活码不存在');
+			}
+			if (code.status !== ActivationCodeStatus.USED || !code.used_by_uid) {
+				throw new BadRequestException('只能禁用已激活的激活码');
+			}
+			if (code.target_type === ActivationCodeTargetType.POINTS || code.target_type === ActivationCodeTargetType.COUPON || code.target_type === ActivationCodeTargetType.AGENT) {
+				throw new BadRequestException('积分、优惠券或代理商身份激活码使用后不可撤销');
+			}
+
+			code.status = ActivationCodeStatus.INVALID;
+			await queryRunner.manager.save(ActivationCode, code);
+			if (code.target_type === ActivationCodeTargetType.CATEGORY_BUNDLE) {
+				await queryRunner.manager.delete(UserCategoryBundleAccess, {
+					activation_code_id: code.id,
+				});
+			} else {
+				await this.revokeCodeCourseAuth(queryRunner.manager, code);
+			}
+			await queryRunner.commitTransaction();
+
+			return { success: true };
+		} catch (error) {
+			await queryRunner.rollbackTransaction();
+			throw error;
+		} finally {
+			await queryRunner.release();
+		}
+	}
 
 	/**
 	 * 生成随机激活码
@@ -1543,94 +1568,93 @@ export class DistributorService {
 		return code;
 	}
 
-		private generateActivationCodeOrderNo(): string {
-			const timestamp = Date.now();
-			const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-			return `AC${timestamp}${random}`;
+	private generateActivationCodeOrderNo(): string {
+		const timestamp = Date.now();
+		const random = Math.floor(Math.random() * 10000)
+			.toString()
+			.padStart(4, '0');
+		return `AC${timestamp}${random}`;
+	}
+
+	private getActivationTargetTypeText(type: ActivationCodeTargetType) {
+		if (type === ActivationCodeTargetType.AGENT) return '代理商身份';
+		if (type === ActivationCodeTargetType.PACKAGE) return '套餐/VIP';
+		if (type === ActivationCodeTargetType.CATEGORY_BUNDLE) return '类目套餐';
+		if (type === ActivationCodeTargetType.POINTS) return '积分';
+		if (type === ActivationCodeTargetType.COUPON) return '优惠券';
+		return '课程';
+	}
+
+	private getActivationRewardTargetName(code: ActivationCode) {
+		if (code.target_type === ActivationCodeTargetType.AGENT) return '代理商身份';
+		if (code.target_type === ActivationCodeTargetType.POINTS) {
+			const amount = Number(code.reward_payload?.points_amount || 0);
+			return amount > 0 ? `${amount}积分` : '积分';
 		}
-
-		private getActivationTargetTypeText(type: ActivationCodeTargetType) {
-			if (type === ActivationCodeTargetType.AGENT) return '代理商身份';
-			if (type === ActivationCodeTargetType.PACKAGE) return '套餐/VIP';
-			if (type === ActivationCodeTargetType.CATEGORY_BUNDLE) return '类目套餐';
-			if (type === ActivationCodeTargetType.POINTS) return '积分';
-			if (type === ActivationCodeTargetType.COUPON) return '优惠券';
-			return '课程';
+		if (code.target_type === ActivationCodeTargetType.COUPON) {
+			const amount = Number(code.reward_payload?.coupon_amount || 0);
+			const minAmount = Number(code.reward_payload?.coupon_min_amount || 0);
+			if (amount <= 0) return '优惠券';
+			return `${amount}元${minAmount > 0 ? `满${minAmount}元可用` : '无门槛'}优惠券`;
 		}
+		return '';
+	}
 
-		private getActivationRewardTargetName(code: ActivationCode) {
-			if (code.target_type === ActivationCodeTargetType.AGENT) return '代理商身份';
-			if (code.target_type === ActivationCodeTargetType.POINTS) {
-				const amount = Number(code.reward_payload?.points_amount || 0);
-				return amount > 0 ? `${amount}积分` : '积分';
-			}
-			if (code.target_type === ActivationCodeTargetType.COUPON) {
-				const amount = Number(code.reward_payload?.coupon_amount || 0);
-				const minAmount = Number(code.reward_payload?.coupon_min_amount || 0);
-				if (amount <= 0) return '优惠券';
-				return `${amount}元${minAmount > 0 ? `满${minAmount}元可用` : '无门槛'}优惠券`;
-			}
-			return '';
-		}
+	private async revokeCodeCourseAuth(manager: any, code: ActivationCode) {
+		if (!code.used_by_uid) return;
 
-		private async revokeCodeCourseAuth(manager: any, code: ActivationCode) {
-			if (!code.used_by_uid) return;
-
-			const paidOrder = await manager.findOne(Order, {
-				where: {
-					user_id: code.used_by_uid,
-					course_id: code.course_id,
-					status: OrderStatus.PAID,
-				},
-			});
-			if (paidOrder) return;
-
-			const otherUsedCodeCount = await manager.count(ActivationCode, {
-				where: {
-					used_by_uid: code.used_by_uid,
-					course_id: code.course_id,
-					status: ActivationCodeStatus.USED,
-				},
-			});
-			if (otherUsedCodeCount > 0) return;
-
-			await manager.delete(UserCourseAuth, {
+		const paidOrder = await manager.findOne(Order, {
+			where: {
 				user_id: code.used_by_uid,
 				course_id: code.course_id,
-				source: AuthSource.CODE,
-			});
-		}
+				status: OrderStatus.PAID,
+			},
+		});
+		if (paidOrder) return;
 
-		private getBatchPrefix(batchId?: string) {
-			if (!batchId) return '-';
-			if (batchId.startsWith('DST')) return 'DST';
-			if (batchId.startsWith('APP')) return 'APP';
-			if (batchId.startsWith('ADM')) return 'ADM';
-			if (batchId.startsWith('AGT')) return 'AGT';
-			if (batchId.startsWith('D')) return 'D';
-			return 'BATCH';
-		}
+		const otherUsedCodeCount = await manager.count(ActivationCode, {
+			where: {
+				used_by_uid: code.used_by_uid,
+				course_id: code.course_id,
+				status: ActivationCodeStatus.USED,
+			},
+		});
+		if (otherUsedCodeCount > 0) return;
 
-		private getSourceText(code: ActivationCode) {
-			const sourceType =
-				code.source_type ||
-				(code.batch_id?.startsWith('D') ? ActivationCodeSourceType.DISTRIBUTOR : ActivationCodeSourceType.ADMIN);
-			const textMap: Record<string, string> = {
-				[ActivationCodeSourceType.ADMIN]: '管理端生成',
-				[ActivationCodeSourceType.AGENT]: '代理商生成',
-				[ActivationCodeSourceType.DISTRIBUTOR]: '分销购买',
-				[ActivationCodeSourceType.APP_ADMIN]: '小程序管理员生成',
-			};
-			return textMap[sourceType] || '未知来源';
-		}
-
-		private normalizeAgentLevel(value: unknown) {
-			const level = Number(value);
-			return Number.isInteger(level) && level >= 1 && level <= 3 ? level : 1;
-		}
-
-		private getAgentLevelName(value: unknown) {
-			return ['一级代理', '二级代理', '三级代理'][this.normalizeAgentLevel(value) - 1];
-		}
-
+		await manager.delete(UserCourseAuth, {
+			user_id: code.used_by_uid,
+			course_id: code.course_id,
+			source: AuthSource.CODE,
+		});
 	}
+
+	private getBatchPrefix(batchId?: string) {
+		if (!batchId) return '-';
+		if (batchId.startsWith('DST')) return 'DST';
+		if (batchId.startsWith('APP')) return 'APP';
+		if (batchId.startsWith('ADM')) return 'ADM';
+		if (batchId.startsWith('AGT')) return 'AGT';
+		if (batchId.startsWith('D')) return 'D';
+		return 'BATCH';
+	}
+
+	private getSourceText(code: ActivationCode) {
+		const sourceType = code.source_type || (code.batch_id?.startsWith('D') ? ActivationCodeSourceType.DISTRIBUTOR : ActivationCodeSourceType.ADMIN);
+		const textMap: Record<string, string> = {
+			[ActivationCodeSourceType.ADMIN]: '管理端生成',
+			[ActivationCodeSourceType.AGENT]: '代理商生成',
+			[ActivationCodeSourceType.DISTRIBUTOR]: '分销购买',
+			[ActivationCodeSourceType.APP_ADMIN]: '小程序管理员生成',
+		};
+		return textMap[sourceType] || '未知来源';
+	}
+
+	private normalizeAgentLevel(value: unknown) {
+		const level = Number(value);
+		return Number.isInteger(level) && level >= 1 && level <= 3 ? level : 1;
+	}
+
+	private getAgentLevelName(value: unknown) {
+		return ['一级代理', '二级代理', '三级代理'][this.normalizeAgentLevel(value) - 1];
+	}
+}
