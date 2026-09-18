@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class UpdateDistributionConfigDto {
 	@ApiProperty({ description: '最大层级数', example: 3, minimum: 1, maximum: 10 })
@@ -12,25 +12,41 @@ export class UpdateDistributionConfigDto {
 	@ApiProperty({ description: '各级分成比例（百分比）', example: [10, 5, 2] })
 	@IsOptional()
 	@IsArray()
+	@ArrayMinSize(3)
+	@ArrayMaxSize(3)
 	@IsNumber({}, { each: true })
+	@Min(0, { each: true })
+	@Max(100, { each: true })
 	commission_rates?: number[];
 
 	@ApiProperty({ description: '初中高三级基础佣金比例', example: [20, 25, 30], required: false })
 	@IsOptional()
 	@IsArray()
+	@ArrayMinSize(3)
+	@ArrayMaxSize(3)
 	@IsNumber({}, { each: true })
+	@Min(0, { each: true })
+	@Max(100, { each: true })
 	base_commission_rates?: number[];
 
 	@ApiProperty({ description: '初中高三级直推团队佣金比例', example: [5, 6, 8], required: false })
 	@IsOptional()
 	@IsArray()
+	@ArrayMinSize(3)
+	@ArrayMaxSize(3)
 	@IsNumber({}, { each: true })
+	@Min(0, { each: true })
+	@Max(100, { each: true })
 	direct_commission_rates?: number[];
 
 	@ApiProperty({ description: '初中高三级间推团队佣金比例', example: [0, 3, 4], required: false })
 	@IsOptional()
 	@IsArray()
+	@ArrayMinSize(3)
+	@ArrayMaxSize(3)
 	@IsNumber({}, { each: true })
+	@Min(0, { each: true })
+	@Max(100, { each: true })
 	indirect_commission_rates?: number[];
 
 	@ApiProperty({ description: '最低提现金额（元）', example: 10 })
@@ -68,6 +84,7 @@ export class UpdateDistributionConfigDto {
 	@ApiProperty({ description: '是否启用分销系统', example: 1 })
 	@IsOptional()
 	@IsNumber()
+	@IsIn([0, 1])
 	is_enabled?: number;
 
 	@ApiProperty({ description: '分销说明', required: false })

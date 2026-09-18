@@ -49,7 +49,10 @@ describe('OrderService paper cart', () => {
     repos.get(Order).findOne.mockImplementation(async () => savedOrder);
     packageAccess = { batchUserHasCourseAccessViaPackage: jest.fn().mockResolvedValue(new Map()) };
     categoryAccess = { batchUserHasCourseAccess: jest.fn().mockResolvedValue(new Map()) };
-    commission = { processOrderCommission: jest.fn() };
+    commission = {
+      processOrderCommission: jest.fn(),
+      cancelOrderCommission: jest.fn(),
+    };
     module = await Test.createTestingModule({ providers: [OrderService,
       ...[...repos].map(([entity, value]) => ({ provide: getRepositoryToken(entity), useValue: value })),
       { provide: DistributorService, useValue: commission },
@@ -223,6 +226,7 @@ describe('OrderService paper cart', () => {
     expect(service.refundWechatPayOrder).toHaveBeenCalledTimes(1);
     expect(service.refundWechatPayOrder).toHaveBeenCalledWith(expect.objectContaining({ amount: 150 }), expect.any(String), '测试退款');
     expect(service.revokeCourseAccess).not.toHaveBeenCalled();
+    expect(commission.cancelOrderCommission).toHaveBeenCalledWith(savedOrder.id);
     expect(savedOrder.pay_payload.cart_items).toHaveLength(2);
     await expect(service.refundOrder(savedOrder.id, 1, {})).rejects.toThrow('该订单已退款');
     expect(service.refundWechatPayOrder).toHaveBeenCalledTimes(1);

@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { AppUserRole } from '../../database/entities/app-user.entity';
 import { ActivationCodeTargetType } from '../../database/entities/activation-code.entity';
 import { DistributionOrder } from '../../database/entities/distribution-order.entity';
-import { DistributorWithdrawal } from '../../database/entities/distributor-withdrawal.entity';
+import { DistributorWithdrawal, DistributorWithdrawalStatus } from '../../database/entities/distributor-withdrawal.entity';
 import { Distributor } from '../../database/entities/distributor.entity';
 import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { DistributorService } from './distributor.service';
@@ -133,6 +133,7 @@ describe('DistributorService agent identity activation codes', () => {
 				pricingMode: 'agent',
 			}),
 		};
+		service.assertDistributionEnabled = jest.fn().mockResolvedValue({ is_enabled: 1 });
 
 		await expect(service.buyActivationCodes(607, 12, 3)).resolves.toMatchObject({
 			count: 3,
@@ -184,6 +185,7 @@ describe('DistributorService agent identity activation codes', () => {
 				pricingMode: 'original',
 			}),
 		};
+		service.assertDistributionEnabled = jest.fn().mockResolvedValue({ is_enabled: 1 });
 
 		await expect(service.buyActivationCodes(607, 12, 2)).resolves.toMatchObject({
 			count: 2,
@@ -288,6 +290,65 @@ describe('DistributorService commission rules', () => {
 			expect.objectContaining({ distributor_id: 1, commission_type: 'paper', commission_amount: 2 }),
 		);
 	});
+
+	it('honors zero paper commission instead of falling back to one yuan', async () => {
+		const { service, commissionRepository } = createCommissionService({
+			id: 90,
+			user_id: 10,
+			amount: 999,
+			status: 'paid',
+			paid_time: new Date(),
+			pay_payload: { fulfillment_type: 'paper', cart_items: [{ course_id: 7 }] },
+		});
+		service.getDistributionConfig.mockResolvedValue({
+			paper_commission_per_kind: 0,
+			commission_freeze_days: 0,
+		});
+
+		await service.processOrderCommission(90);
+
+		expect(commissionRepository.save).not.toHaveBeenCalled();
+	});
+
+	it('honors a zero-day commission freeze', async () => {
+		const paidTime = new Date('2026-09-18T00:00:00.000Z');
+		const { service, commissionRepository } = createCommissionService({
+			id: 92,
+			user_id: 10,
+			amount: 100,
+			status: 'paid',
+			paid_time: paidTime,
+			pay_payload: {},
+		});
+		service.getDistributionConfig.mockResolvedValue({
+			base_commission_rates: [20, 25, 30],
+			direct_commission_rates: [5, 6, 8],
+			indirect_commission_rates: [0, 3, 4],
+			commission_freeze_days: 0,
+		});
+
+		await service.processOrderCommission(92);
+
+		expect(commissionRepository.save).toHaveBeenCalledWith(
+			expect.objectContaining({ available_at: paidTime }),
+		);
+	});
+
+	it('does not generate commissions while distribution is disabled', async () => {
+		const { service, commissionRepository } = createCommissionService({
+			id: 91,
+			user_id: 10,
+			amount: 100,
+			status: 'paid',
+			paid_time: new Date(),
+			pay_payload: {},
+		});
+		service.getDistributionConfig.mockResolvedValue({ is_enabled: 0 });
+
+		await service.processOrderCommission(91);
+
+		expect(commissionRepository.save).not.toHaveBeenCalled();
+	});
 });
 
 describe('DistributorService distributor lifecycle', () => {
@@ -299,6 +360,7 @@ describe('DistributorService distributor lifecycle', () => {
 			save: jest.fn((payload) => Promise.resolve(payload)),
 		};
 		service.evaluateUplinePromotion = jest.fn().mockResolvedValue(undefined);
+		service.assertDistributionEnabled = jest.fn().mockResolvedValue({ is_enabled: 1 });
 
 		await expect(service.applyDistributor(607)).resolves.toEqual(
 			expect.objectContaining({ message: '已免费开通初级代理', agent_level: 1 }),
@@ -330,11 +392,11 @@ describe('DistributorService distributor lifecycle', () => {
 			}),
 			save: jest.fn(),
 		};
-		service.getDistributionConfig = jest.fn();
+		service.assertDistributionEnabled = jest.fn().mockResolvedValue({ max_level: 3, is_enabled: 1 });
 
 		await expect(service.bindDistributionRelation(100, 'D200')).rejects.toThrow('不能绑定自己的下级为上级');
 		expect(service.distributionRelationRepository.save).not.toHaveBeenCalled();
-		expect(service.getDistributionConfig).not.toHaveBeenCalled();
+		expect(service.assertDistributionEnabled).toHaveBeenCalled();
 	});
 
 	it('keeps a promoted distributor level permanently when direct counts later drop', async () => {
@@ -357,6 +419,42 @@ describe('DistributorService distributor lifecycle', () => {
 
 		expect(upline.agent_level).toBe(3);
 		expect(service.distributorRepository.save).not.toHaveBeenCalled();
+	});
+
+	it('blocks free opening while the distribution switch is disabled', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		service.distributionConfigRepository = {
+			findOne: jest.fn().mockResolvedValue({ id: 1, is_enabled: 0 }),
+		};
+		service.distributorRepository = { findOne: jest.fn() };
+
+		await expect(service.applyDistributor(607)).rejects.toThrow('分销系统暂未开放');
+		expect(service.distributorRepository.findOne).not.toHaveBeenCalled();
+	});
+
+	it('reevaluates the upline when an admin approves an agent', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		const distributor = { id: 7, user_id: 607, status: 0, agent_level: 1, reject_reason: '旧原因' };
+		const queryBuilder: any = {
+			setLock: jest.fn(),
+			where: jest.fn(),
+			getOne: jest.fn().mockResolvedValue(distributor),
+		};
+		queryBuilder.setLock.mockReturnValue(queryBuilder);
+		queryBuilder.where.mockReturnValue(queryBuilder);
+		const repository = {
+			createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+			save: jest.fn((payload) => Promise.resolve(payload)),
+		};
+		const manager = { getRepository: jest.fn().mockReturnValue(repository) };
+		service.dataSource = { transaction: jest.fn((callback) => callback(manager)) };
+		service.evaluateUplinePromotion = jest.fn().mockResolvedValue(undefined);
+
+		await service.updateDistributorStatus(7, { status: 1 });
+
+		expect(queryBuilder.setLock).toHaveBeenCalledWith('pessimistic_write');
+		expect(service.evaluateUplinePromotion).toHaveBeenCalledWith(607, manager);
+		expect(distributor.reject_reason).toBeNull();
 	});
 });
 
@@ -465,5 +563,60 @@ describe('DistributorService money concurrency', () => {
 		expect(distributorQueryBuilder.setLock).toHaveBeenCalledWith('pessimistic_write');
 		expect(withdrawalRepository.save).toHaveBeenCalledTimes(1);
 		expect(distributor.withdrawable_amount).toBe(50);
+	});
+
+	it('refunds a concurrently rejected withdrawal only once', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		const withdrawal = {
+			id: 11,
+			distributor_id: 7,
+			amount: 100,
+			status: DistributorWithdrawalStatus.PENDING,
+		};
+		const queryBuilder: any = {
+			setLock: jest.fn(),
+			where: jest.fn(),
+			getOne: jest.fn(async () => withdrawal),
+		};
+		queryBuilder.setLock.mockReturnValue(queryBuilder);
+		queryBuilder.where.mockReturnValue(queryBuilder);
+		const repository = {
+			createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+			save: jest.fn((payload) => Promise.resolve(payload)),
+		};
+		const manager = {
+			getRepository: jest.fn().mockReturnValue(repository),
+			increment: jest.fn().mockResolvedValue(undefined),
+		};
+		service.dataSource = { transaction: createSerializedTransaction(manager) };
+
+		const results = await Promise.allSettled([
+			service.updateWithdrawalStatus(11, DistributorWithdrawalStatus.REJECTED, 1, '重复请求'),
+			service.updateWithdrawalStatus(11, DistributorWithdrawalStatus.REJECTED, 2, '重复请求'),
+		]);
+
+		expect(results.filter((item) => item.status === 'fulfilled')).toHaveLength(1);
+		expect(results.filter((item) => item.status === 'rejected')).toHaveLength(1);
+		expect(queryBuilder.setLock).toHaveBeenCalledWith('pessimistic_write');
+		expect(manager.increment).toHaveBeenCalledTimes(1);
+	});
+
+	it('locks commission rows before refund cancellation', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		const queryBuilder: any = {
+			setLock: jest.fn(),
+			where: jest.fn(),
+			orderBy: jest.fn(),
+			getMany: jest.fn().mockResolvedValue([]),
+		};
+		for (const method of ['setLock', 'where', 'orderBy']) queryBuilder[method].mockReturnValue(queryBuilder);
+		const repository = { createQueryBuilder: jest.fn().mockReturnValue(queryBuilder) };
+		const manager = { getRepository: jest.fn().mockReturnValue(repository) };
+		service.dataSource = { transaction: jest.fn((callback) => callback(manager)) };
+
+		await service.cancelOrderCommission(88);
+
+		expect(queryBuilder.setLock).toHaveBeenCalledWith('pessimistic_write');
+		expect(queryBuilder.orderBy).toHaveBeenCalledWith('commission.id', 'ASC');
 	});
 });

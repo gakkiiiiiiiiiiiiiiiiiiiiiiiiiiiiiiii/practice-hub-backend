@@ -11,6 +11,10 @@ describe('ActivationCodeService', () => {
       {} as any,
       {} as any,
       {} as any,
+      {
+        assertDistributionEnabled: jest.fn().mockResolvedValue({ is_enabled: 1 }),
+        evaluateUplinePromotion: jest.fn().mockResolvedValue(undefined),
+      } as any,
     );
 
   it('previews points activation codes', async () => {
@@ -68,6 +72,10 @@ describe('ActivationCodeService', () => {
           .mockResolvedValueOnce({ id: 3, name: '护理学' }),
       } as any,
       {} as any,
+      {
+        assertDistributionEnabled: jest.fn().mockResolvedValue({ is_enabled: 1 }),
+        evaluateUplinePromotion: jest.fn().mockResolvedValue(undefined),
+      } as any,
     );
 
     await expect(service.previewCode('ABCD-EFGH-JKLM')).resolves.toMatchObject({
@@ -108,5 +116,39 @@ describe('ActivationCodeService', () => {
 	  agent_level: 2,
       distributor_code: expect.stringMatching(/^D607/),
     });
+  });
+
+  it('reevaluates the upline inside the agent-code redemption transaction', async () => {
+    const service = createService(null) as any;
+    const activationCode = {
+      id: 1,
+      code: 'AGNT-EFGH-JKLM',
+      status: ActivationCodeStatus.PENDING,
+      target_type: ActivationCodeTargetType.AGENT,
+      reward_payload: { agent_level: 1 },
+    };
+    const manager = {
+      findOne: jest.fn()
+        .mockResolvedValueOnce(activationCode)
+        .mockResolvedValueOnce(null),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      create: jest.fn((_entity, payload) => payload),
+      save: jest.fn((_entity, payload) => Promise.resolve({ id: 9, ...payload })),
+    };
+    const queryRunner = {
+      manager,
+      connect: jest.fn(),
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn(),
+      rollbackTransaction: jest.fn(),
+      release: jest.fn(),
+    };
+    service.dataSource = { createQueryRunner: jest.fn().mockReturnValue(queryRunner) };
+
+    await expect(service.redeemCode(607, activationCode.code)).resolves.toMatchObject({ is_agent: true });
+
+    expect(service.distributorService.assertDistributionEnabled).toHaveBeenCalled();
+    expect(service.distributorService.evaluateUplinePromotion).toHaveBeenCalledWith(607, manager);
+    expect(queryRunner.commitTransaction).toHaveBeenCalled();
   });
 });

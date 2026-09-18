@@ -30,6 +30,7 @@ import { UpdateWithdrawalStatusDto } from "./dto/update-withdrawal-status.dto";
 @ApiTags("后台-分销管理")
 @Controller("admin/distributor")
 @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(AdminRole.SUPER_ADMIN)
 @ApiBearerAuth()
 export class AdminDistributorController {
   constructor(

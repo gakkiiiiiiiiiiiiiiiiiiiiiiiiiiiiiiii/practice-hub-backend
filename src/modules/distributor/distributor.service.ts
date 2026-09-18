@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In } from 'typeorm';
+import { DataSource, EntityManager, Repository, In } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import * as https from 'https';
@@ -73,6 +73,7 @@ export class DistributorService {
 	 * 申请成为分销用户
 	 */
 	async applyDistributor(userId: number) {
+		await this.assertDistributionEnabled();
 		// 检查是否已经是分销用户
 		const existing = await this.distributorRepository.findOne({
 			where: { user_id: userId },
@@ -178,6 +179,7 @@ export class DistributorService {
 	 * 通过分销商编号注册，绑定上下级关系
 	 */
 	async bindDistributionRelation(userId: number, distributorCode: string) {
+		const config = await this.assertDistributionEnabled();
 		// 检查用户是否已经有上级
 		const existingRelation = await this.distributionRelationRepository.findOne({
 			where: { user_id: userId },
@@ -212,8 +214,7 @@ export class DistributorService {
 		}
 
 		// 获取配置，确定最大层级
-		const config = await this.getDistributionConfig();
-		const maxLevel = config.max_level || 3;
+		const maxLevel = config.max_level ?? 3;
 
 		// 查找分销商的层级
 		const distributorRelation = await this.distributionRelationRepository.findOne({
@@ -267,18 +268,22 @@ export class DistributorService {
 			return;
 		}
 
+		const config = await this.getDistributionConfig();
+		if (Number(config.is_enabled ?? 1) !== 1) {
+			this.logger.log(`分销系统已关闭，订单 ${orderId} 不生成佣金`);
+			return;
+		}
 		const chain = await this.getDistributorChain(order.user_id, 3);
 		if (chain.length === 0) {
 			this.logger.log(`订单 ${orderId} 没有分销关系，无需分成`);
 			return;
 		}
-		const config = await this.getDistributionConfig();
 		const paidAt = order.paid_time || new Date();
-		const availableAt = new Date(paidAt.getTime() + Number(config.commission_freeze_days || 15) * 86400000);
+		const availableAt = new Date(paidAt.getTime() + Number(config.commission_freeze_days ?? 15) * 86400000);
 		const entries: Array<{ distributor: Distributor; type: DistributionOrder['commission_type']; rate: number; amount: number; level: number }> = [];
 		if (this.isPaperOrder(order)) {
 			const kindCount = this.getPaperKindCount(order);
-			const amount = this.roundMoney(kindCount * Number(config.paper_commission_per_kind || 1));
+			const amount = this.roundMoney(kindCount * Number(config.paper_commission_per_kind ?? 1));
 			if (amount > 0) entries.push({ distributor: chain[0], type: 'paper', rate: 0, amount, level: 1 });
 		} else {
 			const baseRates = this.normalizeRates(config.base_commission_rates, [20, 25, 30]);
@@ -367,17 +372,23 @@ export class DistributorService {
 		return Math.max(1, keys.size);
 	}
 
-	private async evaluateUplinePromotion(activatedUserId: number) {
+	async evaluateUplinePromotion(activatedUserId: number, manager?: EntityManager) {
+		const relationRepository = manager
+			? manager.getRepository(DistributionRelation)
+			: this.distributionRelationRepository;
+		const distributorRepository = manager
+			? manager.getRepository(Distributor)
+			: this.distributorRepository;
 		let currentUserId = activatedUserId;
 		for (let depth = 0; depth < 10; depth += 1) {
-			const relation = await this.distributionRelationRepository.findOne({ where: { user_id: currentUserId } });
+			const relation = await relationRepository.findOne({ where: { user_id: currentUserId } });
 			if (!relation) break;
-			const upline = await this.distributorRepository.findOne({ where: { id: relation.distributor_id } });
+			const upline = await distributorRepository.findOne({ where: { id: relation.distributor_id } });
 			if (!upline || upline.status !== 1) break;
-			const directRelations = await this.distributionRelationRepository.find({ where: { distributor_id: upline.id } });
+			const directRelations = await relationRepository.find({ where: { distributor_id: upline.id } });
 			const directUserIds = directRelations.map((item) => item.user_id);
 			const directAgents = directUserIds.length
-				? await this.distributorRepository.find({ where: { user_id: In(directUserIds), status: 1 } })
+				? await distributorRepository.find({ where: { user_id: In(directUserIds), status: 1 } })
 				: [];
 			const juniorCount = directAgents.filter((item) => this.normalizeAgentLevel(item.agent_level) === 1).length;
 			const middleCount = directAgents.filter((item) => this.normalizeAgentLevel(item.agent_level) === 2).length;
@@ -386,7 +397,7 @@ export class DistributorService {
 			else if (juniorCount >= 15 && nextLevel < 2) nextLevel = 2;
 			if (nextLevel > this.normalizeAgentLevel(upline.agent_level)) {
 				upline.agent_level = nextLevel;
-				await this.distributorRepository.save(upline);
+				await distributorRepository.save(upline);
 			}
 			currentUserId = upline.user_id;
 		}
@@ -427,7 +438,12 @@ export class DistributorService {
 	async cancelOrderCommission(orderId: number) {
 		await this.dataSource.transaction(async (manager) => {
 			const repository = manager.getRepository(DistributionOrder);
-			const commissions = await repository.find({ where: { order_id: orderId } });
+			const commissions = await repository
+				.createQueryBuilder('commission')
+				.setLock('pessimistic_write')
+				.where('commission.order_id = :orderId', { orderId })
+				.orderBy('commission.id', 'ASC')
+				.getMany();
 			for (const commission of commissions.filter((item) => item.status !== 2)) {
 				const amount = Number(commission.commission_amount || 0);
 				await manager.decrement(Distributor, { id: commission.distributor_id }, 'total_earnings', amount);
@@ -448,13 +464,13 @@ export class DistributorService {
 		await this.settleAvailableCommissions(distributor.id);
 		const config = await this.getDistributionConfig();
 		const amount = this.roundMoney(dto.amount);
-		const minimum = Number(config.min_withdraw_amount || 100);
-		const reserve = Number(config.withdraw_reserve_amount || 20);
+		const minimum = Number(config.min_withdraw_amount ?? 100);
+		const reserve = Number(config.withdraw_reserve_amount ?? 20);
 		if (amount < minimum) throw new BadRequestException(`最低提现金额为 ${minimum} 元`);
 		const alipayAccount = String(dto.alipay_account || '').trim();
 		const realName = String(dto.real_name || '').trim();
 		if (!alipayAccount || !realName) throw new BadRequestException('请填写支付宝账号与真实姓名');
-		const feeAmount = this.roundMoney((amount * Number(config.withdraw_fee_rate || 5)) / 100);
+		const feeAmount = this.roundMoney((amount * Number(config.withdraw_fee_rate ?? 5)) / 100);
 		const payoutAmount = this.roundMoney(amount - feeAmount);
 		return this.dataSource.transaction(async (manager) => {
 			const distributorRepository = manager.getRepository(Distributor);
@@ -674,6 +690,14 @@ export class DistributorService {
 		return config;
 	}
 
+	async assertDistributionEnabled(): Promise<DistributionConfig> {
+		const config = await this.getDistributionConfig();
+		if (Number(config.is_enabled ?? 1) !== 1) {
+			throw new BadRequestException('分销系统暂未开放');
+		}
+		return config;
+	}
+
 	/**
 	 * 获取分销用户信息
 	 */
@@ -843,23 +867,26 @@ export class DistributorService {
 	 * 更新分销用户状态（后台管理）
 	 */
 	async updateDistributorStatus(id: number, dto: UpdateDistributorStatusDto) {
-		const distributor = await this.distributorRepository.findOne({
-			where: { id },
+		return this.dataSource.transaction(async (manager) => {
+			const repository = manager.getRepository(Distributor);
+			const distributor = await repository
+				.createQueryBuilder('distributor')
+				.setLock('pessimistic_write')
+				.where('distributor.id = :id', { id })
+				.getOne();
+
+			if (!distributor) throw new NotFoundException('分销用户不存在');
+
+			distributor.status = dto.status;
+			if (dto.agent_level !== undefined) distributor.agent_level = this.normalizeAgentLevel(dto.agent_level);
+			if (dto.status === 2 && dto.reject_reason) distributor.reject_reason = dto.reject_reason;
+			if (dto.status === 1) distributor.reject_reason = null;
+
+			await repository.save(distributor);
+			if (dto.status === 1) await this.evaluateUplinePromotion(distributor.user_id, manager);
+
+			return { message: '状态更新成功' };
 		});
-
-		if (!distributor) {
-			throw new NotFoundException('分销用户不存在');
-		}
-
-		distributor.status = dto.status;
-		if (dto.agent_level !== undefined) distributor.agent_level = this.normalizeAgentLevel(dto.agent_level);
-		if (dto.status === 2 && dto.reject_reason) {
-			distributor.reject_reason = dto.reject_reason;
-		}
-
-		await this.distributorRepository.save(distributor);
-
-		return { message: '状态更新成功' };
 	}
 
 	/**
@@ -948,7 +975,11 @@ export class DistributorService {
 		}
 		return this.dataSource.transaction(async (manager) => {
 			const repository = manager.getRepository(DistributorWithdrawal);
-			const withdrawal = await repository.findOne({ where: { id } });
+			const withdrawal = await repository
+				.createQueryBuilder('withdrawal')
+				.setLock('pessimistic_write')
+				.where('withdrawal.id = :id', { id })
+				.getOne();
 			if (!withdrawal) throw new NotFoundException('提现申请不存在');
 			if (withdrawal.status !== DistributorWithdrawalStatus.PENDING) throw new BadRequestException('该提现申请已处理');
 			withdrawal.status = status;
@@ -967,6 +998,7 @@ export class DistributorService {
 	 * 购买激活码（分销商）
 	 */
 	async buyActivationCodes(userId: number, courseId: number, count: number) {
+		await this.assertDistributionEnabled();
 		const normalizedCount = Number(count);
 		if (!Number.isInteger(normalizedCount) || normalizedCount < 1 || normalizedCount > 1000) {
 			throw new BadRequestException('购买数量需为 1～1000 的整数');

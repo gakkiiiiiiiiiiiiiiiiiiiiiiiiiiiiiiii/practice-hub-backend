@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { ActivationCode, ActivationCodeStatus, ActivationCodeTargetType } from '../../database/entities/activation-code.entity';
@@ -12,6 +12,7 @@ import { CourseCategory } from '../../database/entities/course-category.entity';
 import { UserCategoryBundleAccess } from '../../database/entities/user-category-bundle-access.entity';
 import { Distributor } from '../../database/entities/distributor.entity';
 import { requestUserPreviewDemand } from '../course/preview-demand.util';
+import { DistributorService } from '../distributor/distributor.service';
 
 @Injectable()
 export class ActivationCodeService {
@@ -29,6 +30,8 @@ export class ActivationCodeService {
     @InjectRepository(CourseCategory)
     private courseCategoryRepository: Repository<CourseCategory>,
     private dataSource: DataSource,
+    @Inject(forwardRef(() => DistributorService))
+    private distributorService: DistributorService,
   ) {}
 
   /**
@@ -197,7 +200,9 @@ export class ActivationCodeService {
       const targetType = activationCode.target_type || ActivationCodeTargetType.COURSE;
       let agentIdentity: Distributor | null = null;
       if (targetType === ActivationCodeTargetType.AGENT) {
+        await this.distributorService.assertDistributionEnabled();
         agentIdentity = await this.grantAgentByCode(queryRunner.manager, userId, activationCode);
+        await this.distributorService.evaluateUplinePromotion(userId, queryRunner.manager);
       } else if (targetType === ActivationCodeTargetType.PACKAGE) {
         await this.grantPackageByCode(queryRunner.manager, userId, activationCode);
       } else if (targetType === ActivationCodeTargetType.CATEGORY_BUNDLE) {
