@@ -393,28 +393,31 @@ export class DistributorService {
 	}
 
 	private async settleAvailableCommissions(distributorId: number) {
-		const due = await this.distributionOrderRepository
-			.createQueryBuilder('commission')
-			.where('commission.distributor_id = :distributorId', { distributorId })
-			.andWhere('commission.status = 0')
-			.andWhere('commission.available_at IS NOT NULL')
-			.andWhere('commission.available_at <= :now', { now: new Date() })
-			.getMany();
-		if (!due.length) return;
-		const orders = await this.orderRepository.find({ where: { id: In(due.map((item) => item.order_id)) } });
-		const orderStatus = new Map(orders.map((item) => [item.id, item.status]));
 		await this.dataSource.transaction(async (manager) => {
+			const repository = manager.getRepository(DistributionOrder);
+			const due = await repository
+				.createQueryBuilder('commission')
+				.setLock('pessimistic_write')
+				.where('commission.distributor_id = :distributorId', { distributorId })
+				.andWhere('commission.status = 0')
+				.andWhere('commission.available_at IS NOT NULL')
+				.andWhere('commission.available_at <= :now', { now: new Date() })
+				.orderBy('commission.id', 'ASC')
+				.getMany();
+			if (!due.length) return;
+			const orders = await manager.getRepository(Order).find({ where: { id: In(due.map((item) => item.order_id)) } });
+			const orderStatus = new Map(orders.map((item) => [item.id, item.status]));
 			for (const commission of due) {
 				if (orderStatus.get(commission.order_id) !== OrderStatus.PAID) {
 					commission.status = 2;
-					await manager.getRepository(DistributionOrder).save(commission);
+					await repository.save(commission);
 					await manager.decrement(Distributor, { id: distributorId }, 'frozen_amount', Number(commission.commission_amount));
 					await manager.decrement(Distributor, { id: distributorId }, 'total_earnings', Number(commission.commission_amount));
 					continue;
 				}
 				commission.status = 1;
 				commission.settle_time = new Date();
-				await manager.getRepository(DistributionOrder).save(commission);
+				await repository.save(commission);
 				await manager.decrement(Distributor, { id: distributorId }, 'frozen_amount', Number(commission.commission_amount));
 				await manager.increment(Distributor, { id: distributorId }, 'withdrawable_amount', Number(commission.commission_amount));
 			}
@@ -443,23 +446,31 @@ export class DistributorService {
 		const distributor = await this.distributorRepository.findOne({ where: { user_id: userId } });
 		if (!distributor || distributor.status !== 1) throw new BadRequestException('请先免费开通代理');
 		await this.settleAvailableCommissions(distributor.id);
-		const fresh = await this.distributorRepository.findOne({ where: { id: distributor.id } });
 		const config = await this.getDistributionConfig();
 		const amount = this.roundMoney(dto.amount);
 		const minimum = Number(config.min_withdraw_amount || 100);
 		const reserve = Number(config.withdraw_reserve_amount || 20);
 		if (amount < minimum) throw new BadRequestException(`最低提现金额为 ${minimum} 元`);
-		if (Number(fresh.withdrawable_amount || 0) - amount < reserve) {
-			throw new BadRequestException(`提现后账户至少需要保留 ${reserve} 元`);
-		}
 		const alipayAccount = String(dto.alipay_account || '').trim();
 		const realName = String(dto.real_name || '').trim();
 		if (!alipayAccount || !realName) throw new BadRequestException('请填写支付宝账号与真实姓名');
 		const feeAmount = this.roundMoney((amount * Number(config.withdraw_fee_rate || 5)) / 100);
 		const payoutAmount = this.roundMoney(amount - feeAmount);
 		return this.dataSource.transaction(async (manager) => {
-			await manager.decrement(Distributor, { id: distributor.id }, 'withdrawable_amount', amount);
-			await manager.update(Distributor, { id: distributor.id }, { alipay_account: alipayAccount, real_name: realName });
+			const distributorRepository = manager.getRepository(Distributor);
+			const fresh = await distributorRepository
+				.createQueryBuilder('distributor')
+				.setLock('pessimistic_write')
+				.where('distributor.id = :id', { id: distributor.id })
+				.getOne();
+			if (!fresh || fresh.status !== 1) throw new BadRequestException('请先免费开通代理');
+			if (Number(fresh.withdrawable_amount || 0) - amount < reserve) {
+				throw new BadRequestException(`提现后账户至少需要保留 ${reserve} 元`);
+			}
+			fresh.withdrawable_amount = this.roundMoney(Number(fresh.withdrawable_amount || 0) - amount);
+			fresh.alipay_account = alipayAccount;
+			fresh.real_name = realName;
+			await distributorRepository.save(fresh);
 			const repository = manager.getRepository(DistributorWithdrawal);
 			const withdrawal = await repository.save(repository.create({
 				distributor_id: distributor.id,
@@ -496,16 +507,16 @@ export class DistributorService {
 				return false; // 没有上级了，不是下级
 			}
 
-			if (relation.distributor_id === checkUserId) {
-				return true; // 找到了，是下级
-			}
-
 			const distributor = await this.distributorRepository.findOne({
 				where: { id: relation.distributor_id },
 			});
 
 			if (!distributor) {
 				return false;
+			}
+
+			if (distributor.user_id === checkUserId) {
+				return true; // 找到了，是下级
 			}
 
 			currentUserId = distributor.user_id;

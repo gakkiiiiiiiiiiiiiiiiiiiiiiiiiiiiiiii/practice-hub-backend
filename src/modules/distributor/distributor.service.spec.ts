@@ -1,6 +1,23 @@
+import { BadRequestException } from '@nestjs/common';
 import { AppUserRole } from '../../database/entities/app-user.entity';
 import { ActivationCodeTargetType } from '../../database/entities/activation-code.entity';
+import { DistributionOrder } from '../../database/entities/distribution-order.entity';
+import { DistributorWithdrawal } from '../../database/entities/distributor-withdrawal.entity';
+import { Distributor } from '../../database/entities/distributor.entity';
+import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { DistributorService } from './distributor.service';
+
+const createSerializedTransaction = (manager: any) => {
+	let queue = Promise.resolve();
+	return jest.fn((callback: (transactionManager: any) => Promise<any>) => {
+		const result = queue.then(() => callback(manager));
+		queue = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		return result;
+	});
+};
 
 describe('DistributorService getDistributorInfo', () => {
 	const createService = (role = AppUserRole.USER) => {
@@ -270,5 +287,183 @@ describe('DistributorService commission rules', () => {
 		expect(commissionRepository.save).toHaveBeenCalledWith(
 			expect.objectContaining({ distributor_id: 1, commission_type: 'paper', commission_amount: 2 }),
 		);
+	});
+});
+
+describe('DistributorService distributor lifecycle', () => {
+	it('opens a new distributor for free and approves it immediately', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		service.distributorRepository = {
+			findOne: jest.fn().mockResolvedValue(null),
+			create: jest.fn((payload) => payload),
+			save: jest.fn((payload) => Promise.resolve(payload)),
+		};
+		service.evaluateUplinePromotion = jest.fn().mockResolvedValue(undefined);
+
+		await expect(service.applyDistributor(607)).resolves.toEqual(
+			expect.objectContaining({ message: '已免费开通初级代理', agent_level: 1 }),
+		);
+		expect(service.distributorRepository.create).toHaveBeenCalledWith(
+			expect.objectContaining({ user_id: 607, status: 1, agent_level: 1 }),
+		);
+		expect(service.evaluateUplinePromotion).toHaveBeenCalledWith(607);
+	});
+
+	it('rejects binding a distributor to one of its own descendants', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		const targetDistributor = { id: 10, user_id: 100, status: 1 };
+		const descendantDistributor = { id: 20, user_id: 200, status: 1, distributor_code: 'D200', subordinate_count: 0 };
+		service.distributionRelationRepository = {
+			findOne: jest.fn(({ where }) => {
+				if (where.user_id === 100) return Promise.resolve(null);
+				if (where.user_id === 200) return Promise.resolve({ user_id: 200, distributor_id: 10 });
+				return Promise.resolve(null);
+			}),
+			create: jest.fn((payload) => payload),
+			save: jest.fn(),
+		};
+		service.distributorRepository = {
+			findOne: jest.fn(({ where }) => {
+				if (where.distributor_code === 'D200') return Promise.resolve(descendantDistributor);
+				if (where.id === 10) return Promise.resolve(targetDistributor);
+				return Promise.resolve(null);
+			}),
+			save: jest.fn(),
+		};
+		service.getDistributionConfig = jest.fn();
+
+		await expect(service.bindDistributionRelation(100, 'D200')).rejects.toThrow('不能绑定自己的下级为上级');
+		expect(service.distributionRelationRepository.save).not.toHaveBeenCalled();
+		expect(service.getDistributionConfig).not.toHaveBeenCalled();
+	});
+
+	it('keeps a promoted distributor level permanently when direct counts later drop', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		const upline = { id: 8, user_id: 80, status: 1, agent_level: 3 };
+		service.distributionRelationRepository = {
+			findOne: jest
+				.fn()
+				.mockResolvedValueOnce({ user_id: 90, distributor_id: 8 })
+				.mockResolvedValueOnce(null),
+			find: jest.fn().mockResolvedValue([{ user_id: 91, distributor_id: 8 }]),
+		};
+		service.distributorRepository = {
+			findOne: jest.fn().mockResolvedValue(upline),
+			find: jest.fn().mockResolvedValue([{ id: 9, user_id: 91, status: 1, agent_level: 1 }]),
+			save: jest.fn(),
+		};
+
+		await service.evaluateUplinePromotion(90);
+
+		expect(upline.agent_level).toBe(3);
+		expect(service.distributorRepository.save).not.toHaveBeenCalled();
+	});
+});
+
+describe('DistributorService money concurrency', () => {
+	it('settles the same due commission only once across concurrent requests', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		const commission = {
+			id: 1,
+			order_id: 88,
+			distributor_id: 7,
+			commission_amount: 20,
+			status: 0,
+			available_at: new Date('2026-09-01T00:00:00.000Z'),
+		};
+		const queryBuilder: any = {
+			setLock: jest.fn(),
+			where: jest.fn(),
+			andWhere: jest.fn(),
+			orderBy: jest.fn(),
+			getMany: jest.fn(async () => (commission.status === 0 ? [commission] : [])),
+		};
+		for (const method of ['setLock', 'where', 'andWhere', 'orderBy']) {
+			queryBuilder[method].mockReturnValue(queryBuilder);
+		}
+		const commissionRepository = {
+			createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+			save: jest.fn((payload) => Promise.resolve(payload)),
+		};
+		const orderRepository = {
+			find: jest.fn().mockResolvedValue([{ id: 88, status: OrderStatus.PAID }]),
+		};
+		const manager = {
+			getRepository: jest.fn((entity) => {
+				if (entity === DistributionOrder) return commissionRepository;
+				if (entity === Order) return orderRepository;
+				throw new Error(`Unexpected repository: ${entity?.name}`);
+			}),
+			increment: jest.fn().mockResolvedValue(undefined),
+			decrement: jest.fn().mockResolvedValue(undefined),
+		};
+		service.dataSource = { transaction: createSerializedTransaction(manager) };
+
+		await Promise.all([service.settleAvailableCommissions(7), service.settleAvailableCommissions(7)]);
+
+		expect(queryBuilder.setLock).toHaveBeenCalledWith('pessimistic_write');
+		expect(commissionRepository.save).toHaveBeenCalledTimes(1);
+		expect(manager.decrement).toHaveBeenCalledTimes(1);
+		expect(manager.increment).toHaveBeenCalledTimes(1);
+		expect(commission.status).toBe(1);
+	});
+
+	it('allows only one concurrent withdrawal when the second would break the reserve', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		const distributor = {
+			id: 7,
+			user_id: 607,
+			status: 1,
+			withdrawable_amount: 150,
+			alipay_account: null,
+			real_name: null,
+		};
+		service.distributorRepository = { findOne: jest.fn().mockResolvedValue(distributor) };
+		service.settleAvailableCommissions = jest.fn().mockResolvedValue(undefined);
+		service.getDistributionConfig = jest.fn().mockResolvedValue({
+			min_withdraw_amount: 100,
+			withdraw_reserve_amount: 20,
+			withdraw_fee_rate: 5,
+		});
+		const distributorQueryBuilder: any = {
+			setLock: jest.fn(),
+			where: jest.fn(),
+			getOne: jest.fn().mockImplementation(() => Promise.resolve(distributor)),
+		};
+		distributorQueryBuilder.setLock.mockReturnValue(distributorQueryBuilder);
+		distributorQueryBuilder.where.mockReturnValue(distributorQueryBuilder);
+		const distributorRepository = {
+			createQueryBuilder: jest.fn().mockReturnValue(distributorQueryBuilder),
+			save: jest.fn((payload) => Promise.resolve(payload)),
+		};
+		const withdrawals: any[] = [];
+		const withdrawalRepository = {
+			create: jest.fn((payload) => payload),
+			save: jest.fn(async (payload) => {
+				withdrawals.push(payload);
+				return { id: withdrawals.length, ...payload };
+			}),
+		};
+		const manager = {
+			getRepository: jest.fn((entity) => {
+				if (entity === Distributor) return distributorRepository;
+				if (entity === DistributorWithdrawal) return withdrawalRepository;
+				throw new Error(`Unexpected repository: ${entity?.name}`);
+			}),
+		};
+		service.dataSource = { transaction: createSerializedTransaction(manager) };
+		const dto = { amount: 100, alipay_account: 'agent@example.com', real_name: '测试代理' };
+
+		const results = await Promise.allSettled([
+			service.createWithdrawal(607, dto),
+			service.createWithdrawal(607, dto),
+		]);
+
+		expect(results.filter((item) => item.status === 'fulfilled')).toHaveLength(1);
+		expect(results.filter((item) => item.status === 'rejected')).toHaveLength(1);
+		expect((results.find((item) => item.status === 'rejected') as PromiseRejectedResult).reason).toBeInstanceOf(BadRequestException);
+		expect(distributorQueryBuilder.setLock).toHaveBeenCalledWith('pessimistic_write');
+		expect(withdrawalRepository.save).toHaveBeenCalledTimes(1);
+		expect(distributor.withdrawable_amount).toBe(50);
 	});
 });
