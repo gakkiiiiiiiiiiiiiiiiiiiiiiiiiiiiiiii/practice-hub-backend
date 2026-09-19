@@ -4,7 +4,7 @@ import { IsEnum, IsInt, IsNumber, IsOptional, Max, Min, ValidateNested } from 'c
 import { ActivationCodeTargetType } from '../../../database/entities/activation-code.entity';
 
 class AppActivationCodeRewardPayloadDto {
-	@ApiPropertyOptional({ description: '代理商等级：1-一级代理，2-二级代理，3-三级代理' })
+	@ApiPropertyOptional({ description: '代理商等级：1-初级代理，2-中级代理，3-高级代理' })
 	@IsOptional()
 	@Type(() => Number)
 	@IsInt()

@@ -320,7 +320,7 @@ export class ActivationCodeService {
   private getAgentLevelName(value: unknown): string {
     const level = Number(value);
     const normalizedLevel = Number.isInteger(level) && level >= 1 && level <= 3 ? level : 1;
-    return ['一级代理', '二级代理', '三级代理'][normalizedLevel - 1];
+    return ['初级代理', '中级代理', '高级代理'][normalizedLevel - 1];
   }
 
   private async grantPackageByCode(manager: any, userId: number, activationCode: ActivationCode) {

@@ -1655,6 +1655,6 @@ export class DistributorService {
 	}
 
 	private getAgentLevelName(value: unknown) {
-		return ['一级代理', '二级代理', '三级代理'][this.normalizeAgentLevel(value) - 1];
+		return ['初级代理', '中级代理', '高级代理'][this.normalizeAgentLevel(value) - 1];
 	}
 }
