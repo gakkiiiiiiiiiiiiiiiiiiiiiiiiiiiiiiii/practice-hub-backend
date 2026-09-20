@@ -32,6 +32,10 @@ describe('DistributorService getDistributorInfo', () => {
 		service.createApprovedDistributorForUser = jest.fn();
 		service.settleAvailableCommissions = jest.fn();
 		service.getDistributionConfig = jest.fn().mockResolvedValue({
+			base_commission_rates: [20, 25, 30],
+			direct_commission_rates: [5, 6, 8],
+			indirect_commission_rates: [0, 3, 4],
+			paper_commission_per_kind: 1,
 			min_withdraw_amount: 100,
 			withdraw_reserve_amount: 20,
 			withdraw_fee_rate: 5,
@@ -66,7 +70,18 @@ describe('DistributorService getDistributorInfo', () => {
 		service.createApprovedDistributorForUser.mockResolvedValue(created);
 		service.distributorRepository.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(created);
 
-		await expect(service.getDistributorInfo(607)).resolves.toEqual(expect.objectContaining({ status: 1, is_app_admin: true }));
+		await expect(service.getDistributorInfo(607)).resolves.toEqual(expect.objectContaining({
+			status: 1,
+			is_app_admin: true,
+			commission_rules: {
+				levels: [
+					{ level: 1, name: '初级代理', base_rate: 20, direct_team_rate: 5, indirect_team_rate: 0 },
+					{ level: 2, name: '中级代理', base_rate: 25, direct_team_rate: 6, indirect_team_rate: 3 },
+					{ level: 3, name: '高级代理', base_rate: 30, direct_team_rate: 8, indirect_team_rate: 4 },
+				],
+				paper_per_kind: 1,
+			},
+		}));
 	});
 });
 

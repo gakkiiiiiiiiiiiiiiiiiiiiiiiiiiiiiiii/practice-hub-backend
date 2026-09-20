@@ -743,6 +743,9 @@ export class DistributorService {
 			: [];
 		const juniorCount = directAgents.filter((item) => this.normalizeAgentLevel(item.agent_level) === 1).length;
 		const middleCount = directAgents.filter((item) => this.normalizeAgentLevel(item.agent_level) === 2).length;
+		const baseRates = this.normalizeRates(config.base_commission_rates, [20, 25, 30]);
+		const directRates = this.normalizeRates(config.direct_commission_rates, [5, 6, 8]);
+		const indirectRates = this.normalizeRates(config.indirect_commission_rates, [0, 3, 4]);
 
 		return {
 			id: distributor.id,
@@ -767,6 +770,16 @@ export class DistributorService {
 				middle_target: 15,
 				high_junior_target: 30,
 				high_middle_target: 5,
+			},
+			commission_rules: {
+				levels: [1, 2, 3].map((level) => ({
+					level,
+					name: this.getAgentLevelName(level),
+					base_rate: baseRates[level - 1],
+					direct_team_rate: directRates[level - 1],
+					indirect_team_rate: indirectRates[level - 1],
+				})),
+				paper_per_kind: Number(config.paper_commission_per_kind ?? 1),
 			},
 			withdraw_rules: {
 				minimum: Number(config.min_withdraw_amount ?? 100),
