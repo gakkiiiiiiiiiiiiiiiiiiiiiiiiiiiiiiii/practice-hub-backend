@@ -36,6 +36,7 @@ describe('DistributorService getDistributorInfo', () => {
 			direct_commission_rates: [5, 6, 8],
 			indirect_commission_rates: [0, 3, 4],
 			paper_commission_per_kind: 1,
+			promotion_poster_url: 'https://cdn.example.com/distributor-poster.jpg',
 			min_withdraw_amount: 100,
 			withdraw_reserve_amount: 20,
 			withdraw_fee_rate: 5,
@@ -70,18 +71,102 @@ describe('DistributorService getDistributorInfo', () => {
 		service.createApprovedDistributorForUser.mockResolvedValue(created);
 		service.distributorRepository.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(created);
 
-		await expect(service.getDistributorInfo(607)).resolves.toEqual(expect.objectContaining({
-			status: 1,
-			is_app_admin: true,
-			commission_rules: {
-				levels: [
-					{ level: 1, name: '初级代理', base_rate: 20, direct_team_rate: 5, indirect_team_rate: 0 },
-					{ level: 2, name: '中级代理', base_rate: 25, direct_team_rate: 6, indirect_team_rate: 3 },
-					{ level: 3, name: '高级代理', base_rate: 30, direct_team_rate: 8, indirect_team_rate: 4 },
+		await expect(service.getDistributorInfo(607)).resolves.toEqual(
+			expect.objectContaining({
+				status: 1,
+				is_app_admin: true,
+				commission_rules: {
+					levels: [
+						{
+							level: 1,
+							name: '初级代理',
+							base_rate: 20,
+							direct_team_rate: 5,
+							indirect_team_rate: 0,
+						},
+						{
+							level: 2,
+							name: '中级代理',
+							base_rate: 25,
+							direct_team_rate: 6,
+							indirect_team_rate: 3,
+						},
+						{
+							level: 3,
+							name: '高级代理',
+							base_rate: 30,
+							direct_team_rate: 8,
+							indirect_team_rate: 4,
+						},
+					],
+					paper_per_kind: 1,
+				},
+				promotion_poster_url: 'https://cdn.example.com/distributor-poster.jpg',
+			}),
+		);
+	});
+});
+
+describe('DistributorService admin distributor list', () => {
+	it('returns user details, level commission rates and non-cancelled sales amount', async () => {
+		const service = Object.create(DistributorService.prototype) as any;
+		service.distributorRepository = {
+			findAndCount: jest.fn().mockResolvedValue([
+				[
+					{
+						id: 7,
+						user_id: 607,
+						user: {
+							nickname: '测试代理',
+							avatar: 'avatar.jpg',
+							phone: '13800000000',
+						},
+						distributor_code: 'D607',
+						status: 1,
+						agent_level: 2,
+						total_earnings: 50,
+						withdrawable_amount: 30,
+						frozen_amount: 20,
+						subordinate_count: 6,
+						total_orders: 3,
+						create_time: new Date('2026-09-21T00:00:00.000Z'),
+					},
 				],
-				paper_per_kind: 1,
-			},
-		}));
+				1,
+			]),
+		};
+		const queryBuilder: any = {
+			getRawMany: jest.fn().mockResolvedValue([{ distributor_id: '7', sales_amount: '299.50' }]),
+		};
+		for (const method of ['select', 'addSelect', 'where', 'andWhere', 'groupBy']) queryBuilder[method] = jest.fn().mockReturnValue(queryBuilder);
+		service.distributionOrderRepository = {
+			createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+		};
+		service.getDistributionConfig = jest.fn().mockResolvedValue({
+			base_commission_rates: [20, 25, 30],
+			direct_commission_rates: [5, 6, 8],
+			indirect_commission_rates: [0, 3, 4],
+		});
+
+		await expect(service.getDistributorList(undefined, 1, 20)).resolves.toEqual(
+			expect.objectContaining({
+				total: 1,
+				list: [
+					expect.objectContaining({
+						user_nickname: '测试代理',
+						user_avatar: 'avatar.jpg',
+						user_phone: '13800000000',
+						agent_level_name: '中级代理',
+						base_commission_rate: 25,
+						direct_team_commission_rate: 6,
+						indirect_team_commission_rate: 3,
+						subordinate_count: 6,
+						sales_amount: 299.5,
+					}),
+				],
+			}),
+		);
+		expect(queryBuilder.andWhere).toHaveBeenCalledWith('commission.status != :cancelledStatus', { cancelledStatus: 2 });
 	});
 });
 

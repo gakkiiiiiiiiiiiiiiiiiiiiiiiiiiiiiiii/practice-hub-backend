@@ -1,8 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsNumber, IsOptional, IsString, IsUrl, Max, MaxLength, Min, ValidateIf } from 'class-validator';
 
 export class UpdateDistributionConfigDto {
-	@ApiProperty({ description: '最大层级数', example: 3, minimum: 1, maximum: 10 })
+	@ApiProperty({
+		description: '最大层级数',
+		example: 3,
+		minimum: 1,
+		maximum: 10,
+	})
 	@IsOptional()
 	@IsNumber()
 	@Min(1)
@@ -19,7 +24,11 @@ export class UpdateDistributionConfigDto {
 	@Max(100, { each: true })
 	commission_rates?: number[];
 
-	@ApiProperty({ description: '初中高三级基础佣金比例', example: [20, 25, 30], required: false })
+	@ApiProperty({
+		description: '初中高三级基础佣金比例',
+		example: [20, 25, 30],
+		required: false,
+	})
 	@IsOptional()
 	@IsArray()
 	@ArrayMinSize(3)
@@ -29,7 +38,11 @@ export class UpdateDistributionConfigDto {
 	@Max(100, { each: true })
 	base_commission_rates?: number[];
 
-	@ApiProperty({ description: '初中高三级直推团队佣金比例', example: [5, 6, 8], required: false })
+	@ApiProperty({
+		description: '初中高三级直推团队佣金比例',
+		example: [5, 6, 8],
+		required: false,
+	})
 	@IsOptional()
 	@IsArray()
 	@ArrayMinSize(3)
@@ -39,7 +52,11 @@ export class UpdateDistributionConfigDto {
 	@Max(100, { each: true })
 	direct_commission_rates?: number[];
 
-	@ApiProperty({ description: '初中高三级间推团队佣金比例', example: [0, 3, 4], required: false })
+	@ApiProperty({
+		description: '初中高三级间推团队佣金比例',
+		example: [0, 3, 4],
+		required: false,
+	})
 	@IsOptional()
 	@IsArray()
 	@ArrayMinSize(3)
@@ -55,13 +72,21 @@ export class UpdateDistributionConfigDto {
 	@Min(0)
 	min_withdraw_amount?: number;
 
-	@ApiProperty({ description: '提现后最低保留金额', example: 20, required: false })
+	@ApiProperty({
+		description: '提现后最低保留金额',
+		example: 20,
+		required: false,
+	})
 	@IsOptional()
 	@IsNumber()
 	@Min(0)
 	withdraw_reserve_amount?: number;
 
-	@ApiProperty({ description: '提现手续费比例（百分比）', example: 5, required: false })
+	@ApiProperty({
+		description: '提现手续费比例（百分比）',
+		example: 5,
+		required: false,
+	})
 	@IsOptional()
 	@IsNumber()
 	@Min(0)
@@ -75,7 +100,11 @@ export class UpdateDistributionConfigDto {
 	@Max(365)
 	commission_freeze_days?: number;
 
-	@ApiProperty({ description: '每种纸质资料固定佣金', example: 1, required: false })
+	@ApiProperty({
+		description: '每种纸质资料固定佣金',
+		example: 1,
+		required: false,
+	})
 	@IsOptional()
 	@IsNumber()
 	@Min(0)
@@ -91,4 +120,12 @@ export class UpdateDistributionConfigDto {
 	@IsOptional()
 	@IsString()
 	description?: string;
+
+	@ApiProperty({ description: '代理推广海报背景图URL', required: false })
+	@IsOptional()
+	@IsString()
+	@MaxLength(500)
+	@ValidateIf((_, value) => value !== '')
+	@IsUrl({ require_protocol: true }, { message: '宣传海报必须是有效的 HTTP(S) 地址' })
+	promotion_poster_url?: string;
 }

@@ -781,6 +781,7 @@ export class DistributorService {
 				})),
 				paper_per_kind: Number(config.paper_commission_per_kind ?? 1),
 			},
+			promotion_poster_url: config.promotion_poster_url || null,
 			withdraw_rules: {
 				minimum: Number(config.min_withdraw_amount ?? 100),
 				reserve: Number(config.withdraw_reserve_amount ?? 20),
@@ -872,23 +873,54 @@ export class DistributorService {
 			skip: (validPage - 1) * validPageSize,
 			take: validPageSize,
 		});
+		const distributorIds = distributors.map((item) => item.id);
+		const [config, salesRows] = await Promise.all([
+			this.getDistributionConfig(),
+			distributorIds.length
+				? this.distributionOrderRepository
+						.createQueryBuilder('commission')
+						.select('commission.distributor_id', 'distributor_id')
+						.addSelect('COALESCE(SUM(commission.order_amount), 0)', 'sales_amount')
+						.where('commission.distributor_id IN (:...distributorIds)', {
+							distributorIds,
+						})
+						.andWhere('commission.status != :cancelledStatus', {
+							cancelledStatus: 2,
+						})
+						.groupBy('commission.distributor_id')
+						.getRawMany()
+				: Promise.resolve([]),
+		]);
+		const baseRates = this.normalizeRates(config.base_commission_rates, [20, 25, 30]);
+		const directRates = this.normalizeRates(config.direct_commission_rates, [5, 6, 8]);
+		const indirectRates = this.normalizeRates(config.indirect_commission_rates, [0, 3, 4]);
+		const salesAmountByDistributor = new Map(salesRows.map((row: any) => [Number(row.distributor_id), Number(row.sales_amount || 0)]));
 
 		return {
-			list: distributors.map((d) => ({
-				id: d.id,
-				user_id: d.user_id,
-				user_nickname: d.user?.nickname,
-				distributor_code: d.distributor_code,
-				status: d.status,
-				agent_level: this.normalizeAgentLevel(d.agent_level),
-				agent_level_name: this.getAgentLevelName(d.agent_level),
-				total_earnings: d.total_earnings,
-				withdrawable_amount: d.withdrawable_amount,
-				frozen_amount: d.frozen_amount,
-				subordinate_count: d.subordinate_count,
-				total_orders: d.total_orders,
-				create_time: d.create_time,
-			})),
+			list: distributors.map((d) => {
+				const agentLevel = this.normalizeAgentLevel(d.agent_level);
+				return {
+					id: d.id,
+					user_id: d.user_id,
+					user_nickname: d.user?.nickname,
+					user_avatar: d.user?.avatar,
+					user_phone: d.user?.phone,
+					distributor_code: d.distributor_code,
+					status: d.status,
+					agent_level: agentLevel,
+					agent_level_name: this.getAgentLevelName(d.agent_level),
+					base_commission_rate: baseRates[agentLevel - 1],
+					direct_team_commission_rate: directRates[agentLevel - 1],
+					indirect_team_commission_rate: indirectRates[agentLevel - 1],
+					sales_amount: salesAmountByDistributor.get(d.id) || 0,
+					total_earnings: d.total_earnings,
+					withdrawable_amount: d.withdrawable_amount,
+					frozen_amount: d.frozen_amount,
+					subordinate_count: d.subordinate_count,
+					total_orders: d.total_orders,
+					create_time: d.create_time,
+				};
+			}),
 			total,
 			page: validPage,
 			pageSize: validPageSize,
@@ -950,6 +982,9 @@ export class DistributorService {
 		}
 		if (dto.description !== undefined) {
 			config.description = dto.description;
+		}
+		if (dto.promotion_poster_url !== undefined) {
+			config.promotion_poster_url = dto.promotion_poster_url || null;
 		}
 
 		await this.distributionConfigRepository.save(config);
