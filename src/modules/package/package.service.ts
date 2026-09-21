@@ -6,14 +6,20 @@ import { PackageSectionScope, PackageScopeType } from '../../database/entities/p
 import { PackagePlan, PackagePlanType } from '../../database/entities/package-plan.entity';
 import { UserPackageSubscription } from '../../database/entities/user-package-subscription.entity';
 import { Course } from '../../database/entities/course.entity';
+import { CourseCategory } from '../../database/entities/course-category.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { Order } from '../../database/entities/order.entity';
 import { assertIntegerYuanPrice } from '../../common/utils/price.util';
 
 @Injectable()
 export class PackageService {
-	private scopeCache: { loadedAt: number; sections: Array<PackageSection & { scopes: PackageSectionScope[] }> } | null = null;
+	private scopeCache: {
+		loadedAt: number;
+		sections: Array<PackageSection & { scopes: PackageSectionScope[] }>;
+	} | null = null;
 	private readonly scopeCacheTtlMs = 60_000;
+	private ambiguousLegacySubCategoryNames = new Set<string>();
+	private subCategoryMetadataLoadedAt = 0;
 
 	constructor(
 		@InjectRepository(PackageSection)
@@ -26,6 +32,8 @@ export class PackageService {
 		private userPackageSubscriptionRepository: Repository<UserPackageSubscription>,
 		@InjectRepository(Course)
 		private courseRepository: Repository<Course>,
+		@InjectRepository(CourseCategory)
+		private courseCategoryRepository: Repository<CourseCategory>,
 		@InjectRepository(AppUser)
 		private appUserRepository: Repository<AppUser>,
 	) {}
@@ -35,6 +43,7 @@ export class PackageService {
 	}
 
 	private async getActiveSectionsWithScopes() {
+		await this.refreshSubCategoryMetadata();
 		const now = Date.now();
 		if (this.scopeCache && now - this.scopeCache.loadedAt < this.scopeCacheTtlMs) {
 			return this.scopeCache.sections;
@@ -63,7 +72,13 @@ export class PackageService {
 			return (course.category || '').trim() === scope.scope_value.trim();
 		}
 		if (scope.scope_type === PackageScopeType.SUB_CATEGORY) {
-			return (course.sub_category || '').trim() === scope.scope_value.trim();
+			const path = this.parseSubCategoryScopeValue(scope.scope_value);
+			if (path) {
+				return (course.category || '').trim() === path.category && (course.sub_category || '').trim() === path.subCategory;
+			}
+			const legacyValue = String(scope.scope_value || '').trim();
+			if (this.ambiguousLegacySubCategoryNames.has(legacyValue)) return false;
+			return (course.sub_category || '').trim() === legacyValue;
 		}
 		return false;
 	}
@@ -86,9 +101,7 @@ export class PackageService {
 		const sections = await this.getActiveSectionsWithScopes();
 		const activeSections = sections.filter((section) => activeSectionIds.includes(section.id));
 		for (const course of courses) {
-			const matchedSections = activeSections.filter((section) =>
-				(section.scopes || []).some((scope) => this.courseMatchesScope(course, scope)),
-			);
+			const matchedSections = activeSections.filter((section) => (section.scopes || []).some((scope) => this.courseMatchesScope(course, scope)));
 			if (matchedSections.length > 0) {
 				const matchedSectionIds = matchedSections.map((section) => section.id);
 				const expireTime = activeSubscriptions
@@ -122,11 +135,15 @@ export class PackageService {
 	}
 
 	async getUserActiveSubscriptions(userId: number) {
-		const subscriptions = await this.userPackageSubscriptionRepository.find({ where: { user_id: userId } });
+		const subscriptions = await this.userPackageSubscriptionRepository.find({
+			where: { user_id: userId },
+		});
 		const active = subscriptions.filter((item) => item.expire_time > new Date());
 		if (active.length === 0) return [];
 
-		const sections = await this.packageSectionRepository.find({ where: { id: In(active.map((s) => s.section_id)) } });
+		const sections = await this.packageSectionRepository.find({
+			where: { id: In(active.map((s) => s.section_id)) },
+		});
 		const sectionMap = new Map(sections.map((s) => [s.id, s]));
 		return active.map((item) => ({
 			sectionId: item.section_id,
@@ -136,13 +153,17 @@ export class PackageService {
 	}
 
 	async syncUserPackageExpireTime(userId: number) {
-		const subscriptions = await this.userPackageSubscriptionRepository.find({ where: { user_id: userId } });
+		const subscriptions = await this.userPackageSubscriptionRepository.find({
+			where: { user_id: userId },
+		});
 		const maxExpire = subscriptions.reduce<Date | null>((max, item) => {
 			if (item.expire_time <= new Date()) return max;
 			if (!max || item.expire_time > max) return item.expire_time;
 			return max;
 		}, null);
-		await this.appUserRepository.update(userId, { package_expire_time: maxExpire });
+		await this.appUserRepository.update(userId, {
+			package_expire_time: maxExpire,
+		});
 	}
 
 	async revokePackageOrder(order: Order) {
@@ -152,7 +173,9 @@ export class PackageService {
 		if (!subscription) {
 			return;
 		}
-		await this.userPackageSubscriptionRepository.delete({ id: subscription.id });
+		await this.userPackageSubscriptionRepository.delete({
+			id: subscription.id,
+		});
 		await this.syncUserPackageExpireTime(order.user_id);
 	}
 
@@ -160,7 +183,12 @@ export class PackageService {
 		if (!order.package_section_id || !order.package_plan_id) {
 			throw new BadRequestException('套餐订单信息不完整');
 		}
-		const plan = await this.packagePlanRepository.findOne({ where: { id: order.package_plan_id, section_id: order.package_section_id } });
+		const plan = await this.packagePlanRepository.findOne({
+			where: {
+				id: order.package_plan_id,
+				section_id: order.package_section_id,
+			},
+		});
 		if (!plan) {
 			throw new NotFoundException('套餐不存在');
 		}
@@ -215,7 +243,14 @@ export class PackageService {
 		status?: number;
 		sort?: number;
 		scopes?: Array<{ scope_type: PackageScopeType; scope_value?: string }>;
-		plans?: Array<{ plan_type: PackagePlanType; name: string; price: number; duration_days: number; status?: number; sort?: number }>;
+		plans?: Array<{
+			plan_type: PackagePlanType;
+			name: string;
+			price: number;
+			duration_days: number;
+			status?: number;
+			sort?: number;
+		}>;
 	}) {
 		const section = await this.packageSectionRepository.save({
 			name: input.name.trim(),
@@ -241,10 +276,19 @@ export class PackageService {
 			status?: number;
 			sort?: number;
 			scopes?: Array<{ scope_type: PackageScopeType; scope_value?: string }>;
-			plans?: Array<{ plan_type: PackagePlanType; name: string; price: number; duration_days: number; status?: number; sort?: number }>;
+			plans?: Array<{
+				plan_type: PackagePlanType;
+				name: string;
+				price: number;
+				duration_days: number;
+				status?: number;
+				sort?: number;
+			}>;
 		},
 	) {
-		const section = await this.packageSectionRepository.findOne({ where: { id } });
+		const section = await this.packageSectionRepository.findOne({
+			where: { id },
+		});
 		if (!section) throw new NotFoundException('套餐不存在');
 
 		if (input.name !== undefined) section.name = input.name.trim();
@@ -271,22 +315,46 @@ export class PackageService {
 
 	private defaultPlans() {
 		return [
-			{ plan_type: PackagePlanType.MONTHLY, name: '月卡', price: 30, duration_days: 30, status: 1, sort: 1 },
-			{ plan_type: PackagePlanType.QUARTERLY, name: '季卡', price: 80, duration_days: 90, status: 1, sort: 2 },
-			{ plan_type: PackagePlanType.YEARLY, name: '年卡', price: 200, duration_days: 365, status: 1, sort: 3 },
+			{
+				plan_type: PackagePlanType.MONTHLY,
+				name: '月卡',
+				price: 30,
+				duration_days: 30,
+				status: 1,
+				sort: 1,
+			},
+			{
+				plan_type: PackagePlanType.QUARTERLY,
+				name: '季卡',
+				price: 80,
+				duration_days: 90,
+				status: 1,
+				sort: 2,
+			},
+			{
+				plan_type: PackagePlanType.YEARLY,
+				name: '年卡',
+				price: 200,
+				duration_days: 365,
+				status: 1,
+				sort: 3,
+			},
 		];
 	}
 
 	private async replaceScopes(sectionId: number, scopes: Array<{ scope_type: PackageScopeType; scope_value?: string }>) {
+		const normalizedScopes = await Promise.all(
+			scopes.map(async (item) => ({
+				...item,
+				scope_value: item.scope_type === PackageScopeType.SUB_CATEGORY ? await this.normalizeSubCategoryScopeValue(item.scope_value) : item.scope_value,
+			})),
+		);
 		await this.packageSectionScopeRepository.delete({ section_id: sectionId });
-		const safeScopes = scopes
+		const safeScopes = normalizedScopes
 			.map((item) => ({
 				section_id: sectionId,
 				scope_type: item.scope_type,
-				scope_value:
-					item.scope_type === PackageScopeType.ALL
-						? String(item.scope_value || '*').trim() || '*'
-						: String(item.scope_value || '').trim(),
+				scope_value: item.scope_type === PackageScopeType.ALL ? String(item.scope_value || '*').trim() || '*' : String(item.scope_value || '').trim(),
 			}))
 			.filter((item) => item.scope_type === PackageScopeType.ALL || item.scope_value);
 		if (safeScopes.length > 0) {
@@ -296,7 +364,14 @@ export class PackageService {
 
 	private async replacePlans(
 		sectionId: number,
-		plans: Array<{ plan_type: PackagePlanType; name: string; price: number; duration_days: number; status?: number; sort?: number }>,
+		plans: Array<{
+			plan_type: PackagePlanType;
+			name: string;
+			price: number;
+			duration_days: number;
+			status?: number;
+			sort?: number;
+		}>,
 	) {
 		await this.packagePlanRepository.delete({ section_id: sectionId });
 		const safePlans = plans.map((plan, index) => {
@@ -335,7 +410,9 @@ export class PackageService {
 			.filter((id) => Number.isInteger(id) && id > 0);
 		const courseMap = new Map<number, Course>();
 		if (courseIds.length > 0) {
-			const courses = await this.courseRepository.find({ where: { id: In(courseIds) } });
+			const courses = await this.courseRepository.find({
+				where: { id: In(courseIds) },
+			});
 			courses.forEach((course) => courseMap.set(course.id, course));
 		}
 
@@ -351,7 +428,8 @@ export class PackageService {
 				continue;
 			}
 			if (scope.scope_type === PackageScopeType.SUB_CATEGORY) {
-				pushLabel(value);
+				const path = this.parseSubCategoryScopeValue(value);
+				pushLabel(path ? `${path.category} · ${path.subCategory}` : value);
 				continue;
 			}
 			if (scope.scope_type === PackageScopeType.COURSE) {
@@ -410,14 +488,14 @@ export class PackageService {
 
 	async getRelatedSectionsForCourse(course: Course, userId?: number) {
 		const sections = await this.getActiveSectionsWithScopes();
-		const matchedSections = sections.filter((section) =>
-			(section.scopes || []).some((scope) => this.courseMatchesScope(course, scope)),
-		);
+		const matchedSections = sections.filter((section) => (section.scopes || []).some((scope) => this.courseMatchesScope(course, scope)));
 		if (matchedSections.length === 0) return [];
 
 		let subscriptionMap = new Map<number, UserPackageSubscription>();
 		if (userId) {
-			const subscriptions = await this.userPackageSubscriptionRepository.find({ where: { user_id: userId } });
+			const subscriptions = await this.userPackageSubscriptionRepository.find({
+				where: { user_id: userId },
+			});
 			subscriptionMap = new Map(subscriptions.map((item) => [item.section_id, item]));
 		}
 
@@ -463,7 +541,9 @@ export class PackageService {
 		});
 		let subscriptionMap = new Map<number, UserPackageSubscription>();
 		if (userId) {
-			const subscriptions = await this.userPackageSubscriptionRepository.find({ where: { user_id: userId } });
+			const subscriptions = await this.userPackageSubscriptionRepository.find({
+				where: { user_id: userId },
+			});
 			subscriptionMap = new Map(subscriptions.map((item) => [item.section_id, item]));
 		}
 
@@ -499,6 +579,7 @@ export class PackageService {
 	}
 
 	async getAppSectionDetail(sectionId: number, userId?: number) {
+		await this.refreshSubCategoryMetadata();
 		const section = await this.packageSectionRepository.findOne({
 			where: { id: sectionId, status: 1 },
 			relations: ['scopes', 'plans'],
@@ -522,7 +603,9 @@ export class PackageService {
 
 			let courses: Course[] = [];
 			if (courseIds.length > 0) {
-				courses = await this.courseRepository.find({ where: { id: In(courseIds), status: 1 } });
+				courses = await this.courseRepository.find({
+					where: { id: In(courseIds), status: 1 },
+				});
 			}
 
 			const categoryScopes = (section.scopes || []).filter(
@@ -530,13 +613,12 @@ export class PackageService {
 			);
 			let categoryCourses: Course[] = [];
 			if (categoryScopes.length > 0) {
-				const allCourses = await this.courseRepository.find({ where: { status: 1 } });
+				const allCourses = await this.courseRepository.find({
+					where: { status: 1 },
+				});
 				categoryCourses = allCourses.filter((course) =>
 					(section.scopes || []).some(
-						(scope) =>
-							scope.scope_type !== PackageScopeType.COURSE &&
-							scope.scope_type !== PackageScopeType.ALL &&
-							this.courseMatchesScope(course, scope),
+						(scope) => scope.scope_type !== PackageScopeType.COURSE && scope.scope_type !== PackageScopeType.ALL && this.courseMatchesScope(course, scope),
 					),
 				);
 			}
@@ -583,6 +665,61 @@ export class PackageService {
 			const price = Number(course.price) || 0;
 			return sum + Math.max(0, price);
 		}, 0);
+	}
+
+	private parseSubCategoryScopeValue(value?: string) {
+		const normalized = String(value || '').trim();
+		if (!normalized.startsWith('[')) return null;
+		try {
+			const path = JSON.parse(normalized);
+			if (!Array.isArray(path) || path.length !== 2) return null;
+			const category = String(path[0] || '').trim();
+			const subCategory = String(path[1] || '').trim();
+			return category && subCategory ? { category, subCategory } : null;
+		} catch {
+			return null;
+		}
+	}
+
+	private async normalizeSubCategoryScopeValue(value?: string) {
+		const normalized = String(value || '').trim();
+		const path = this.parseSubCategoryScopeValue(normalized);
+		if (path) return JSON.stringify([path.category, path.subCategory]);
+		if (!normalized) return '';
+
+		const matches = await this.courseCategoryRepository.find({
+			where: { name: normalized },
+		});
+		const childMatches = matches.filter((item) => Number(item.parent_id) > 0);
+		if (childMatches.length !== 1) {
+			throw new BadRequestException(
+				childMatches.length > 1 ? `二级分类“${normalized}”存在于多个一级分类下，请重新选择完整分类路径` : `二级分类“${normalized}”不存在，请重新选择`,
+			);
+		}
+		const parent = await this.courseCategoryRepository.findOne({
+			where: { id: childMatches[0].parent_id },
+		});
+		if (!parent) throw new BadRequestException(`二级分类“${normalized}”的一级分类不存在，请重新选择`);
+		return JSON.stringify([parent.name.trim(), childMatches[0].name.trim()]);
+	}
+
+	private async refreshSubCategoryMetadata() {
+		const now = Date.now();
+		if (now - this.subCategoryMetadataLoadedAt < this.scopeCacheTtlMs) return;
+		const categories = await this.courseCategoryRepository.find();
+		const counts = new Map<string, number>();
+		categories
+			.filter((item) => Number(item.parent_id) > 0)
+			.forEach((item) => {
+				const name = String(item.name || '').trim();
+				if (name) counts.set(name, (counts.get(name) || 0) + 1);
+			});
+		this.ambiguousLegacySubCategoryNames = new Set(
+			Array.from(counts.entries())
+				.filter(([, count]) => count > 1)
+				.map(([name]) => name),
+		);
+		this.subCategoryMetadataLoadedAt = now;
 	}
 
 	async getPlanForOrder(sectionId: number, planId: number) {
