@@ -7,6 +7,7 @@ import { SystemConfig } from '../../database/entities/system-config.entity';
 import { CourseFileService } from './course-file.service';
 import { CourseService } from './course.service';
 import { UploadService } from '../upload/upload.service';
+import { getPackageSubCategoryScopeSql } from './preview-demand.util';
 
 export interface PreviewWorkerResult {
   fileId: number;
@@ -105,8 +106,7 @@ export class PreviewWorkerService {
             )
             OR (
               pss.scope_type = 'sub_category'
-              AND TRIM(pss.scope_value) COLLATE utf8mb4_unicode_ci
-                = TRIM(COALESCE(${courseAlias}.sub_category, ''))
+              AND ${getPackageSubCategoryScopeSql(courseAlias)}
             )
           )
       )

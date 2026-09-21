@@ -1,5 +1,23 @@
 import { EntityManager } from 'typeorm';
 
+export function getPackageSubCategoryScopeSql(courseAlias: string, scopeAlias = 'pss'): string {
+  return `(
+    (
+      JSON_VALID(${scopeAlias}.scope_value) = 1
+      AND JSON_TYPE(JSON_EXTRACT(${scopeAlias}.scope_value, '$')) = 'ARRAY'
+      AND JSON_UNQUOTE(JSON_EXTRACT(${scopeAlias}.scope_value, '$[0]')) COLLATE utf8mb4_unicode_ci
+        = TRIM(COALESCE(${courseAlias}.category, '')) COLLATE utf8mb4_unicode_ci
+      AND JSON_UNQUOTE(JSON_EXTRACT(${scopeAlias}.scope_value, '$[1]')) COLLATE utf8mb4_unicode_ci
+        = TRIM(COALESCE(${courseAlias}.sub_category, '')) COLLATE utf8mb4_unicode_ci
+    )
+    OR (
+      JSON_VALID(${scopeAlias}.scope_value) = 0
+      AND TRIM(${scopeAlias}.scope_value) COLLATE utf8mb4_unicode_ci
+        = TRIM(COALESCE(${courseAlias}.sub_category, '')) COLLATE utf8mb4_unicode_ci
+    )
+  )`;
+}
+
 /**
  * 将用户当前获得访问权的文件资料加入完整预览生成队列。
  *
@@ -56,8 +74,7 @@ export async function requestUserPreviewDemand(
                )
                OR (
                  pss.scope_type = 'sub_category'
-                 AND TRIM(pss.scope_value) COLLATE utf8mb4_unicode_ci
-                   = TRIM(COALESCE(c.sub_category, '')) COLLATE utf8mb4_unicode_ci
+                 AND ${getPackageSubCategoryScopeSql('c')}
                )
              )
          )
