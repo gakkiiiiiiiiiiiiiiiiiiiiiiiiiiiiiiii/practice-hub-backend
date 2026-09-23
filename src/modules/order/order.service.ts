@@ -28,6 +28,7 @@ import { requestUserPreviewDemand } from '../course/preview-demand.util';
 import { resolvePaperMaterialPricing } from '../course/paper-material-price.util';
 import { resolvePaperMaterialRegionalShipping } from './paper-material-shipping.util';
 import { CloudPrintService } from '../cloud-print/cloud-print.service';
+import { PaperPromotionService } from './paper-promotion.service';
 
 type ShipOrderActor = {
   operatorType: 'admin' | 'app_admin';
@@ -112,6 +113,7 @@ export class OrderService {
     private coinService: CoinService,
     private configService: ConfigService,
     private cloudPrintService: CloudPrintService,
+    private paperPromotionService: PaperPromotionService,
   ) {}
 
   /**
@@ -380,8 +382,12 @@ export class OrderService {
     });
     const materialAmount = normalizeThresholdYuan(cartItems.reduce((sum, item) => sum + item.total_price, 0));
     const regionalShipping = resolvePaperMaterialRegionalShipping(shippingAddress);
-    const amount = normalizeThresholdYuan(materialAmount + regionalShipping.fee);
-    if (amount !== dto.expected_amount) {
+    const promotion = await this.paperPromotionService.calculateDiscount(cartItems.length, materialAmount);
+    const originalAmount = normalizeThresholdYuan(materialAmount + regionalShipping.fee);
+    const amount = normalizeThresholdYuan(originalAmount - promotion.discountAmount);
+    // Keep old mini-program builds compatible: they submit the pre-promotion
+    // amount, while the server still charges the lower authoritative amount.
+    if (amount !== dto.expected_amount && originalAmount !== dto.expected_amount) {
       throw new BadRequestException('纸质资料价格已变化，请刷新价格并重新确认后下单');
     }
     const order = this.orderRepository.create({
@@ -390,8 +396,8 @@ export class OrderService {
       course_id: courseIds[0],
       order_type: 'course',
       amount,
-      original_amount: amount,
-      discount_amount: 0,
+      original_amount: originalAmount,
+      discount_amount: promotion.discountAmount,
       coupon_id: null,
       status: OrderStatus.PENDING,
       pay_provider: 'wechat_pay',
@@ -403,6 +409,13 @@ export class OrderService {
         material_amount: materialAmount,
         regional_shipping_fee: regionalShipping.fee,
         regional_shipping_region: regionalShipping.region,
+        paper_promotion: {
+          enabled: promotion.config.enabled,
+          item_count: promotion.itemCount,
+          minimum_items: promotion.config.minimum_items,
+          discount_per_additional_item: promotion.config.discount_per_additional_item,
+          discount_amount: promotion.discountAmount,
+        },
       },
     });
     await this.orderRepository.save(order);

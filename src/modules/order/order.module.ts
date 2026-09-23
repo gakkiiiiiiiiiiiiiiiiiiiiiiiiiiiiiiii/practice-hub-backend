@@ -10,11 +10,12 @@ import { PackageModule } from '../package/package.module';
 import { CategoryBundleAccessModule } from '../category-bundle-access/category-bundle-access.module';
 import { CloudPrintModule } from '../cloud-print/cloud-print.module';
 import { PendingOrderExpirationService } from './pending-order-expiration.service';
+import { PaperPromotionService } from './paper-promotion.service';
 
 @Module({
   imports: [DatabaseModule, forwardRef(() => DistributorModule), MarketingModule, PackageModule, CategoryBundleAccessModule, CloudPrintModule],
   controllers: [OrderController, OrderPayNotifyController, WechatXpayNotifyController, AdminOrderController],
-  providers: [OrderService, XpayService, CoinService, PendingOrderExpirationService],
-  exports: [OrderService, XpayService, CoinService],
+  providers: [OrderService, XpayService, CoinService, PendingOrderExpirationService, PaperPromotionService],
+  exports: [OrderService, XpayService, CoinService, PaperPromotionService],
 })
 export class OrderModule {}

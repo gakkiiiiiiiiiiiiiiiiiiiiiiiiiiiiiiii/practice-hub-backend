@@ -19,6 +19,8 @@ import { OperationLogInterceptor } from '../../common/interceptors/operation-log
 import { IssueCouponDto } from '../marketing/dto/issue-coupon.dto';
 import { GetAdminCouponListDto } from '../marketing/dto/get-admin-coupon-list.dto';
 import { SetStorageProviderDto } from './dto/set-storage-provider.dto';
+import { SetPaperPromotionDto } from '../order/dto/set-paper-promotion.dto';
+import { PaperPromotionService } from '../order/paper-promotion.service';
 
 @ApiTags('系统管理')
 @Controller('admin')
@@ -30,7 +32,22 @@ export class SystemController {
     private readonly referralCouponService: ReferralCouponService,
     private readonly pointsService: PointsService,
     private readonly userTitleService: UserTitleService,
+    private readonly paperPromotionService: PaperPromotionService,
   ) {}
+
+  @Get('settings/paper-promotion')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '获取纸质资料合单促销配置' })
+  async getPaperPromotionConfig() {
+    return CommonResponseDto.success(await this.paperPromotionService.getConfig());
+  }
+
+  @Put('settings/paper-promotion')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '设置纸质资料合单促销配置' })
+  async setPaperPromotionConfig(@Body() dto: SetPaperPromotionDto) {
+    return CommonResponseDto.success(await this.paperPromotionService.setConfig(dto));
+  }
 
   @Get('settings/storage-provider')
   @Roles(AdminRole.SUPER_ADMIN)

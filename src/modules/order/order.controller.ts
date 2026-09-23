@@ -15,6 +15,7 @@ import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
 import { GetAdminOrderListDto } from './dto/get-admin-order-list.dto';
 import { RefundOrderDto } from './dto/refund-order.dto';
 import { ShipOrderDto } from './dto/ship-order.dto';
+import { PaperPromotionService } from './paper-promotion.service';
 
 function resolveClientIp(req: Request) {
   const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0]?.trim();
@@ -26,7 +27,16 @@ function resolveClientIp(req: Request) {
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class OrderController {
-  constructor(private readonly orderService: OrderService) {}
+  constructor(
+    private readonly orderService: OrderService,
+    private readonly paperPromotionService: PaperPromotionService,
+  ) {}
+
+  @Get('paper-promotion')
+  @ApiOperation({ summary: '获取纸质资料合单促销配置' })
+  async getPaperPromotion() {
+    return CommonResponseDto.success(await this.paperPromotionService.getConfig());
+  }
 
   @Post('create')
   @ApiOperation({ summary: '创建预支付订单' })

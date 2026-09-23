@@ -16,6 +16,7 @@ import { ReferralCouponService } from '../marketing/referral-coupon.service';
 import { PackageService } from '../package/package.service';
 import { CategoryBundleAccessService } from '../category-bundle-access/category-bundle-access.service';
 import { CoinService } from './coin.service';
+import { PaperPromotionService } from './paper-promotion.service';
 
 describe('OrderService paper cart', () => {
   let module: TestingModule;
@@ -24,6 +25,7 @@ describe('OrderService paper cart', () => {
   let packageAccess: any;
   let categoryAccess: any;
   let commission: any;
+  let promotion: any;
   let savedOrder: any;
   const address = { name: '测试用户', phone: '13800138000', province: '上海市', city: '上海市', district: '浦东新区', detail: '测试路 1 号' };
   const dto = () => ({ items: [{ course_id: 9, quantity: 2 }, { course_id: 10, quantity: 3 }],
@@ -53,6 +55,13 @@ describe('OrderService paper cart', () => {
       processOrderCommission: jest.fn(),
       cancelOrderCommission: jest.fn(),
     };
+    promotion = {
+      calculateDiscount: jest.fn().mockResolvedValue({
+        config: { enabled: false, minimum_items: 2, discount_per_additional_item: 1 },
+        itemCount: 2,
+        discountAmount: 0,
+      }),
+    };
     module = await Test.createTestingModule({ providers: [OrderService,
       ...[...repos].map(([entity, value]) => ({ provide: getRepositoryToken(entity), useValue: value })),
       { provide: DistributorService, useValue: commission },
@@ -60,6 +69,7 @@ describe('OrderService paper cart', () => {
       { provide: PackageService, useValue: packageAccess },
       { provide: CategoryBundleAccessService, useValue: categoryAccess },
       { provide: CoinService, useValue: { yuanToCoinInt: jest.fn((amount) => amount * 100) } },
+      { provide: PaperPromotionService, useValue: promotion },
       { provide: ConfigService, useValue: { get: jest.fn() } },
       { provide: CloudPrintService, useValue: {
         enqueuePaidOrder: jest.fn().mockResolvedValue(null),
@@ -124,6 +134,33 @@ describe('OrderService paper cart', () => {
       },
     });
     expect(savedOrder.pay_payload.cart_items.reduce((sum, item) => sum + item.total_price, 0)).toBe(150);
+  });
+
+  it('applies the configured multi-material discount and accepts old clients quoting the original amount', async () => {
+    promotion.calculateDiscount.mockResolvedValue({
+      config: { enabled: true, minimum_items: 2, discount_per_additional_item: 1 },
+      itemCount: 2,
+      discountAmount: 1,
+    });
+
+    const result = await service.createPaperCartOrder(7, dto());
+
+    expect(result.amount).toBe(149);
+    expect(savedOrder).toMatchObject({
+      amount: 149,
+      original_amount: 150,
+      discount_amount: 1,
+      pay_payload: {
+        material_amount: 150,
+        paper_promotion: {
+          enabled: true,
+          item_count: 2,
+          minimum_items: 2,
+          discount_per_additional_item: 1,
+          discount_amount: 1,
+        },
+      },
+    });
   });
 
   it.each([[], [{ course_id: 9, quantity: 0 }], [{ course_id: 9, quantity: 100 }],
