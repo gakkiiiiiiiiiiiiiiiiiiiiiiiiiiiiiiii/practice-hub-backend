@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { ActivationCode, ActivationCodeStatus, ActivationCodeTargetType } from '../../database/entities/activation-code.entity';
@@ -11,11 +11,13 @@ import { UserCoupon, UserCouponStatus } from '../../database/entities/user-coupo
 import { CourseCategory } from '../../database/entities/course-category.entity';
 import { UserCategoryBundleAccess } from '../../database/entities/user-category-bundle-access.entity';
 import { Distributor } from '../../database/entities/distributor.entity';
-import { requestUserPreviewDemand } from '../course/preview-demand.util';
+import { requestCoursePreviewDemand, requestUserPreviewDemand } from '../course/preview-demand.util';
 import { DistributorService } from '../distributor/distributor.service';
 
 @Injectable()
 export class ActivationCodeService {
+  private readonly logger = new Logger(ActivationCodeService.name);
+
   constructor(
     @InjectRepository(ActivationCode)
     private activationCodeRepository: Repository<ActivationCode>,
@@ -163,12 +165,17 @@ export class ActivationCodeService {
    * 激活码核销（并发安全）
    */
   async redeemCode(userId: number, code: string) {
-    // 开启事务
     const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
+    let redemptionResult: Record<string, unknown> | null = null;
+    let previewTarget: {
+      targetType: ActivationCodeTargetType;
+      courseId: number | null;
+    } | null = null;
 
     try {
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+
       // 1. 查询激活码
       const activationCode = await queryRunner.manager.findOne(ActivationCode, {
         where: { code, status: ActivationCodeStatus.PENDING },
@@ -176,8 +183,25 @@ export class ActivationCodeService {
       });
 
       if (!activationCode) {
-        await queryRunner.rollbackTransaction();
         throw new BadRequestException('激活码无效或已使用');
+      }
+
+      const targetType = activationCode.target_type || ActivationCodeTargetType.COURSE;
+      if (targetType === ActivationCodeTargetType.COURSE && activationCode.course_id) {
+        // 同一用户的资料码核销串行化，避免并发使用两枚同资料激活码时都通过重复校验。
+        await queryRunner.manager.findOne(AppUser, {
+          where: { id: userId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        const existingAuth = await queryRunner.manager.findOne(UserCourseAuth, {
+          where: {
+            user_id: userId,
+            course_id: activationCode.course_id,
+          },
+        });
+        if (existingAuth) {
+          throw new BadRequestException('您已拥有该资料，激活码未消耗');
+        }
       }
 
       // 2. 使用乐观锁更新状态
@@ -193,11 +217,9 @@ export class ActivationCodeService {
 
       // 3. 判断影响行数
       if (updateResult.affected === 0) {
-        await queryRunner.rollbackTransaction();
         throw new BadRequestException('激活码已被使用，请重试');
       }
 
-      const targetType = activationCode.target_type || ActivationCodeTargetType.COURSE;
       let agentIdentity: Distributor | null = null;
       if (targetType === ActivationCodeTargetType.AGENT) {
         await this.distributorService.assertDistributionEnabled();
@@ -215,17 +237,17 @@ export class ActivationCodeService {
         await this.grantCourseByCode(queryRunner.manager, userId, activationCode);
       }
 
+      await queryRunner.commitTransaction();
+
       if (
         targetType === ActivationCodeTargetType.COURSE ||
         targetType === ActivationCodeTargetType.PACKAGE ||
         targetType === ActivationCodeTargetType.CATEGORY_BUNDLE
       ) {
-        await requestUserPreviewDemand(queryRunner.manager, userId);
+        previewTarget = { targetType, courseId: activationCode.course_id };
       }
 
-      await queryRunner.commitTransaction();
-
-      return {
+      redemptionResult = {
         success: true,
         target_type: targetType,
         course_id: activationCode.course_id,
@@ -254,11 +276,63 @@ export class ActivationCodeService {
           : {}),
       };
     } catch (error) {
-      await queryRunner.rollbackTransaction();
+      if (queryRunner.isTransactionActive !== false) {
+        try {
+          await queryRunner.rollbackTransaction();
+        } catch (rollbackError) {
+          this.logger.error('激活码事务回滚失败', rollbackError instanceof Error ? rollbackError.stack : undefined);
+        }
+      }
       throw error;
     } finally {
       await queryRunner.release();
     }
+
+    if (previewTarget) {
+      await this.requestPreviewDemandAfterCommit(userId, previewTarget);
+    }
+
+    return redemptionResult;
+  }
+
+  private async requestPreviewDemandAfterCommit(
+    userId: number,
+    target: { targetType: ActivationCodeTargetType; courseId: number | null },
+  ): Promise<void> {
+    const requestDemand = () =>
+      target.targetType === ActivationCodeTargetType.COURSE && target.courseId
+        ? requestCoursePreviewDemand(this.dataSource.manager, target.courseId)
+        : requestUserPreviewDemand(this.dataSource.manager, userId);
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        await requestDemand();
+        return;
+      } catch (error) {
+        const isDeadlock = this.isDeadlockError(error);
+        if (isDeadlock && attempt < 2) continue;
+
+        this.logger.warn(
+          `激活已成功，预览生成任务标记失败: userId=${userId}, targetType=${target.targetType}, courseId=${target.courseId || 0}`,
+        );
+        return;
+      }
+    }
+  }
+
+  private isDeadlockError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const databaseError = error as {
+      code?: string;
+      errno?: number;
+      sqlMessage?: string;
+      message?: string;
+    };
+    return (
+      databaseError.code === 'ER_LOCK_DEADLOCK' ||
+      Number(databaseError.errno) === 1213 ||
+      /deadlock/i.test(String(databaseError.sqlMessage || databaseError.message || ''))
+    );
   }
 
   private async grantCourseByCode(manager: any, userId: number, activationCode: ActivationCode) {

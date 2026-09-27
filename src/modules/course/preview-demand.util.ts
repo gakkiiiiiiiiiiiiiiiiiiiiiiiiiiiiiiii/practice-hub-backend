@@ -19,6 +19,32 @@ export function getPackageSubCategoryScopeSql(courseAlias: string, scopeAlias = 
 }
 
 /**
+ * 将单个课程的文件加入完整预览生成队列。
+ *
+ * 课程购买或激活只需要更新当前课程，避免为了一个资料授权扫描并锁定
+ * 用户拥有的全部资料。
+ */
+export async function requestCoursePreviewDemand(
+  manager: Pick<EntityManager, 'query'>,
+  courseId: number,
+): Promise<number> {
+  const safeCourseId = Number(courseId);
+  if (!Number.isInteger(safeCourseId) || safeCourseId <= 0) return 0;
+
+  const result = await manager.query(
+    `UPDATE course_file
+     SET full_preview_requested = 1
+     WHERE course_id = ?
+       AND status = 1
+       AND full_preview_requested = 0
+       AND LOWER(file_type) IN ('pdf', 'doc', 'docx')`,
+    [safeCourseId],
+  );
+
+  return Number(result?.affectedRows || 0);
+}
+
+/**
  * 将用户当前获得访问权的文件资料加入完整预览生成队列。
  *
  * 上传文件本身会直接设置 full_preview_requested；这里负责购买、套餐和激活码

@@ -1,6 +1,25 @@
-import { getPackageSubCategoryScopeSql, requestUserPreviewDemand } from './preview-demand.util';
+import {
+  getPackageSubCategoryScopeSql,
+  requestCoursePreviewDemand,
+  requestUserPreviewDemand,
+} from './preview-demand.util';
 
 describe('requestUserPreviewDemand', () => {
+  it('queues only files from the requested course', async () => {
+    const manager = { query: jest.fn().mockResolvedValue({ affectedRows: 2 }) };
+
+    await expect(requestCoursePreviewDemand(manager as any, 447)).resolves.toBe(2);
+    expect(manager.query).toHaveBeenCalledWith(expect.stringContaining('WHERE course_id = ?'), [447]);
+    expect(manager.query.mock.calls[0][0]).not.toContain('user_course_auth');
+  });
+
+  it('ignores invalid course ids without querying the database', async () => {
+    const manager = { query: jest.fn() };
+
+    await expect(requestCoursePreviewDemand(manager as any, 0)).resolves.toBe(0);
+    expect(manager.query).not.toHaveBeenCalled();
+  });
+
   it('queues only current user entitlements', async () => {
     const manager = { query: jest.fn().mockResolvedValue({ affectedRows: 7 }) };
 
