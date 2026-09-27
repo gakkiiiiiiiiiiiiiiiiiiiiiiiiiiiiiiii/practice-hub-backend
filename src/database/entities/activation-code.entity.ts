@@ -29,6 +29,7 @@ export enum ActivationCodeSourceType {
 	AGENT = 'agent', // 管理后台代理商生成
 	DISTRIBUTOR = 'distributor', // 小程序分销购买生成
 	APP_ADMIN = 'app_admin', // 小程序管理员生成
+	AGISO = 'agiso', // 阿奇索渠道采购生成
 }
 
 @Entity('activation_code')

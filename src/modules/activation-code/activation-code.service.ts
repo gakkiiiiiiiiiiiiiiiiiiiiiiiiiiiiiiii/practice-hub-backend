@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { ActivationCode, ActivationCodeStatus, ActivationCodeTargetType } from '../../database/entities/activation-code.entity';
+import { ActivationCode, ActivationCodeSourceType, ActivationCodeStatus, ActivationCodeTargetType } from '../../database/entities/activation-code.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { PackagePlan } from '../../database/entities/package-plan.entity';
 import { UserPackageSubscription } from '../../database/entities/user-package-subscription.entity';
@@ -13,6 +13,7 @@ import { UserCategoryBundleAccess } from '../../database/entities/user-category-
 import { Distributor } from '../../database/entities/distributor.entity';
 import { requestCoursePreviewDemand, requestUserPreviewDemand } from '../course/preview-demand.util';
 import { DistributorService } from '../distributor/distributor.service';
+import { grantTrackedPackageDuration } from '../package/package-entitlement-ledger';
 
 @Injectable()
 export class ActivationCodeService {
@@ -237,6 +238,21 @@ export class ActivationCodeService {
         await this.grantCourseByCode(queryRunner.manager, userId, activationCode);
       }
 
+      if (activationCode.source_type === ActivationCodeSourceType.AGISO) {
+        await queryRunner.manager.query(
+          'INSERT INTO agiso_code_grant (activation_code_id, user_id, target_type, target_id, granted_at, duration_days, revoked_at) VALUES (?, ?, ?, ?, NOW(), ?, NULL)',
+          [
+            activationCode.id,
+            userId,
+            targetType,
+            activationCode.target_id || activationCode.course_id,
+            targetType === ActivationCodeTargetType.PACKAGE
+              ? (await queryRunner.manager.findOne(PackagePlan, { where: { id: activationCode.target_id } }))?.duration_days ?? null
+              : null,
+          ],
+        );
+      }
+
       await queryRunner.commitTransaction();
 
       if (
@@ -408,27 +424,13 @@ export class ActivationCodeService {
       throw new BadRequestException('套餐计划不存在或已禁用');
     }
 
-    const now = new Date();
-    let subscription = await manager.findOne(UserPackageSubscription, {
-      where: { user_id: userId, section_id: plan.section_id },
+    await grantTrackedPackageDuration(manager, {
+      userId,
+      sectionId: plan.section_id,
+      durationDays: plan.duration_days,
+      sourceType: 'code',
+      sourceId: activationCode.id,
     });
-    const baseTime = subscription && subscription.expire_time > now ? subscription.expire_time : now;
-    const expireTime = new Date(baseTime);
-    expireTime.setDate(expireTime.getDate() + plan.duration_days);
-
-    if (!subscription) {
-      subscription = manager.create(UserPackageSubscription, {
-        user_id: userId,
-        section_id: plan.section_id,
-        expire_time: expireTime,
-        order_id: null,
-      });
-    } else {
-      subscription.expire_time = expireTime;
-      subscription.order_id = null;
-    }
-    await manager.save(UserPackageSubscription, subscription);
-    await this.syncUserPackageExpireTime(manager, userId);
   }
 
   private async grantCategoryBundleByCode(manager: any, userId: number, activationCode: ActivationCode) {

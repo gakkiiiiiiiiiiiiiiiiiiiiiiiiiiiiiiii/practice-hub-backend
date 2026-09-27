@@ -10,6 +10,7 @@ import { CourseCategory } from '../../database/entities/course-category.entity';
 import { AppUser } from '../../database/entities/app-user.entity';
 import { Order } from '../../database/entities/order.entity';
 import { assertIntegerYuanPrice } from '../../common/utils/price.util';
+import { grantTrackedPackageDuration, revokeTrackedPackageDuration } from './package-entitlement-ledger';
 
 @Injectable()
 export class PackageService {
@@ -166,18 +167,29 @@ export class PackageService {
 		});
 	}
 
-	async revokePackageOrder(order: Order) {
-		const subscription = await this.userPackageSubscriptionRepository.findOne({
-			where: { user_id: order.user_id, order_id: order.id },
-		});
-		if (!subscription) {
-			return;
+		async revokePackageOrder(order: Order) {
+			await this.userPackageSubscriptionRepository.manager.transaction(async (manager) => {
+				if (order.package_section_id && await revokeTrackedPackageDuration(manager, {
+					userId: order.user_id,
+					sectionId: order.package_section_id,
+					sourceType: 'order',
+					sourceId: order.id,
+				})) return;
+
+				const subscription = await manager.findOne(UserPackageSubscription, {
+					where: { user_id: order.user_id, order_id: order.id },
+				});
+				if (!subscription) return;
+				await manager.delete(UserPackageSubscription, subscription.id);
+				const remaining = await manager.find(UserPackageSubscription, { where: { user_id: order.user_id } });
+				const now = new Date();
+				const maxExpire = remaining.reduce<Date | null>((max, item) => {
+					const value = new Date(item.expire_time);
+					return value > now && (!max || value > max) ? value : max;
+				}, null);
+				await manager.update(AppUser, order.user_id, { package_expire_time: maxExpire });
+			});
 		}
-		await this.userPackageSubscriptionRepository.delete({
-			id: subscription.id,
-		});
-		await this.syncUserPackageExpireTime(order.user_id);
-	}
 
 	async fulfillPackageOrder(order: Order) {
 		if (!order.package_section_id || !order.package_plan_id) {
@@ -193,27 +205,15 @@ export class PackageService {
 			throw new NotFoundException('套餐不存在');
 		}
 
-		const now = new Date();
-		let subscription = await this.userPackageSubscriptionRepository.findOne({
-			where: { user_id: order.user_id, section_id: order.package_section_id },
-		});
-		const baseTime = subscription && subscription.expire_time > now ? subscription.expire_time : now;
-		const expireTime = new Date(baseTime);
-		expireTime.setDate(expireTime.getDate() + plan.duration_days);
-
-		if (!subscription) {
-			subscription = this.userPackageSubscriptionRepository.create({
-				user_id: order.user_id,
-				section_id: order.package_section_id,
-				expire_time: expireTime,
-				order_id: order.id,
+			await this.userPackageSubscriptionRepository.manager.transaction(async (manager) => {
+				await grantTrackedPackageDuration(manager, {
+					userId: order.user_id,
+					sectionId: order.package_section_id,
+					durationDays: plan.duration_days,
+					sourceType: 'order',
+					sourceId: order.id,
+				});
 			});
-		} else {
-			subscription.expire_time = expireTime;
-			subscription.order_id = order.id;
-		}
-		await this.userPackageSubscriptionRepository.save(subscription);
-		await this.syncUserPackageExpireTime(order.user_id);
 	}
 
 	// ---------- Admin ----------
