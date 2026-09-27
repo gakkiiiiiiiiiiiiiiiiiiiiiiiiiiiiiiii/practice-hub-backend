@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('node:fs');
+
 function integer(name, defaultValue, min, max) {
   const raw = process.env[name];
   const value = raw === undefined || raw === '' ? defaultValue : Number(raw);
@@ -16,6 +18,7 @@ function required(name) {
 }
 
 function loadDatabaseConfig() {
+  const sslEnabled = String(process.env.DB_SSL || 'false').toLowerCase() === 'true';
   return {
     host: required('DB_HOST'),
     port: integer('DB_PORT', 3306, 1, 65535),
@@ -23,7 +26,9 @@ function loadDatabaseConfig() {
     password: required('DB_PASSWORD'),
     database: required('DB_DATABASE'),
     connectionLimit: integer('DB_CONNECTION_LIMIT', 6, 1, 20),
-    ssl: String(process.env.DB_SSL || 'false').toLowerCase() === 'true' ? {} : undefined,
+    ssl: sslEnabled
+      ? { ca: fs.readFileSync(required('DB_SSL_CA_FILE')), rejectUnauthorized: true }
+      : undefined,
   };
 }
 

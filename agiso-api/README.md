@@ -177,6 +177,8 @@ node --env-file=.env src/server.js
 
 生产环境用 systemd 或 Docker 运行，监听 `127.0.0.1:3101`，仅由 Nginx HTTPS 入口访问。2C2G 主机建议保留默认 6 个数据库连接。数据库账号应独立创建并仅授予本服务需要的表级权限；不得使用 MySQL root。
 
+当前 TDSQL-C 实例尚未开启数据库 SSL，跨云数据库连接仍为明文。商品维持禁售；正式自动采购前需在维护窗口开启数据库 SSL（该操作会重启数据库实例）、下载腾讯云 CA 证书，设置 `DB_SSL=true` 与 `DB_SSL_CA_FILE`，再验证阿里云服务和现有小程序后端的重连。不要仅将 `DB_SSL` 改为 `true` 而不配置可信 CA 证书。参见腾讯云 [设置 SSL 加密](https://cloud.tencent.com/document/product/1003/109673)。
+
 Nginx 示例：
 
 ```nginx
