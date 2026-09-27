@@ -10,6 +10,7 @@ import { CourseCategory } from '../../database/entities/course-category.entity';
 import { CourseFile } from '../../database/entities/course-file.entity';
 import { AppUser, AppUserRole } from '../../database/entities/app-user.entity';
 import { UserCourseAuth, AuthSource } from '../../database/entities/user-course-auth.entity';
+import { ActivationCode, ActivationCodeStatus } from '../../database/entities/activation-code.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreateCartOrderDto } from './dto/create-cart-order.dto';
 import { CreatePaperCartOrderDto } from './dto/create-paper-cart-order.dto';
@@ -1859,14 +1860,32 @@ export class OrderService {
     return this.callWechatPayOpenApi('refund', refundRequest);
   }
 
-  private async revokeCourseAccess(userId: number, courseId: number) {
+  private async revokeCourseAccess(userId: number, courseId: number, refundingOrderId: number) {
     if (!courseId) {
       return;
     }
+
+    // A purchase can reuse a row that was originally created by a code. Check
+    // every remaining source before deleting that shared access row.
+    const paidOrders = await this.orderRepository.find({
+      where: { user_id: userId, status: OrderStatus.PAID },
+    });
+    const hasAnotherPurchase = paidOrders.some((paidOrder) => {
+      if (paidOrder.id === refundingOrderId || paidOrder.order_type !== 'course') return false;
+      if (paidOrder.course_id === courseId) return true;
+      const cartItems = Array.isArray(paidOrder.pay_payload?.cart_items) ? paidOrder.pay_payload.cart_items : [];
+      return cartItems.some((item) => Number(item?.course_id) === courseId);
+    });
+    if (hasAnotherPurchase) return;
+
+    const usedCodeCount = await this.orderRepository.manager.count(ActivationCode, {
+      where: { used_by_uid: userId, course_id: courseId, status: ActivationCodeStatus.USED },
+    });
+    if (usedCodeCount > 0) return;
+
     await this.userCourseAuthRepository.delete({
       user_id: userId,
       course_id: courseId,
-      source: AuthSource.PURCHASE,
     });
   }
 
@@ -1888,13 +1907,13 @@ export class OrderService {
     const cartItems = Array.isArray(order.pay_payload?.cart_items) ? order.pay_payload.cart_items : [];
     if (cartItems.length > 0) {
       for (const item of cartItems) {
-        await this.revokeCourseAccess(order.user_id, Number(item?.course_id || 0));
+        await this.revokeCourseAccess(order.user_id, Number(item?.course_id || 0), order.id);
       }
       return;
     }
 
     if (order.course_id) {
-      await this.revokeCourseAccess(order.user_id, order.course_id);
+      await this.revokeCourseAccess(order.user_id, order.course_id, order.id);
     }
   }
 

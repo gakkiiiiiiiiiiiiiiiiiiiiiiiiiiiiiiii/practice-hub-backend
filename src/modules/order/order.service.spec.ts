@@ -687,6 +687,8 @@ describe('OrderService WeChat Pay refund', () => {
       pay_payload: {},
     };
     service.orderRepository.findOne = jest.fn().mockResolvedValue(order);
+    service.orderRepository.find = jest.fn().mockResolvedValue([order]);
+    service.orderRepository.manager = { count: jest.fn().mockResolvedValue(0) };
     service.appUserRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }),
     };
@@ -713,7 +715,6 @@ describe('OrderService WeChat Pay refund', () => {
     expect(service.userCourseAuthRepository.delete).toHaveBeenCalledWith({
       user_id: 7,
       course_id: 10,
-      source: 'purchase',
     });
     expect(order.status).toBe(OrderStatus.CANCELLED);
     expect((order.pay_payload as any).refund).toEqual(
@@ -746,6 +747,8 @@ describe('OrderService WeChat Pay refund', () => {
       pay_payload: {},
     };
     service.orderRepository.findOne = jest.fn().mockResolvedValue(order);
+    service.orderRepository.find = jest.fn().mockResolvedValue([order]);
+    service.orderRepository.manager = { count: jest.fn().mockResolvedValue(0) };
     service.orderRepository.save = jest.fn(async (payload) => payload);
     service.appUserRepository = {
       findOne: jest.fn().mockResolvedValue({ id: 7, openid: 'openid' }),
@@ -781,6 +784,34 @@ describe('OrderService WeChat Pay refund', () => {
     });
 
     await expect(service.refundOrder(89, 1)).rejects.toThrow('仅已支付或售后中的订单可退款');
+  });
+});
+
+describe('OrderService course entitlement refund', () => {
+  it('keeps a course grant when another activation code still grants access', async () => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.orderRepository = {
+      find: jest.fn().mockResolvedValue([{ id: 21, user_id: 7, course_id: 10, status: OrderStatus.PAID }]),
+      manager: { count: jest.fn().mockResolvedValue(1) },
+    };
+    service.userCourseAuthRepository = { delete: jest.fn() };
+
+    await service.revokeCourseAccess(7, 10, 21);
+
+    expect(service.userCourseAuthRepository.delete).not.toHaveBeenCalled();
+  });
+
+  it('removes a shared code-origin row after both the code and the purchase are revoked', async () => {
+    const service = Object.create(OrderService.prototype) as any;
+    service.orderRepository = {
+      find: jest.fn().mockResolvedValue([{ id: 21, user_id: 7, course_id: 10, status: OrderStatus.PAID }]),
+      manager: { count: jest.fn().mockResolvedValue(0) },
+    };
+    service.userCourseAuthRepository = { delete: jest.fn() };
+
+    await service.revokeCourseAccess(7, 10, 21);
+
+    expect(service.userCourseAuthRepository.delete).toHaveBeenCalledWith({ user_id: 7, course_id: 10 });
   });
 });
 
