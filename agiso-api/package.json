@@ -1,0 +1,20 @@
+{
+  "name": "practice-hub-agiso-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "阿奇索拼多多激活码自动发货独立服务",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "hash-secret": "node scripts/hash-secret.js",
+    "sync-products": "node scripts/sync-products.js",
+    "topup": "node scripts/topup.js"
+  },
+  "dependencies": {
+    "mysql2": "^3.6.5"
+  }
+}
