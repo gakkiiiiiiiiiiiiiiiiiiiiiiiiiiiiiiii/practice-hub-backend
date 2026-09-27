@@ -59,9 +59,12 @@ scripts/
 migrations/
 
 # Docker
-Dockerfile*
 docker-compose*.yml
 .dockerignore
+
+# 独立阿奇索服务和本机临时包不属于微信云托管后端镜像
+agiso-api/
+.temp-runkit-*.zip
 
 # 本地开发/运维文档与配置（构建不需要）
 DEPLOY*.md
