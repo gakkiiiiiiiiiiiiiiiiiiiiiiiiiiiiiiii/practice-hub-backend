@@ -23,6 +23,7 @@ import { UploadService } from '../upload/upload.service';
 import { AgentPricePolicyService } from './agent-price-policy.service';
 import { DistributorWithdrawal, DistributorWithdrawalStatus } from '../../database/entities/distributor-withdrawal.entity';
 import { CreateWithdrawalDto } from './dto/create-withdrawal.dto';
+import { revokeTrackedPackageDuration } from '../package/package-entitlement-ledger';
 
 @Injectable()
 export class DistributorService {
@@ -1583,11 +1584,23 @@ export class DistributorService {
 
 			code.status = ActivationCodeStatus.INVALID;
 			await queryRunner.manager.save(ActivationCode, code);
-			if (code.target_type === ActivationCodeTargetType.CATEGORY_BUNDLE) {
-				await queryRunner.manager.delete(UserCategoryBundleAccess, {
-					activation_code_id: code.id,
-				});
-			} else {
+				if (code.target_type === ActivationCodeTargetType.CATEGORY_BUNDLE) {
+					await queryRunner.manager.delete(UserCategoryBundleAccess, {
+						activation_code_id: code.id,
+					});
+				} else if (code.target_type === ActivationCodeTargetType.PACKAGE) {
+					const plan = code.target_id
+						? await queryRunner.manager.findOne(PackagePlan, { where: { id: code.target_id } })
+						: null;
+					if (!plan || !await revokeTrackedPackageDuration(queryRunner.manager, {
+						userId: code.used_by_uid,
+						sectionId: plan.section_id,
+						sourceType: 'code',
+						sourceId: code.id,
+					})) {
+						throw new BadRequestException('历史套餐码无法安全自动撤销，请联系管理员处理');
+					}
+				} else {
 				await this.revokeCodeCourseAuth(queryRunner.manager, code);
 			}
 			await queryRunner.commitTransaction();

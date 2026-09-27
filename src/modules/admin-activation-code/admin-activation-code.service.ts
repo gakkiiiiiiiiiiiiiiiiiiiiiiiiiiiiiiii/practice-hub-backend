@@ -19,6 +19,7 @@ import { Order, OrderStatus } from '../../database/entities/order.entity';
 import { GenerateCodeDto } from './dto/generate-code.dto';
 import { CourseCategory } from '../../database/entities/course-category.entity';
 import { UserCategoryBundleAccess } from '../../database/entities/user-category-bundle-access.entity';
+import { revokeTrackedPackageDuration } from '../package/package-entitlement-ledger';
 
 @Injectable()
 export class AdminActivationCodeService {
@@ -579,6 +580,13 @@ export class AdminActivationCodeService {
     }
     const plan = await manager.findOne(PackagePlan, { where: { id: code.target_id } });
     if (!plan) return;
+
+    if (await revokeTrackedPackageDuration(manager, {
+      userId: code.used_by_uid,
+      sectionId: plan.section_id,
+      sourceType: 'code',
+      sourceId: code.id,
+    })) return;
 
     const paidOrder = await manager.findOne(Order, {
       where: {
