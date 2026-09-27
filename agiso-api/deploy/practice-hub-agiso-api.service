@@ -1,0 +1,24 @@
+[Unit]
+Description=Practice Hub Agiso fulfillment API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agiso-api
+Group=agiso-api
+WorkingDirectory=/opt/practice-hub-agiso/current
+EnvironmentFile=/opt/practice-hub-agiso/shared/app.env
+ExecStart=/usr/bin/node /opt/practice-hub-agiso/current/src/server.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+MemoryMax=350M
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
