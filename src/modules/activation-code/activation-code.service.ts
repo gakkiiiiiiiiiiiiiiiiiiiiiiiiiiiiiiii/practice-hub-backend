@@ -177,6 +177,15 @@ export class ActivationCodeService {
       await queryRunner.connect();
       await queryRunner.startTransaction();
 
+      // 先锁激活码，再锁用户；与阿奇索退款使用相同顺序，避免核销和退款互相覆盖权益。
+      const lockedCodes = await queryRunner.manager.query(
+        'SELECT id FROM activation_code WHERE code = ? AND status = ? FOR UPDATE',
+        [code, ActivationCodeStatus.PENDING],
+      );
+      if (lockedCodes.length !== 1) {
+        throw new BadRequestException('激活码无效或已使用');
+      }
+
       // 1. 查询激活码
       const activationCode = await queryRunner.manager.findOne(ActivationCode, {
         where: { code, status: ActivationCodeStatus.PENDING },
