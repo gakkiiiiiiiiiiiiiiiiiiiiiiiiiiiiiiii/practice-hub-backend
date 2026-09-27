@@ -4,15 +4,15 @@
 
 ## 接口域名
 
-正式交付给阿奇索的地址应为已经完成 DNS、HTTPS 和真实请求验收的本项目阿里云域名：
+本项目阿里云服务器的 HTTPS 域名已部署并通过鉴权与错误路径的真实请求验收：
 
 ```text
-POST https://<本项目阿里云接口域名>/auth
-POST https://<本项目阿里云接口域名>/issue
-POST https://<本项目阿里云接口域名>/revoke
+POST https://agiso.ltzm.me/auth
+POST https://agiso.ltzm.me/issue
+POST https://agiso.ltzm.me/revoke
 ```
 
-建议为该服务使用独立 HTTPS 子域名，Nginx 将以上 3 个路径反向代理到 `127.0.0.1:3101`。在域名和证书实际验证完成前，不要把占位地址交给阿奇索。
+Nginx 将以上 3 个路径反向代理到 `127.0.0.1:3101`。生产商品均默认禁售且未定价，预充值余额为零，配置和联调完成前不要启用阿奇索自动采购。
 
 ## 接口约定
 
