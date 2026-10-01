@@ -49,6 +49,7 @@ import { CoinTransaction } from './entities/coin-transaction.entity';
 import { StorageDeleteJob } from './entities/storage-delete-job.entity';
 import { UserCategoryBundleAccess } from './entities/user-category-bundle-access.entity';
 import { CloudPrintJob } from './entities/cloud-print-job.entity';
+import { ZhiyePrintDraft } from './entities/zhiye-print-draft.entity';
 
 @Module({
 	imports: [
@@ -102,6 +103,7 @@ import { CloudPrintJob } from './entities/cloud-print-job.entity';
 			StorageDeleteJob,
 			UserCategoryBundleAccess,
 			CloudPrintJob,
+			ZhiyePrintDraft,
 		]),
 	],
 	exports: [TypeOrmModule],

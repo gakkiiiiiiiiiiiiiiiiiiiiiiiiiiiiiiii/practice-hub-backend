@@ -1104,7 +1104,8 @@ export class OrderService {
       out_trade_no: order.order_no,
       sub_mch_id: cloudPayConfig.subMchId,
       total_fee: totalFee,
-      openid: user.openid,
+      openid: this.resolveWechatPayOpenId(user.openid, order, cloudPayConfig.subAppid),
+      ...(order.pay_payload?.source_kind === 'zhiye' ? { sub_appid: cloudPayConfig.subAppid } : {}),
       spbill_create_ip: clientIp || cloudPayConfig.spbillCreateIp,
       env_id: cloudPayConfig.callbackEnvId,
       callback_type: 2,
@@ -1115,6 +1116,17 @@ export class OrderService {
     });
 
     return this.normalizeWechatPayPaymentParams(result);
+  }
+
+  private resolveWechatPayOpenId(openid: string, order: Order, appId: string) {
+    if (order.pay_payload?.source_kind !== 'zhiye') {
+      if (String(openid).startsWith('zhiye:')) throw new BadRequestException('请在知页打印订单中付款');
+      return openid;
+    }
+    if (this.configService.get('ZHIYE_WECHAT_PAY_ENABLED') !== 'true') throw new BadRequestException('知页微信支付尚未配置完成');
+    const prefix = `zhiye:${appId}:`;
+    if (!openid.startsWith(prefix) || openid.length <= prefix.length) throw new BadRequestException('小程序支付身份不匹配，请重新微信登录');
+    return openid.slice(prefix.length);
   }
 
   private normalizeWechatPayPaymentParams(result: Record<string, any>) {
@@ -1323,6 +1335,11 @@ export class OrderService {
 
   private getCloudPayConfigForOrder(order: Pick<Order, 'pay_payload'> | null | undefined) {
     const config = this.getCloudPayConfig();
+    if (order?.pay_payload?.source_kind === 'zhiye') {
+      const appId = String(this.configService.get('ZHIYE_WECHAT_APPID') || '');
+      if (!/^wx[0-9a-f]{16}$/i.test(appId)) throw new BadRequestException('知页 AppID 尚未配置');
+      config.subAppid = appId;
+    }
     const wechatPay = order?.pay_payload?.wechat_pay;
     const orderSubMchId = this.getWechatPaySubMchIdFromOrder(order);
     return {
@@ -1522,13 +1539,26 @@ export class OrderService {
     }
 
     const expectedFee = Math.max(1, Math.round(Number(order.amount || 0) * 100));
-    if (totalFee < expectedFee) {
+    if (totalFee < expectedFee || (order.pay_payload?.source_kind === 'zhiye' && totalFee !== expectedFee)) {
       throw new BadRequestException('微信支付回调金额校验失败');
+    }
+
+    // The cloud callback has no locally verifiable signature. For the new
+    // application, confirm the transaction with WeChat before fulfillment.
+    let verifiedQuery: Record<string, any> | null = null;
+    if (order.pay_payload?.source_kind === 'zhiye') {
+      verifiedQuery = await this.queryWechatPayOrder(order.order_no, order);
+      const tradeState = verifiedQuery?.trade_state || verifiedQuery?.tradeState;
+      const verifiedFee = Number(verifiedQuery?.total_fee ?? verifiedQuery?.totalFee ?? 0);
+      if (tradeState !== 'SUCCESS' || verifiedFee !== expectedFee) {
+        throw new BadRequestException('微信支付结果校验失败，请稍后重试');
+      }
     }
 
     order.pay_payload = {
       ...(order.pay_payload || {}),
       wechat_pay_callback: body,
+      ...(verifiedQuery ? { wechat_pay_callback_query: verifiedQuery } : {}),
     };
     await this.orderRepository.save(order);
     await this.handlePaymentSuccess(order.id);
@@ -2314,6 +2344,7 @@ export class OrderService {
     const config = order ? this.getCloudPayConfigForOrder(order) : this.getCloudPayConfig();
     return this.callWechatPayOpenApi('queryorder', {
       sub_mch_id: config.subMchId,
+      ...(order?.pay_payload?.source_kind === 'zhiye' ? { sub_appid: config.subAppid } : {}),
       out_trade_no: orderNo,
       nonce_str: this.generateNonceStr(),
     });
@@ -2541,7 +2572,13 @@ export class OrderService {
     if (order.pay_provider === 'wechat_pay' || requiresShipping) {
       const cartItems = Array.isArray(payPayload.cart_items) ? payPayload.cart_items : [];
       const cartCount = cartItems.length;
-      const goodsTitle = payPayload.fulfillment_type === 'paper' && cartCount > 0 ? this.getPaperCartTitle(cartItems) : payPayload.is_cart ? (cartCount > 1 ? `购物车(${cartCount}门课程)` : cartItems[0]?.name || course?.name || '纸质专业真题') : course?.name || '纸质专业真题';
+      const goodsTitle = payPayload.source_kind === 'zhiye'
+        ? String(payPayload.zhiye_print?.title || '知页打印资料')
+        : payPayload.fulfillment_type === 'paper' && cartCount > 0
+          ? this.getPaperCartTitle(cartItems)
+          : payPayload.is_cart
+            ? (cartCount > 1 ? `购物车(${cartCount}门课程)` : cartItems[0]?.name || course?.name || '纸质专业真题')
+            : course?.name || '纸质专业真题';
 
       return this.processWechatPayPayment({
         user,

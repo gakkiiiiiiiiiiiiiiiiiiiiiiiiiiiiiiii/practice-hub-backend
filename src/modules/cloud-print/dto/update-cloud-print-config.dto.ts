@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class UpdateCloudPrintConfigDto {
   @IsBoolean()
@@ -51,4 +51,7 @@ export class UpdateCloudPrintConfigDto {
 
   @IsInt() @Min(1) @Max(10000000)
   maxSingleAmountCents: number;
+
+  @IsNumber({ maxDecimalPlaces: 4 }) @Min(1) @Max(10)
+  retailMultiplier: number = 1.3;
 }

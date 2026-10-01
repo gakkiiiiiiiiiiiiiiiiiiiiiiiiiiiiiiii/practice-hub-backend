@@ -45,15 +45,15 @@ export class AuthService {
 	/**
 	 * 小程序端 - 微信一键登录
 	 */
-	async appLogin(code: string, distributorCode?: string, profile?: { nickname?: string; avatar?: string }, referralUserId?: number) {
+	async appLogin(code: string, distributorCode?: string, profile?: { nickname?: string; avatar?: string }, referralUserId?: number, application: 'practice-hub' | 'zhiye' = 'practice-hub') {
 		if (!code) {
 			throw new BadRequestException('code 不能为空');
 		}
 
 		// 调用微信接口换取 openid
-		const appid = this.configService.get('WECHAT_APPID') || this.configService.get('AppID');
+		const appid = application === 'zhiye' ? this.configService.get('ZHIYE_WECHAT_APPID') : this.configService.get('WECHAT_APPID') || this.configService.get('AppID');
 		const secret =
-			this.configService.get('WECHAT_SECRET') || this.configService.get('WECHAT_APPSECRET') || this.configService.get('AppSecret');
+			application === 'zhiye' ? this.configService.get('ZHIYE_WECHAT_SECRET') : this.configService.get('WECHAT_SECRET') || this.configService.get('WECHAT_APPSECRET') || this.configService.get('AppSecret');
 
 		// 检查配置
 		if (!appid || !secret) {
@@ -66,9 +66,9 @@ export class AuthService {
 		}
 
 		try {
-			// 配置 https Agent 以跳过 SSL 证书验证（微信云托管环境需要）
+			// 知页使用独立配置，并强制校验微信 HTTPS 证书。旧应用暂保留既有兼容行为。
 			const httpsAgent = new https.Agent({
-				rejectUnauthorized: false,
+				rejectUnauthorized: application === 'zhiye',
 			});
 
 			const response = await axios.get('https://api.weixin.qq.com/sns/jscode2session', {
@@ -79,9 +79,12 @@ export class AuthService {
 					grant_type: 'authorization_code',
 				},
 				httpsAgent,
+				timeout: 15000,
 			});
 
-			const { openid, session_key, errcode, errmsg } = response.data;
+			const { openid: rawOpenid, session_key, errcode, errmsg } = response.data;
+			// OpenIDs are scoped to AppID. Never merge the independent application's identity.
+			const openid = rawOpenid && (application === 'zhiye' ? `zhiye:${appid}:${rawOpenid}` : rawOpenid);
 
 			// 处理微信 API 返回的错误
 			if (errcode) {
@@ -108,7 +111,11 @@ export class AuthService {
 			}
 
 			if (!openid) {
-				console.error('微信 API 返回数据异常:', response.data);
+				console.error('微信 API 返回数据异常:', {
+					errCode: response.data?.errcode,
+					errMsg: response.data?.errmsg,
+					hasOpenid: Boolean(response.data?.openid),
+				});
 				throw new UnauthorizedException('微信登录失败：未获取到用户标识');
 			}
 
@@ -123,7 +130,7 @@ export class AuthService {
 						avatar: this.normalizeOptionalString(profile?.avatar) || null,
 					});
 				}
-				if (this.isAppAdminOpenid(openid)) {
+				if (application === 'practice-hub' && this.isAppAdminOpenid(openid)) {
 					user.role = AppUserRole.ADMIN;
 				}
 				const nickname = this.normalizeOptionalString(profile?.nickname);

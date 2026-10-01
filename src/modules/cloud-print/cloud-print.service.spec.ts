@@ -26,6 +26,7 @@ describe('CloudPrintService', () => {
     orientation: 0,
     shipSupplierId: 82,
     maxSingleAmountCents: 5000,
+    retailMultiplier: 1.3,
   };
 
   const buildPayload = (
@@ -172,7 +173,8 @@ describe('CloudPrintService', () => {
     service.getConfig = jest.fn();
 
     await expect(service.processDueJobs()).resolves.toEqual({ scanned: 0, attempted: 0 });
-    expect(query.getMany).toHaveBeenCalledTimes(1);
+    await expect(service.processDueJobs()).resolves.toEqual({ scanned: 0, attempted: 0 });
+    expect(query.getMany).toHaveBeenCalledTimes(2);
     expect(service.getConfig).not.toHaveBeenCalled();
     expect(axios.request).not.toHaveBeenCalled();
   });
@@ -435,5 +437,59 @@ describe('CloudPrintService', () => {
   it('rejects files above the supplier glue-binding limit', async () => {
     const service = Object.create(CloudPrintService.prototype) as any;
     await expect(buildPayload(service, 601)).rejects.toThrow('文件 601 页不符合当前装订范围 8-600 页');
+  });
+
+  it('defaults the Zhiye retail cost multiplier to 1.3', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    service.systemConfigRepository = { findOne: jest.fn().mockResolvedValue(null) };
+    service.configService = { get: jest.fn(() => undefined) };
+
+    await expect(service.getConfig()).resolves.toMatchObject({
+      retailMultiplier: 1.3,
+      configured: false,
+    });
+  });
+
+  it('quotes prepared files with two pricing calls and rounds retail amount to cents', async () => {
+    const service = Object.create(CloudPrintService.prototype) as any;
+    service.getConfig = jest.fn().mockResolvedValue({ ...printConfig, configured: true });
+    service.uploadService = { getCloudPrintDownloadUrl: jest.fn((url) => url) };
+    service.requestApi = jest.fn()
+      .mockResolvedValueOnce({ origin_price: { total_amount: 101, total_weight: 50 } })
+      .mockResolvedValueOnce({ price: 0 });
+    const source = [{
+      file_url: 'https://example.com/zhiye.pdf',
+      display_name: '知页练习',
+      file_name: 'zhiye.pdf',
+      file_type: 'pdf' as const,
+      file_page_count: 2,
+      quantity: 1,
+    }];
+
+    const quote = await service.quotePreparedFiles(
+      source,
+      [{ downloaded: true, file: { id: 'provider-file', name: '知页练习.pdf', pages: 2 } }],
+      {
+        userId: 3,
+        referenceNo: 'ZHIYE-DRAFT-1-1',
+        name: '测试用户',
+        phone: '13800000000',
+        province: '广东省',
+        city: '深圳市',
+        district: '南山区',
+        detail: '测试地址',
+      },
+    );
+
+    expect(quote).toMatchObject({
+      totalAmountCents: 101,
+      retailMultiplier: 1.3,
+      retailAmountCents: 131,
+    });
+    expect(service.requestApi.mock.calls.map((call: any[]) => call[1])).toEqual([
+      '/api/svip/cart/calc-price',
+      '/api/svip/cart/calc-ship-price',
+    ]);
+    expect(service.requestApi.mock.calls.flat()).not.toContain('/api/svip/order/generate');
   });
 });

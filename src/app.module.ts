@@ -45,6 +45,7 @@ import { AdminPackageModule } from './modules/admin-package/admin-package.module
 import { CourseTypeModule } from './modules/course-type/course-type.module';
 import { OperationLogInterceptor } from './common/interceptors/operation-log.interceptor';
 import { ClientErrorModule } from './modules/client-error/client-error.module';
+import { ZhiyePrintModule } from './modules/zhiye-print/zhiye-print.module';
 
 @Module({
 	imports: [
@@ -149,6 +150,7 @@ import { ClientErrorModule } from './modules/client-error/client-error.module';
 		AdminPackageModule,
 		CourseTypeModule,
 		ClientErrorModule,
+		ZhiyePrintModule,
 	],
 	controllers: [AppController],
 	providers: [

@@ -25,6 +25,14 @@ export class AuthController {
     return CommonResponseDto.success(result);
   }
 
+  @Post('zhiye/login')
+  @ApiOperation({ summary: '知页独立小程序微信登录' })
+  async zhiyeLogin(@Body() dto: AppLoginDto) {
+    return CommonResponseDto.success(
+      await this.authService.appLogin(dto.code, undefined, undefined, undefined, 'zhiye'),
+    );
+  }
+
   @Post('app/phone-login')
   @ApiOperation({ summary: '小程序端 - 手机号快捷登录' })
   async appPhoneLogin(@Body() dto: AppPhoneLoginDto) {

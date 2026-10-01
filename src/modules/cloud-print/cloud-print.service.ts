@@ -54,6 +54,27 @@ const DEFAULT_CONFIG: CloudPrintConfig = {
   orientation: 0,
   shipSupplierId: 82,
   maxSingleAmountCents: 5000,
+  retailMultiplier: 1.3,
+};
+
+export type CloudPrintQuoteSourceFile = {
+  file_url: string;
+  display_name: string;
+  file_name?: string | null;
+  file_type: 'pdf';
+  file_page_count: number;
+  quantity: number;
+};
+
+export type CloudPrintQuoteAddress = {
+  userId: number;
+  referenceNo: string;
+  name: string;
+  phone: string;
+  province: string;
+  city: string;
+  district: string;
+  detail: string;
 };
 
 @Injectable()
@@ -120,6 +141,85 @@ export class CloudPrintService {
     return this.getConfig();
   }
 
+  /**
+   * Creates only a supplier file package for an explicit quote request.
+   * This method never creates or pays a supplier order.
+   */
+  async createQuotePackage(files: CloudPrintQuoteSourceFile[]) {
+    const config = await this.getConfig();
+    if (!config.configured) throw new BadRequestException('刺猬云印密钥未配置');
+    this.assertQuoteSourceFiles(files);
+    const payload = files.map((file) => ({
+      url: this.uploadService.getCloudPrintDownloadUrl(file.file_url),
+      name: this.getCloudPrintUploadName(file),
+    }));
+    const response = await this.requestApi<any>('POST', '/api/svip/storage/create-package', payload, undefined, 15000);
+    const packageId = String(response?.cw_file_package_id || '').trim();
+    if (!packageId) throw new BadRequestException('云打印文件上传接口未返回批次号');
+    return { packageId };
+  }
+
+  /** One bounded supplier readiness request. Callers own cooldown and retry limits. */
+  async getQuotePackageFiles(packageId: string) {
+    const normalized = String(packageId || '').trim();
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(normalized)) {
+      throw new BadRequestException('云打印文件批次号无效');
+    }
+    const rows = await this.requestApi<any[]>(
+      'GET',
+      `/api/svip/storage/package-file-list/${encodeURIComponent(normalized)}`,
+      undefined, undefined, 15000,
+    );
+    const files = Array.isArray(rows) ? rows : [];
+    return {
+      ready: files.length > 0 && files.every((item) => item?.downloaded && item?.file?.id),
+      files,
+    };
+  }
+
+  /**
+   * Quotes prepared files without crossing the supplier order boundary.
+   * Retail price is rounded to cents from the configured cost multiplier.
+   */
+  async quotePreparedFiles(
+    files: CloudPrintQuoteSourceFile[],
+    packageRows: any[],
+    address: CloudPrintQuoteAddress,
+  ) {
+    const config = await this.getConfig();
+    if (!config.configured) throw new BadRequestException('刺猬云印密钥未配置');
+    this.assertQuoteSourceFiles(files);
+    this.validatePrintConfig(config);
+    const payload = await this.buildOrderPayload({
+      user_id: address.userId,
+      order_no: address.referenceNo,
+      shipping_address: {
+        name: address.name,
+        phone: address.phone,
+        province: address.province,
+        city: address.city,
+        district: address.district,
+        detail: address.detail,
+      },
+    } as Order, files, packageRows, config, false);
+    const { quote } = await this.calculateProviderQuote(payload, config, undefined, 15000);
+    if (quote.totalAmountCents > Number(config.maxSingleAmountCents)) {
+      throw new BadRequestException(
+        `云打印预估总额 ¥${(quote.totalAmountCents / 100).toFixed(2)} 超过单笔上限`,
+      );
+    }
+    const retailMultiplier = Number(config.retailMultiplier);
+    if (!Number.isFinite(retailMultiplier) || retailMultiplier < 1 || retailMultiplier > 10) {
+      throw new BadRequestException('知页云打印成本倍率未配置');
+    }
+    return {
+      ...quote,
+      retailMultiplier,
+      retailAmountCents: Math.round(quote.totalAmountCents * retailMultiplier),
+      printConfig: this.pickOrderPrintConfig(config),
+    };
+  }
+
   async enqueuePaidOrder(
     orderId: number,
     triggerType: 'automatic' | 'manual',
@@ -134,7 +234,9 @@ export class CloudPrintService {
         ...(await this.getConfig()),
         ...this.getOrderPrintConfigOverride(order),
       };
-      if (!config.autoEnabled) return null;
+      // 知页订单已由用户显式完成下单和支付，必须落内部待处理任务。
+      // worker 的总开关仍独立控制供应商外呼，避免在配置未完成时产生请求。
+      if (!config.autoEnabled && !this.isZhiyePrintOrder(order)) return null;
     }
 
     let job = await this.jobRepository.findOne({ where: { order_id: orderId } });
@@ -474,33 +576,7 @@ export class CloudPrintService {
       }
 
       const payload = await this.buildOrderPayload(order, this.getSourceFiles(job), packageRows, config, payAfter);
-      const price = await this.requestApi<any>('POST', '/api/svip/cart/calc-price', { goods: payload.goods }, job);
-      const settlement = price?.origin_price;
-      const printAmountCents = Number(settlement?.total_amount);
-      const totalWeightGrams = Number(settlement?.total_weight);
-      if (!Number.isInteger(printAmountCents) || printAmountCents < 0 || !Number.isFinite(totalWeightGrams) || totalWeightGrams <= 0) {
-        throw new Error('云打印计价响应缺少有效结算金额或重量');
-      }
-      const shipping = await this.requestApi<any>('POST', '/api/svip/cart/calc-ship-price', {
-        weight: String(totalWeightGrams),
-        province: payload.address.province,
-        city: payload.address.city,
-        area: payload.address.area,
-        ship_supplier_id: payload.address.ship_supplier_id,
-      }, job);
-      // 已向供应商确认 calc-ship-price 的 price 单位为元，统一换算为分参与金额保护。
-      const shippingAmountCents = Math.round(Number(shipping?.price) * 100);
-      if (!Number.isInteger(shippingAmountCents) || shippingAmountCents < 0) {
-        throw new Error('云打印运费计价响应无效');
-      }
-      const quote = {
-        printAmountCents,
-        shippingAmountCents,
-        totalAmountCents: printAmountCents + shippingAmountCents,
-        totalWeightGrams,
-        quotedAt: new Date().toISOString(),
-        shippingUnitBasis: 'yuan_confirmed',
-      };
+      const { quote, price, shipping } = await this.calculateProviderQuote(payload, config, job);
       if (quote.totalAmountCents > Number(config.maxSingleAmountCents)) {
         const updated = await this.updateClaimedJob(job, CloudPrintJobStatus.PROCESSING, {
           status: CloudPrintJobStatus.REVIEW_REQUIRED,
@@ -735,6 +811,22 @@ export class CloudPrintService {
 
   private async createSourceSnapshot(order: Order) {
     const payload = this.parseJson(order.pay_payload) || {};
+    if (payload.cloud_print_source_kind === 'zhiye') {
+      const sourceFiles = Array.isArray(payload.cloud_print_source_files)
+        ? payload.cloud_print_source_files
+        : [];
+      this.assertQuoteSourceFiles(sourceFiles);
+      return sourceFiles.map((file: CloudPrintQuoteSourceFile) => ({
+        file_url: file.file_url,
+        display_name: file.display_name,
+        file_name: file.file_name || null,
+        file_type: 'pdf',
+        file_page_count: file.file_page_count,
+        quantity: file.quantity,
+        ...(typeof (file as any).sha256 === 'string' ? { sha256: (file as any).sha256 } : {}),
+        ...(Number.isInteger((file as any).file_size) ? { file_size: (file as any).file_size } : {}),
+      }));
+    }
     const ids = new Set<number>();
     if (order.course_id) ids.add(Number(order.course_id));
     for (const item of Array.isArray(payload.cart_items) ? payload.cart_items : []) {
@@ -776,6 +868,59 @@ export class CloudPrintService {
       : [];
     if (!files.length) throw new BadRequestException('云打印任务缺少下单时的文件快照，请人工核对');
     return files;
+  }
+
+  private assertQuoteSourceFiles(files: CloudPrintQuoteSourceFile[]) {
+    if (!Array.isArray(files) || files.length < 1 || files.length > 10) {
+      throw new BadRequestException('云打印报价必须包含1-10个文件');
+    }
+    for (const file of files) {
+      if (file.file_type !== 'pdf' || !this.isHttpsUrl(file.file_url)) {
+        throw new BadRequestException('云打印报价只支持本项目 HTTPS PDF 文件');
+      }
+      if (!Number.isInteger(file.file_page_count) || file.file_page_count < 1 || file.file_page_count > 2000) {
+        throw new BadRequestException('云打印报价文件页数无效');
+      }
+      if (!Number.isInteger(file.quantity) || file.quantity < 1 || file.quantity > 99) {
+        throw new BadRequestException('云打印报价份数必须为1-99');
+      }
+    }
+  }
+
+  private async calculateProviderQuote(
+    payload: any,
+    config: CloudPrintConfig,
+    auditJob?: CloudPrintJob,
+    timeoutMs?: number,
+  ) {
+    const price = await this.requestApi<any>('POST', '/api/svip/cart/calc-price', { goods: payload.goods }, auditJob, timeoutMs);
+    const settlement = price?.origin_price;
+    const printAmountCents = Number(settlement?.total_amount);
+    const totalWeightGrams = Number(settlement?.total_weight);
+    if (!Number.isInteger(printAmountCents) || printAmountCents < 0 || !Number.isFinite(totalWeightGrams) || totalWeightGrams <= 0) {
+      throw new Error('云打印计价响应缺少有效结算金额或重量');
+    }
+    const shipping = await this.requestApi<any>('POST', '/api/svip/cart/calc-ship-price', {
+      weight: String(totalWeightGrams),
+      province: payload.address.province,
+      city: payload.address.city,
+      area: payload.address.area,
+      ship_supplier_id: payload.address.ship_supplier_id,
+    }, auditJob, timeoutMs);
+    // 已向供应商确认 calc-ship-price 的 price 单位为元，统一换算成分。
+    const shippingAmountCents = Math.round(Number(shipping?.price) * 100);
+    if (!Number.isInteger(shippingAmountCents) || shippingAmountCents < 0) {
+      throw new Error('云打印运费计价响应无效');
+    }
+    const quote = {
+      printAmountCents,
+      shippingAmountCents,
+      totalAmountCents: printAmountCents + shippingAmountCents,
+      totalWeightGrams,
+      quotedAt: new Date().toISOString(),
+      shippingUnitBasis: 'yuan_confirmed',
+    };
+    return { quote, price, shipping };
   }
 
   private getCloudPrintUploadName(file: any) {
@@ -842,6 +987,11 @@ export class CloudPrintService {
     const payload = this.parseJson(order.pay_payload) || {};
     const override = payload.cloud_print_config_override;
     return override && typeof override === 'object' && !Array.isArray(override) ? override : {};
+  }
+
+  private isZhiyePrintOrder(order: Order) {
+    const payload = this.parseJson(order.pay_payload) || {};
+    return payload.cloud_print_source_kind === 'zhiye';
   }
 
   private canEditOrderPrintConfig(job: CloudPrintJob | null) {
@@ -953,6 +1103,7 @@ export class CloudPrintService {
     path: string,
     data?: unknown,
     auditJob?: CloudPrintJob,
+    timeoutMs?: number,
   ): Promise<T> {
     const body = method === 'GET' ? '' : JSON.stringify(data ?? {});
     const requestBody = method === 'GET' ? null : JSON.parse(body);
@@ -965,7 +1116,7 @@ export class CloudPrintService {
         method,
         url: `${String(this.configService.get('CWY_BASE_URL') || 'https://ciweiyunyin.com').replace(/\/$/, '')}${path}`,
         data: method === 'GET' ? undefined : body,
-        timeout: Math.max(3000, Number(this.configService.get('CWY_TIMEOUT_MS') || 15000)),
+        timeout: timeoutMs ?? Math.max(3000, Number(this.configService.get('CWY_TIMEOUT_MS') || 15000)),
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
