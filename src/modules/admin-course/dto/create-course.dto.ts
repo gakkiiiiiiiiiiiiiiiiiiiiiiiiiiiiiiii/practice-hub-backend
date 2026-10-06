@@ -1,5 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsNumber, IsOptional, IsIn, Min, Max, ValidateIf, IsInt } from 'class-validator';
+import {
+	IsIn,
+	IsInt,
+	IsNotEmpty,
+	IsNumber,
+	IsOptional,
+	IsString,
+	Max,
+	MaxLength,
+	Min,
+	ValidateIf,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsIntegerYuanPrice } from '../../../common/validators/is-integer-yuan-price.validator';
 
@@ -37,11 +48,13 @@ export class CreateCourseDto {
 	@ApiProperty({ description: '真题年份', example: '2024', required: false })
 	@IsOptional()
 	@IsString()
+	@MaxLength(100, { message: '真题年份不能超过 100 个字符' })
 	exam_year?: string;
 
 	@ApiProperty({ description: '答案年份', example: '2024', required: false })
 	@IsOptional()
 	@IsString()
+	@MaxLength(100, { message: '答案年份不能超过 100 个字符' })
 	answer_year?: string;
 
 	@ApiProperty({ description: '封面图片', required: false })

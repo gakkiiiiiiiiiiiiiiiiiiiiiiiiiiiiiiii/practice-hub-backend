@@ -24,10 +24,10 @@ export class Course {
 	@Column({ length: 100, nullable: true })
 	major: string; // 专业（如：计算机科学与技术、软件工程等）
 
-	@Column({ length: 20, nullable: true })
+	@Column({ length: 100, nullable: true })
 	exam_year: string; // 真题年份（如：2024、2023等）
 
-	@Column({ length: 20, nullable: true })
+	@Column({ length: 100, nullable: true })
 	answer_year: string; // 答案年份（如：2024、2023等）
 
 	@Column({ length: 500, nullable: true })
