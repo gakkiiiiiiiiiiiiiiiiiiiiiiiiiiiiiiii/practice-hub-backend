@@ -46,6 +46,7 @@ import { CourseTypeModule } from './modules/course-type/course-type.module';
 import { OperationLogInterceptor } from './common/interceptors/operation-log.interceptor';
 import { ClientErrorModule } from './modules/client-error/client-error.module';
 import { ZhiyePrintModule } from './modules/zhiye-print/zhiye-print.module';
+import { ZhiyeMaterialsModule } from './modules/zhiye-materials/zhiye-materials.module';
 
 @Module({
 	imports: [
@@ -151,6 +152,7 @@ import { ZhiyePrintModule } from './modules/zhiye-print/zhiye-print.module';
 		CourseTypeModule,
 		ClientErrorModule,
 		ZhiyePrintModule,
+		ZhiyeMaterialsModule,
 	],
 	controllers: [AppController],
 	providers: [
