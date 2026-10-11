@@ -10,6 +10,7 @@ export enum AfterSaleStatus {
   PENDING = 0, // 待处理
   PROCESSED = 1, // 已处理
   REJECTED = 2, // 已拒绝
+  REFUNDED = 3, // 已退款
 }
 
 @Entity('order_after_sale')

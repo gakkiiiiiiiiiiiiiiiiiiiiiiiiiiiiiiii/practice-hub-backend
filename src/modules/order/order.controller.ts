@@ -211,4 +211,16 @@ export class AdminOrderController {
     const result = await this.orderService.refundOrder(id, user.userId, dto);
     return CommonResponseDto.success(result);
   }
+
+  @Post(':id/manual-refund')
+  @Roles(AdminRole.SUPER_ADMIN)
+  @ApiOperation({ summary: '记录人工退款（不调用支付渠道退款接口）' })
+  async manualRefundOrder(
+    @CurrentUser() user: any,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RefundOrderDto,
+  ) {
+    const result = await this.orderService.manualRefundOrder(id, user.userId, dto);
+    return CommonResponseDto.success(result);
+  }
 }

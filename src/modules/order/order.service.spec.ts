@@ -733,6 +733,73 @@ describe('OrderService WeChat Pay refund', () => {
     );
   });
 
+  it('records a manual refund without calling a payment refund API', async () => {
+    const service = createService();
+    const afterSale = {
+      id: 12,
+      order_id: 91,
+      status: 0,
+    };
+    const order = {
+      id: 91,
+      order_no: 'ORDER_MANUAL_REFUND',
+      user_id: 7,
+      course_id: 10,
+      amount: 80,
+      status: OrderStatus.AFTER_SALE,
+      pay_provider: 'wechat_pay',
+      pay_payload: {},
+    };
+    service.orderRepository.findOne = jest.fn().mockResolvedValue(order);
+    service.orderRepository.save = jest.fn(async (payload) => payload);
+    service.afterSaleRepository = {
+      findOne: jest.fn().mockResolvedValue(afterSale),
+      save: jest.fn(async (payload) => payload),
+    };
+    service.cloudPrintService = {
+      reserveRefund: jest.fn().mockResolvedValue(undefined),
+    };
+    service.revokeOrderAccess = jest.fn().mockResolvedValue(undefined);
+    service.refundWechatPayOrder = jest.fn();
+    service.coinService = {
+      cancelCurrencyPayForOrder: jest.fn(),
+      refundCashRechargeOrder: jest.fn(),
+    };
+    service.logger = { error: jest.fn() };
+    service.distributorService = {
+      cancelOrderCommission: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await service.manualRefundOrder(91, 3, {
+      remark: '已通过人工渠道退款',
+    });
+
+    expect(service.cloudPrintService.reserveRefund).toHaveBeenCalledWith(91);
+    expect(service.refundWechatPayOrder).not.toHaveBeenCalled();
+    expect(service.coinService.cancelCurrencyPayForOrder).not.toHaveBeenCalled();
+    expect(service.coinService.refundCashRechargeOrder).not.toHaveBeenCalled();
+    expect(service.revokeOrderAccess).toHaveBeenCalledWith(order);
+    expect(service.distributorService.cancelOrderCommission).toHaveBeenCalledWith(91);
+    expect(afterSale).toEqual(expect.objectContaining({
+      status: 3,
+      admin_id: 3,
+      admin_reply: '已通过人工渠道退款',
+    }));
+    expect(order.status).toBe(OrderStatus.CANCELLED);
+    expect((order.pay_payload as any).refund).toEqual(expect.objectContaining({
+      admin_id: 3,
+      remark: '已通过人工渠道退款',
+      method: 'manual',
+      payment_api_called: false,
+      commission_reversal_status: 'completed',
+    }));
+    expect(result).toEqual(expect.objectContaining({
+      message: '已记录人工退款',
+      order_no: 'ORDER_MANUAL_REFUND',
+      status: OrderStatus.CANCELLED,
+    }));
+  });
+
   it('persists a pending commission reversal and completes it when the refund is retried', async () => {
     const service = createService();
     service.logger = { error: jest.fn() };

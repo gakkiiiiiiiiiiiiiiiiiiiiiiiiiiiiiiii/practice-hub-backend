@@ -2082,6 +2082,56 @@ export class OrderService {
     };
   }
 
+  async manualRefundOrder(orderId: number, adminId: number, dto?: RefundOrderDto) {
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId },
+    });
+    if (!order) {
+      throw new NotFoundException('订单不存在');
+    }
+    if (order.pay_payload?.refund?.refunded_at) {
+      throw new BadRequestException('该订单已退款');
+    }
+    if (![OrderStatus.PAID, OrderStatus.AFTER_SALE].includes(order.status)) {
+      throw new BadRequestException('仅已支付或售后中的订单可人工退款');
+    }
+
+    await this.cloudPrintService.reserveRefund(orderId);
+    await this.revokeOrderAccess(order);
+
+    const pendingAfterSale = await this.afterSaleRepository.findOne({
+      where: { order_id: order.id, status: AfterSaleStatus.PENDING },
+    });
+    if (pendingAfterSale) {
+      pendingAfterSale.status = AfterSaleStatus.REFUNDED;
+      pendingAfterSale.admin_id = adminId;
+      pendingAfterSale.admin_reply = dto?.remark || '已人工退款';
+      pendingAfterSale.process_time = new Date();
+      await this.afterSaleRepository.save(pendingAfterSale);
+    }
+
+    order.status = OrderStatus.CANCELLED;
+    order.pay_payload = {
+      ...(order.pay_payload || {}),
+      refund: {
+        refunded_at: new Date().toISOString(),
+        admin_id: adminId,
+        remark: dto?.remark || '',
+        method: 'manual',
+        payment_api_called: false,
+      },
+    };
+    await this.orderRepository.save(order);
+
+    await this.finalizeCommissionReversal(order);
+
+    return {
+      message: '已记录人工退款',
+      order_no: order.order_no,
+      status: order.status,
+    };
+  }
+
   async syncOrderPaymentStatus(orderId: number) {
     const order = await this.orderRepository.findOne({
       where: { id: orderId },
