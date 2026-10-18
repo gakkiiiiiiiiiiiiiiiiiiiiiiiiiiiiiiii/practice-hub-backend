@@ -203,11 +203,14 @@ export class DistributorService {
 					page_title: '代理邀请',
 					is_permanent: true,
 				},
-				{ timeout: 15000 },
+				{ timeout: 15000, validateStatus: () => true },
 			);
 			const shortLink = response.data?.link || response.data?.short_link;
-			if (response.data?.errcode || !shortLink) {
-				this.logger.warn(`生成代理短链接失败: ${response.data?.errcode || 'empty_link'} ${response.data?.errmsg || ''}`);
+			const errorCode = Number(response.data?.errcode ?? 0);
+			if (response.status < 200 || response.status >= 300 || errorCode !== 0 || !shortLink) {
+				this.logger.warn(
+					`生成代理短链接失败: http=${response.status} errcode=${errorCode || 'empty_link'} errmsg=${response.data?.errmsg || ''}`,
+				);
 				throw new BadRequestException(response.data?.errmsg || '微信未返回有效短链接');
 			}
 
