@@ -60,6 +60,14 @@ export class DistributorController {
 		return CommonResponseDto.success(result);
 	}
 
+	@Get('short-link')
+	@UseGuards(JwtAuthGuard)
+	@ApiBearerAuth()
+	@ApiOperation({ summary: '获取代理专属小程序短链接' })
+	async generateShortLink(@CurrentUser() user: any) {
+		return CommonResponseDto.success(await this.distributorService.generateShortLink(user.userId));
+	}
+
 	@Get('stats')
 	@UseGuards(JwtAuthGuard)
 	@ApiBearerAuth()

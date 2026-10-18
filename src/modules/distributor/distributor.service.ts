@@ -25,6 +25,8 @@ import { DistributorWithdrawal, DistributorWithdrawalStatus } from '../../databa
 import { CreateWithdrawalDto } from './dto/create-withdrawal.dto';
 import { revokeTrackedPackageDuration } from '../package/package-entitlement-ledger';
 
+const DISTRIBUTOR_QR_VERSION = 1;
+
 @Injectable()
 export class DistributorService {
 	private readonly logger = new Logger(DistributorService.name);
@@ -133,8 +135,8 @@ export class DistributorService {
 			throw new BadRequestException('您的分销资格尚未通过审核');
 		}
 
-		// 如果已有二维码，直接返回
-		if (distributor.qr_code_url && !refresh) {
+		// 头像更新后通过递增版本号，使每个代理的缓存二维码只刷新一次。
+		if (distributor.qr_code_url && distributor.qr_code_version === DISTRIBUTOR_QR_VERSION && !refresh) {
 			return {
 				qr_code_url: distributor.qr_code_url,
 				distributor_code: distributor.distributor_code,
@@ -159,6 +161,7 @@ export class DistributorService {
 
 			// 保存二维码URL
 			distributor.qr_code_url = qrCodeUrl;
+			distributor.qr_code_version = DISTRIBUTOR_QR_VERSION;
 			await this.distributorRepository.save(distributor);
 
 			return {
@@ -168,6 +171,52 @@ export class DistributorService {
 		} catch (error) {
 			this.logger.error('生成二维码失败:', error.message);
 			throw new BadRequestException('生成二维码失败，请稍后重试');
+		}
+	}
+
+	/**
+	 * 获取代理专属的小程序短链接，并缓存微信返回值以避免重复创建。
+	 */
+	async generateShortLink(userId: number) {
+		await this.assertDistributionEnabled();
+		const distributor = await this.distributorRepository.findOne({ where: { user_id: userId } });
+		if (!distributor || distributor.status !== 1) {
+			throw new NotFoundException('您还不是有效代理');
+		}
+
+		if (distributor.short_link) {
+			return { short_link: distributor.short_link };
+		}
+
+		const appid = this.configService.get('WECHAT_APPID') || this.configService.get('AppID');
+		const secret = this.configService.get('WECHAT_SECRET') || this.configService.get('WECHAT_APPSECRET') || this.configService.get('AppSecret');
+		if (!appid || !secret) {
+			throw new BadRequestException('微信配置缺失，无法生成短链接');
+		}
+
+		try {
+			const accessToken = await this.getWeChatAccessToken(appid, secret);
+			const response = await axios.post(
+				`https://api.weixin.qq.com/wxa/genwxashortlink?access_token=${accessToken}`,
+				{
+					page_url: `pages/index/index?inviterid=${encodeURIComponent(distributor.distributor_code)}`,
+					page_title: '代理邀请',
+					is_permanent: true,
+				},
+				{ timeout: 15000 },
+			);
+			if (response.data?.errcode || !response.data?.short_link) {
+				this.logger.warn(`生成代理短链接失败: ${response.data?.errcode || 'empty_link'} ${response.data?.errmsg || ''}`);
+				throw new BadRequestException(response.data?.errmsg || '微信未返回有效短链接');
+			}
+
+			distributor.short_link = response.data.short_link;
+			await this.distributorRepository.save(distributor);
+			return { short_link: distributor.short_link };
+		} catch (error) {
+			if (error instanceof BadRequestException) throw error;
+			this.logger.error('生成代理短链接失败:', error?.message || error);
+			throw new BadRequestException('生成代理短链接失败，请稍后重试');
 		}
 	}
 

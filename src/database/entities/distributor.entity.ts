@@ -32,6 +32,21 @@ export class Distributor {
 	@Column({
 		type: 'tinyint',
 		default: 0,
+		comment: '小程序二维码版本，头像更新后按版本重新生成',
+	})
+	qr_code_version: number;
+
+	@Column({
+		type: 'varchar',
+		length: 512,
+		nullable: true,
+		comment: '专属小程序短链接',
+	})
+	short_link: string;
+
+	@Column({
+		type: 'tinyint',
+		default: 0,
 		comment: '状态：0-待审核, 1-已通过, 2-已拒绝, 3-已禁用',
 	})
 	status: number;
