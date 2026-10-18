@@ -205,12 +205,13 @@ export class DistributorService {
 				},
 				{ timeout: 15000 },
 			);
-			if (response.data?.errcode || !response.data?.short_link) {
+			const shortLink = response.data?.link || response.data?.short_link;
+			if (response.data?.errcode || !shortLink) {
 				this.logger.warn(`生成代理短链接失败: ${response.data?.errcode || 'empty_link'} ${response.data?.errmsg || ''}`);
 				throw new BadRequestException(response.data?.errmsg || '微信未返回有效短链接');
 			}
 
-			distributor.short_link = response.data.short_link;
+			distributor.short_link = shortLink;
 			await this.distributorRepository.save(distributor);
 			return { short_link: distributor.short_link };
 		} catch (error) {
