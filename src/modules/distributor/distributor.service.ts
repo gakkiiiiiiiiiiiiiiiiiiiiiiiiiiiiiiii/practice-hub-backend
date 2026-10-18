@@ -198,14 +198,19 @@ export class DistributorService {
 		try {
 			const accessToken = await this.getWeChatAccessToken(appid, secret);
 			stage = 'short-link';
+			// 云托管将 api.weixin.qq.com 路由到内部代理；该代理的 HTTPS 证书不是公网证书。
+			const isCloudRun = this.configService.get<string>('WX_CLOUD_RUN_ENV') === 'true' ||
+				['CBR_ENV_ID', 'WX_CLOUD_ENV', 'WX_CLOUDBASE_ENV', 'WECHAT_PAY_CLOUDRUN_ENV_ID']
+					.some((key) => !!this.configService.get<string>(key));
+			const apiBase = isCloudRun ? 'http://api.weixin.qq.com' : 'https://api.weixin.qq.com';
 			const response = await axios.post(
-				`https://api.weixin.qq.com/wxa/genwxashortlink?access_token=${accessToken}`,
+				`${apiBase}/wxa/genwxashortlink`,
 				{
 					page_url: `pages/index/index?inviterid=${encodeURIComponent(distributor.distributor_code)}`,
 					page_title: '代理邀请',
 					is_permanent: true,
 				},
-				{ timeout: 15000, validateStatus: () => true },
+				{ params: { access_token: accessToken }, timeout: 15000, validateStatus: () => true, proxy: false, maxRedirects: 0 },
 			);
 			const shortLink = response.data?.link || response.data?.short_link;
 			const errorCode = Number(response.data?.errcode ?? 0);

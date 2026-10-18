@@ -25,6 +25,16 @@ describe('DistributorService short links', () => {
 		await expect(service.generateShortLink(1)).resolves.toEqual({ short_link: '#小程序://测试/test' });
 		expect(axios.get).toHaveBeenCalledTimes(1);
 		expect(axios.post).toHaveBeenCalledTimes(1);
+		expect(axios.post).toHaveBeenCalledWith('https://api.weixin.qq.com/wxa/genwxashortlink', expect.anything(),
+			expect.objectContaining({ params: { access_token: 'test-token' }, proxy: false, maxRedirects: 0 }));
+	});
+
+	it('uses the internal HTTP proxy only in a cloud-run environment', async () => {
+		const service = createService();
+		service.configService.get.mockImplementation((key) => ({ WECHAT_APPID: 'test-app', WECHAT_SECRET: 'test-secret', CBR_ENV_ID: 'cloud-test' })[key]);
+		await expect(service.generateShortLink(1)).resolves.toEqual({ short_link: '#小程序://测试/test' });
+		expect(axios.post).toHaveBeenCalledWith('http://api.weixin.qq.com/wxa/genwxashortlink', expect.anything(),
+			expect.objectContaining({ params: { access_token: 'test-token' }, proxy: false, maxRedirects: 0 }));
 	});
 
 	it('identifies a token whitelist failure before attempting to create a link', async () => {
