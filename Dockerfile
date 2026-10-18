@@ -9,8 +9,7 @@
 # 系统依赖（与 builder 并行构建，仅 Dockerfile 此段变更时重建）
 FROM node:20-alpine AS runtime-base
 
-RUN sed -i 's#dl-cdn.alpinelinux.org#mirrors.cloud.tencent.com#g' /etc/apk/repositories \
-    && apk add --no-cache \
+RUN apk add --no-cache \
       ghostscript \
       poppler-utils \
       mupdf-tools \
