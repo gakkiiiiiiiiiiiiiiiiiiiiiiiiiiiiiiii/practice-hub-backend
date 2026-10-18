@@ -7,9 +7,10 @@
 # syntax=docker/dockerfile:1
 
 # 系统依赖（与 builder 并行构建，仅 Dockerfile 此段变更时重建）
-FROM node:20-alpine AS runtime-base
+FROM node:20-alpine3.23 AS runtime-base
 
-RUN apk add --no-cache \
+RUN sed -i 's#dl-cdn.alpinelinux.org#mirrors.cloud.tencent.com#g' /etc/apk/repositories \
+    && apk add --no-cache \
       ghostscript \
       poppler-utils \
       mupdf-tools \
@@ -24,7 +25,7 @@ RUN apk add --no-cache \
     && rm -rf /usr/lib/libreoffice/share/wizards
 
 # 编译阶段：源码变化时只重编译，不再改写最终镜像使用的 node_modules
-FROM node:20-alpine AS builder
+FROM node:20-alpine3.23 AS builder
 
 WORKDIR /app
 
@@ -40,7 +41,7 @@ RUN npm run build
 
 # 生产依赖独立分层：仅 package-lock.json 变化时才重新安装。
 # 该阶段可与源码编译、系统依赖安装并行执行。
-FROM node:20-alpine AS production-deps
+FROM node:20-alpine3.23 AS production-deps
 
 WORKDIR /app
 
