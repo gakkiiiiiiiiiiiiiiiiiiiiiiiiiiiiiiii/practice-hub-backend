@@ -194,8 +194,10 @@ export class DistributorService {
 			throw new BadRequestException('微信配置缺失，无法生成短链接');
 		}
 
+		let stage: 'token' | 'short-link' | 'save' = 'token';
 		try {
 			const accessToken = await this.getWeChatAccessToken(appid, secret);
+			stage = 'short-link';
 			const response = await axios.post(
 				`https://api.weixin.qq.com/wxa/genwxashortlink?access_token=${accessToken}`,
 				{
@@ -211,16 +213,27 @@ export class DistributorService {
 				this.logger.warn(
 					`生成代理短链接失败: http=${response.status} errcode=${errorCode || 'empty_link'} errmsg=${response.data?.errmsg || ''}`,
 				);
-				throw new BadRequestException(response.data?.errmsg || '微信未返回有效短链接');
+				throw new BadRequestException(response.data?.errmsg || response.data?.error_message || '微信未返回有效短链接');
 			}
 
+			stage = 'save';
 			distributor.short_link = shortLink;
 			await this.distributorRepository.save(distributor);
 			return { short_link: distributor.short_link };
 		} catch (error) {
 			if (error instanceof BadRequestException) throw error;
-			this.logger.error('生成代理短链接失败:', error?.message || error);
-			throw new BadRequestException('生成代理短链接失败，请稍后重试');
+			const status = Number(error?.response?.status) || 0;
+			const code = String(error?.code || '').replace(/[^A-Z0-9_]/gi, '').slice(0, 64);
+			const platformMessage = error?.response?.data?.error_message || error?.response?.data?.errmsg;
+			const stageName = stage === 'token' ? '获取微信凭证' : stage === 'short-link' ? '请求微信短链接' : '保存分享链接';
+			let reason = status ? `HTTP ${status}` : code || '请稍后重试';
+			if (typeof platformMessage === 'string' && platformMessage.includes('URL不在白名单内')) {
+				reason = '微信云托管未放行此微信接口，请检查服务的微信令牌白名单';
+			} else if (stage === 'token' && String(error?.message || '').startsWith('获取 access_token 失败:')) {
+				reason = '微信拒绝了服务凭证，请检查小程序配置';
+			}
+			this.logger.error(`代理短链接失败: stage=${stage} http=${status} code=${code || 'unknown'}`);
+			throw new BadRequestException(`${stageName}失败：${reason}`);
 		}
 	}
 
